@@ -693,6 +693,12 @@ fn show(id: i64, with_summary: bool, with_transcript: bool) -> Result<()> {
         (m.duration_secs / 60.0).round(),
         m.dir.display()
     );
+    if let Some(engine) = &m.transcript_engine {
+        println!("{}", trf("Transkribiert mit {}", &[engine]));
+    }
+    if let Some(error) = &m.transcript_error {
+        println!("⚠ {error}\n  {}\n", trf("Erneut transkribieren: `mostalgia retranscribe {} --engine …`", &[&m.id]));
+    }
     if with_summary {
         match &m.summary {
             Some(s) => println!(

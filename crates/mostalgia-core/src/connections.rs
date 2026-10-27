@@ -329,6 +329,15 @@ impl Connection {
     }
 }
 
+/// The privacy line for a local endpoint: this machine, or the local network.
+pub fn local_label(url: &str) -> &'static str {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let rest = rest.rsplit_once('@').map_or(rest, |(_, h)| h);
+    let host = rest.split(['/', ':', '?', '#']).next().unwrap_or_default();
+    let this_machine = rest.starts_with("[::1]") || host == "localhost" || host.ends_with(".localhost") || host.starts_with("127.");
+    if this_machine { tr("Lokal · nichts verlässt den Rechner") } else { tr("Lokal · bleibt in deinem Netzwerk") }
+}
+
 /// Whether `url`'s host is loopback, private (RFC 1918 / ULA), link-local
 /// or a `.local`/`.lan`/`.internal`/`.home.arpa` name.
 pub fn is_local_url(url: &str) -> bool {

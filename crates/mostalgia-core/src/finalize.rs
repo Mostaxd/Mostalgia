@@ -69,6 +69,26 @@ const MAX_SPAN_SECS: f64 = 25.0;
 /// can't turn into invented text or make Whisper skip ahead. Leftover
 /// filler hallucinations are dropped either way.
 pub fn final_pass(engine: &mut Engine, tracks: &[(Source, PathBuf)], opts: &FinalPassOptions) -> Result<Vec<FinalSegment>> {
+    let mut notes = Vec::new();
+    let out = final_pass_with_notes(engine, tracks, opts, &mut notes)?;
+    for note in notes {
+        eprintln!("[mostalgia] {note}");
+    }
+    Ok(out)
+}
+
+/// [`final_pass`], collecting what it could not do as requested (no
+/// speech filter, speaker separation skipped) into `notes` so callers can
+/// show it instead of quietly doing less.
+pub fn final_pass_with_notes(
+    engine: &mut Engine,
+    tracks: &[(Source, PathBuf)],
+    opts: &FinalPassOptions,
+    notes: &mut Vec<String>,
+) -> Result<Vec<FinalSegment>> {
+    if opts.vad_model.is_none() {
+        notes.push(crate::i18n::tr("Ohne Sprachfilter (Silero-VAD-Modell fehlt — scripts/download-model.sh): Stille kann zu erfundenem Text führen").to_string());
+    }
     let mut vad = opts.vad_model.as_deref().map(load_vad).transpose()?;
     let diarize = opts.diarize;
     let mut out = Vec::new();
@@ -113,7 +133,7 @@ pub fn final_pass(engine: &mut Engine, tracks: &[(Source, PathBuf)], opts: &Fina
         if diarize && *source == Source::System {
             let mut lines: Vec<&mut FinalSegment> = out[first..].iter_mut().collect();
             if let Err(e) = crate::diarize::label_track(&samples, &mut lines) {
-                eprintln!("[mostalgia] diarization skipped: {e:#}");
+                notes.push(crate::i18n::trf("Sprechertrennung übersprungen: {}", &[&format!("{e:#}")]));
             }
         }
     }
@@ -132,6 +152,7 @@ fn noise_floor(samples: &[f32]) -> f32 {
 }
 
 fn load_vad(path: &Path) -> Result<WhisperVadContext> {
+    crate::transcribe::quiet_native_logs();
     let mut params = WhisperVadContextParams::new();
     params.set_use_gpu(false);
     params.set_n_threads(4);
@@ -193,8 +214,8 @@ pub fn engine_for(config: &crate::config::Config, choice: &crate::config::SttCho
 /// What [`save_recording`] stored.
 pub struct Saved {
     pub meeting_id: i64,
-    /// Set when the final pass failed: the meeting holds the live
-    /// transcript instead, and this says why.
+    /// Set when the final pass failed (the meeting holds the live transcript
+    /// instead) or could not do everything asked; says why.
     pub error: Option<String>,
 }
 
@@ -210,8 +231,9 @@ pub fn save_recording(
     bookmarks: &[crate::store::Bookmark],
 ) -> Result<Saved> {
     use crate::i18n::trf;
-    let (segments, engine_label, error) = match final_pass(engine, &rec.tracks, opts) {
-        Ok(segments) => (segments, engine.label(), None),
+    let mut notes = Vec::new();
+    let (segments, engine_label, error) = match final_pass_with_notes(engine, &rec.tracks, opts, &mut notes) {
+        Ok(segments) => (segments, engine.label(), (!notes.is_empty()).then(|| notes.join(" · "))),
         Err(e) => (
             rec.live_lines.clone(),
             trf("Live-Transkript ({})", &[&engine.label()]),
@@ -247,9 +269,11 @@ pub fn retranscribe(meeting_id: i64, engine: &mut Engine, opts: &FinalPassOption
     let meeting = store.get(meeting_id)?.context(tr("Besprechung nicht gefunden"))?;
     let tracks = meeting.tracks();
     anyhow::ensure!(!tracks.is_empty(), "{}", tr("Die Audiodateien dieser Besprechung gibt es nicht mehr"));
-    let segments = final_pass(engine, &tracks, opts)?;
+    let mut notes = Vec::new();
+    let segments = final_pass_with_notes(engine, &tracks, opts, &mut notes)?;
     store.replace_segments(meeting_id, &segments)?;
-    store.set_transcript_info(meeting_id, &engine.label(), None)?;
+    let note = (!notes.is_empty()).then(|| notes.join(" · "));
+    store.set_transcript_info(meeting_id, &engine.label(), note.as_deref())?;
     drop(store);
     if let Err(e) = crate::ask::index_meeting(meeting_id) {
         eprintln!("[mostalgia] search index: {e:#}");

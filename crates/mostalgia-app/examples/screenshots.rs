@@ -85,6 +85,24 @@ fn main() {
 
         if full {
             shot("1-new-recording", &mut cx);
+            // The setup screen with cloud transcription chosen.
+            cx.update_window(handle, |_, _, cx| {
+                let rec = view.read(cx).recording_view();
+                rec.update(cx, |r, cx| {
+                    let mut config = mostalgia_core::config::Config::load();
+                    let cloud = mostalgia_core::config::SttChoice { connection: "openai".into(), model: "gpt-4o-transcribe".into() };
+                    config.live_engine = cloud.clone();
+                    config.final_engine = cloud;
+                    r.demo_config(config, cx);
+                });
+            })
+            .unwrap();
+            shot("1b-new-recording-cloud", &mut cx);
+            cx.update_window(handle, |_, _, cx| {
+                let rec = view.read(cx).recording_view();
+                rec.update(cx, |r, cx| r.demo_config(mostalgia_core::config::Config::load(), cx));
+            })
+            .unwrap();
         }
 
         cx.update_window(handle, |_, _, cx| {
@@ -109,6 +127,14 @@ fn main() {
         // Let the line fade-ins finish.
         std::thread::sleep(std::time::Duration::from_millis(600));
         shot("2-recording", &mut cx);
+        if full {
+            cx.update_window(handle, |_, _, cx| {
+                let rec = view.read(cx).recording_view();
+                rec.update(cx, |r, cx| r.demo_engine_error("OpenAI · gpt-4o-transcribe", "OpenAI: nicht erreichbar unter https://api.openai.com/v1 — läuft der Server?", 3, cx));
+            })
+            .unwrap();
+            shot("2b-recording-engine-error", &mut cx);
+        }
         // The empty live transcript, where themes draw their scene.
         cx.update_window(handle, |_, _, cx| {
             let rec = view.read(cx).recording_view();
@@ -167,6 +193,13 @@ fn main() {
                 std::thread::sleep(std::time::Duration::from_millis(if tab == 2 { 800 } else { 400 }));
                 shot(name, &mut cx);
             }
+            cx.update_window(handle, |_, _, cx| {
+                if let Some(m) = view.read(cx).meeting_view() {
+                    m.update(cx, |m, cx| m.open_retranscribe(cx));
+                }
+            })
+            .unwrap();
+            shot("11-retranscribe", &mut cx);
         }
 
         cx.update_window(handle, |_, window, cx| {

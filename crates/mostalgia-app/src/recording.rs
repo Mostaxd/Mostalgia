@@ -10,17 +10,18 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, StyledExt, h_flex, switch::Switch, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use mostalgia_core::config::Config;
-use mostalgia_core::finalize;
-use mostalgia_core::recorder::{Event, RecordConfig, Recorder};
+use mostalgia_core::config::{Config, Mode, SttChoice};
+use mostalgia_core::recorder::{Event, RecordConfig, Recorder, Recording};
 use mostalgia_core::store::{Bookmark, NewMeeting, Store};
 use mostalgia_core::transcribe::Engine;
 use mostalgia_core::i18n::{self, tr, trf};
+use mostalgia_core::{cloud_stt, finalize};
 use mostalgia_core::{Source, paths};
 
 use crate::ui;
 
-/// The Whisper engine, kept loaded between recordings.
+/// The local Whisper engine, kept loaded between recordings (never a
+/// cloud engine).
 pub type SharedEngine = Arc<Mutex<Option<Engine>>>;
 
 pub enum RecordingEvent {
@@ -41,7 +42,7 @@ enum Phase {
     Setup,
     Loading,
     Recording(Box<Live>),
-    Finalizing { what: &'static str },
+    Finalizing { what: &'static str, detail: SharedString },
 }
 
 struct Live {
@@ -61,6 +62,13 @@ struct Live {
     last_latency_ms: Option<u128>,
     /// Since when the mic has been near-silent (for the "mic muted?" hint).
     mic_quiet_since: Option<Instant>,
+    /// The engine this recording transcribes with.
+    choice: SttChoice,
+    /// Latest live engine failure (engine, message) and how many chunks failed.
+    engine_error: Option<(SharedString, SharedString)>,
+    failed_chunks: usize,
+    /// Recorder warnings (deduplicated) still shown.
+    warnings: Vec<SharedString>,
 }
 
 impl Live {
@@ -73,7 +81,9 @@ impl Live {
 pub struct RecordingView {
     config: Config,
     engine: SharedEngine,
-    gpu: Option<String>,
+    /// Label of the live engine in use ("Whisper large-v3-turbo · GPU" /
+    /// "OpenAI · gpt-4o-transcribe") and whether it is a cloud engine.
+    engine_label: Option<(SharedString, bool)>,
     phase: Phase,
     error: Option<SharedString>,
     scroll: ScrollHandle,
@@ -89,7 +99,7 @@ impl RecordingView {
         Self {
             config: Config::load(),
             engine,
-            gpu: None,
+            engine_label: None,
             phase: Phase::Setup,
             error: None,
             scroll: ScrollHandle::new(),
@@ -121,7 +131,7 @@ impl RecordingView {
     pub fn demo(&mut self, secs: u64, lines: &[(Source, f64, &str)], cx: &mut Context<Self>) {
         let (tx, rx) = crossbeam_channel::unbounded();
         drop(tx);
-        self.gpu = Some("NVIDIA RTX PRO 3000 Blackwell Generation Laptop GPU".into());
+        self.engine_label = Some(("Whisper large-v3-turbo · NVIDIA RTX PRO 3000 Blackwell Generation Laptop GPU".into(), false));
         self.phase = Phase::Recording(Box::new(Live {
             recorder: None,
             rx,
@@ -145,7 +155,30 @@ impl RecordingView {
             }],
             last_latency_ms: Some(212),
             mic_quiet_since: None,
+            choice: SttChoice::local(),
+            engine_error: None,
+            failed_chunks: 0,
+            warnings: Vec::new(),
         }));
+        cx.notify();
+    }
+
+    /// Shows a live engine failure in the demo recording (screenshots).
+    #[doc(hidden)]
+    pub fn demo_engine_error(&mut self, engine: &str, message: &str, failed: usize, cx: &mut Context<Self>) {
+        self.engine_label = Some((engine.to_string().into(), true));
+        if let Phase::Recording(live) = &mut self.phase {
+            live.engine_error = Some((engine.to_string().into(), message.to_string().into()));
+            live.failed_chunks = failed;
+            live.warnings.push(trf("Sprechertrennung aus: {}", &[&"pyannote-segmentation-3.0.onnx fehlt"]).into());
+            cx.notify();
+        }
+    }
+
+    /// Replaces the settings (screenshots of other engine setups).
+    #[doc(hidden)]
+    pub fn demo_config(&mut self, config: Config, cx: &mut Context<Self>) {
+        self.config = config;
         cx.notify();
     }
 
@@ -184,28 +217,24 @@ impl RecordingView {
         self.phase = Phase::Loading;
         cx.notify();
 
-        let engine = self.engine.clone();
-        let model = self.config.whisper_model_path();
-        let language = self.config.language.clone();
+        // The configured engine or a visible error; never another engine.
+        let config = self.config.clone();
+        let slot = self.engine.clone();
         let load = cx.background_spawn(async move {
-            let mut slot = engine.lock().unwrap();
-            if slot.is_none() {
-                anyhow::ensure!(
-                    model.exists(),
-                    "{}",
-                    trf("Whisper-Modell nicht gefunden: {} — scripts/download-model.sh ausführen", &[&model.display()])
-                );
-                *slot = Some(Engine::load(&model, &language)?);
+            check_final_engine(&config)?;
+            let choice = &config.live_engine;
+            let cached = if choice.is_local() { slot.lock().unwrap().take() } else { None };
+            match cached {
+                Some(engine) => Ok(engine),
+                None => finalize::engine_for(&config, choice).map_err(|e| {
+                    anyhow::anyhow!(trf("Transkription mit {} nicht möglich: {}", &[&config.engine_label(choice), &format!("{e:#}")]))
+                }),
             }
-            Ok::<_, anyhow::Error>(slot.as_ref().and_then(|e| e.gpu().map(str::to_string)))
         });
         cx.spawn(async move |this, cx| {
-            let gpu = load.await;
-            this.update(cx, |this, cx| match gpu {
-                Ok(gpu) => {
-                    this.gpu = gpu;
-                    this.begin(cx);
-                }
+            let engine = load.await;
+            this.update(cx, |this, cx| match engine {
+                Ok(engine) => this.begin(engine, cx),
                 Err(e) => this.fail(e, cx),
             })
             .ok();
@@ -213,13 +242,11 @@ impl RecordingView {
         .detach();
     }
 
-    fn begin(&mut self, cx: &mut Context<Self>) {
-        let Some(mut engine) = self.engine.lock().unwrap().take() else {
-            return self.fail(anyhow::anyhow!(tr("Modell nicht geladen")), cx);
-        };
+    fn begin(&mut self, mut engine: Engine, cx: &mut Context<Self>) {
         if let Err(e) = engine.set_language(&self.config.language) {
             return self.fail(e, cx);
         }
+        self.engine_label = Some((engine.label().into(), engine.is_cloud()));
         let cfg = RecordConfig {
             vad_model: self.config.vad_model_path(),
             vad_threshold: self.config.vad_threshold,
@@ -248,6 +275,10 @@ impl RecordingView {
                     bookmarks: Vec::new(),
                     last_latency_ms: None,
                     mic_quiet_since: None,
+                    choice: self.config.live_engine.clone(),
+                    engine_error: None,
+                    failed_chunks: 0,
+                    warnings: Vec::new(),
                 }));
                 self.poll_loop(cx);
             }
@@ -317,8 +348,18 @@ impl RecordingView {
                     fresh[i] = fresh[i].max(ui::meter_level(rms));
                 }
                 Event::Chunk { millis, .. } => live.last_latency_ms = Some(millis),
-                Event::Warning(w) => eprintln!("[mostalgia] {w}"),
-                Event::EngineError { engine, message } => eprintln!("[mostalgia] {engine}: {message}"),
+                Event::Warning(w) => {
+                    eprintln!("[mostalgia] {w}");
+                    let w = SharedString::from(w);
+                    if !live.warnings.contains(&w) {
+                        live.warnings.push(w);
+                    }
+                }
+                Event::EngineError { engine, message } => {
+                    eprintln!("[mostalgia] {engine}: {message}");
+                    live.engine_error = Some((engine.into(), message.into()));
+                    live.failed_chunks += 1;
+                }
             }
         }
         // Meters: rise quickly but not instantly, fall slowly — smooth at 30 Hz.
@@ -373,7 +414,12 @@ impl RecordingView {
     }
 
     pub fn stop(&mut self, cx: &mut Context<Self>) {
-        let Phase::Recording(live) = std::mem::replace(&mut self.phase, Phase::Finalizing { what: tr("Transkript wird fertiggestellt …") }) else {
+        let final_label = self.config.engine_label(&self.config.final_engine);
+        let busy = Phase::Finalizing {
+            what: tr("Transkript wird fertiggestellt …"),
+            detail: trf("Feinschliff mit {}", &[&final_label]).into(),
+        };
+        let Phase::Recording(live) = std::mem::replace(&mut self.phase, busy) else {
             return;
         };
         let live = *live;
@@ -382,56 +428,130 @@ impl RecordingView {
             return;
         };
         recorder.stop();
+        let dir = recorder.dir().to_path_buf();
         let bookmarks = live.bookmarks;
+        let live_choice = live.choice;
+        let live_label = self.engine_label.as_ref().map(|(l, _)| l.to_string()).unwrap_or_default();
         let config = self.config.clone();
-        let engine_slot = self.engine.clone();
+        let slot = self.engine.clone();
         cx.notify();
 
         let task = cx.background_spawn(async move {
-            let (rec, mut engine) = recorder.join()?;
+            let (rec, live_engine) = recorder.join()?;
             let vad = config.vad_model_path();
             let opts = finalize::FinalPassOptions {
                 vad_model: vad.exists().then_some(vad),
                 diarize: config.diarize,
                 denoise_mic: config.denoise,
             };
-            let result = (|| -> Result<i64> {
-                let segments = finalize::final_pass(&mut engine, &rec.tracks, &opts)?;
-                let mut store = Store::open(&paths::database())?;
-                let title = trf("Besprechung {}", &[&i18n::date_time(&rec.started_at)]);
-                let id = store.insert_meeting(
-                    &NewMeeting {
-                        title: &title,
-                        started_at: rec.started_at,
-                        duration_secs: rec.duration_secs,
-                        language: &config.language,
-                        dir: &rec.dir,
-                    },
-                    &segments,
-                )?;
-                store.add_bookmarks(id, &bookmarks)?;
-                if let Err(e) = mostalgia_core::ask::index_meeting(id) {
-                    eprintln!("[mostalgia] search index: {e:#}");
+            let language = config.language.as_str();
+            let final_choice = &config.final_engine;
+            if same_engine(&live_choice, final_choice) {
+                let mut engine = live_engine;
+                let saved = finalize::save_recording(&rec, &mut engine, &opts, language, &bookmarks);
+                keep_local(&slot, engine);
+                return saved;
+            }
+            let built = match final_choice.is_local().then(|| slot.lock().unwrap().take()).flatten() {
+                Some(mut engine) => engine.set_language(language).map(|_| engine),
+                None => finalize::engine_for(&config, final_choice),
+            };
+            keep_local(&slot, live_engine);
+            match built {
+                Ok(mut engine) => {
+                    let saved = finalize::save_recording(&rec, &mut engine, &opts, language, &bookmarks);
+                    keep_local(&slot, engine);
+                    saved
                 }
-                Ok(id)
-            })();
-            *engine_slot.lock().unwrap() = Some(engine);
-            result
+                // Keep the live transcript and say why the final pass didn't run.
+                Err(e) => {
+                    let error = trf("Feinschliff mit {} nicht möglich: {}", &[&final_label, &format!("{e:#}")]);
+                    save_live_only(&rec, &live_label, error, language, &bookmarks)
+                }
+            }
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| match result {
-                Ok(id) => {
+                Ok(saved) => {
+                    if let Some(e) = &saved.error {
+                        eprintln!("[mostalgia] {e}");
+                    }
                     this.phase = Phase::Setup;
                     this.call_mode = false;
-                    cx.emit(RecordingEvent::Saved(id));
+                    cx.emit(RecordingEvent::Saved(saved.meeting_id));
                     cx.notify();
                 }
-                Err(e) => this.fail(e, cx),
+                Err(e) => this.fail(anyhow::anyhow!(trf("Speichern fehlgeschlagen: {} — die Aufnahme liegt in {}", &[&format!("{e:#}"), &dir.display()])), cx),
             })
             .ok();
         })
         .detach();
+    }
+
+    /// Which engines will transcribe, where the audio goes, and the mode.
+    fn render_engines(&self, cx: &App) -> impl IntoElement {
+        let theme = cx.theme();
+        let config = &self.config;
+        let (live, fine) = (&config.live_engine, &config.final_engine);
+        let mut clouds: Vec<String> = Vec::new();
+        for choice in [live, fine].into_iter().filter(|c| !c.is_local()) {
+            let name = config.connection(&choice.connection).map_or(choice.connection.clone(), |c| c.name.clone());
+            if !clouds.contains(&name) {
+                clouds.push(name);
+            }
+        }
+        let mode = config.mode();
+        let mode_color = match mode {
+            Mode::Local => theme.success,
+            Mode::Hybrid => theme.primary,
+            Mode::Cloud => theme.warning,
+        };
+        v_flex()
+            .gap_1p5()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_start()
+                    .child(
+                        Icon::new(if clouds.is_empty() { IconName::Cpu } else { IconName::Globe })
+                            .xsmall()
+                            .mt(px(2.)),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .when(same_engine(live, fine), |el| {
+                                el.child(trf("Transkription und Feinschliff: {}", &[&config.engine_label(live)]))
+                            })
+                            .when(!same_engine(live, fine), |el| {
+                                el.child(trf("Transkription: {}", &[&config.engine_label(live)]))
+                                    .child(trf("Feinschliff: {}", &[&config.engine_label(fine)]))
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .px_2()
+                            .rounded_full()
+                            .bg(mode_color.opacity(0.15))
+                            .text_color(mode_color)
+                            .font_medium()
+                            .child(mode.label()),
+                    ),
+            )
+            .when(!clouds.is_empty(), |el| {
+                el.child(
+                    h_flex()
+                        .gap_2()
+                        .text_color(theme.warning)
+                        .child(Icon::new(IconName::TriangleAlert).xsmall())
+                        .child(trf("Audio geht an {}", &[&clouds.join(", ")])),
+                )
+            })
     }
 
     fn render_setup(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -529,6 +649,7 @@ impl RecordingView {
                                     })),
                             ),
                     )
+                    .child(self.render_engines(cx))
                     .when_some(self.error.clone(), |el, err| {
                         el.child(
                             div()
@@ -552,7 +673,7 @@ impl RecordingView {
             )
     }
 
-    fn render_busy(&self, text: &'static str, stopping: bool, cx: &App) -> impl IntoElement {
+    fn render_busy(&self, text: &'static str, detail: Option<SharedString>, stopping: bool, cx: &App) -> impl IntoElement {
         let spec = crate::themes::active(cx);
         let burst = stopping && spec.animations && !self.config.reduce_motion && spec.scene.as_deref() == Some("blocks");
         v_flex()
@@ -563,12 +684,13 @@ impl RecordingView {
             .when(burst, |el| el.child(anim::block_break(palette(&spec, cx))))
             .child(gpui_kit::component::spinner::Spinner::new().large())
             .child(div().text_color(cx.theme().muted_foreground).child(text))
+            .when_some(detail, |el, d| el.child(div().text_xs().text_color(cx.theme().muted_foreground).child(d)))
     }
 
     fn render_live(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let speaker_labels = self.config.speaker_labels;
         let follow = self.follow;
-        let gpu = self.gpu.clone();
+        let engine_label = self.engine_label.clone();
         let Phase::Recording(live) = &self.phase else {
             unreachable!()
         };
@@ -720,7 +842,14 @@ impl RecordingView {
             .text_color(theme.muted_foreground)
             .child(trf("{} Zeilen", &[&live.lines.len()]))
             .when_some(live.last_latency_ms, |el, ms| el.child(trf("Latenz {} ms", &[&ms])))
-            .when_some(gpu, |el, gpu| el.child(gpu))
+            .when_some(engine_label, |el, (label, cloud)| {
+                el.child(
+                    h_flex()
+                        .gap_1()
+                        .child(Icon::new(if cloud { IconName::Globe } else { IconName::Cpu }).xsmall())
+                        .child(label),
+                )
+            })
             .child(div().flex_1())
             .when(!follow, |el| {
                 el.child(
@@ -740,6 +869,57 @@ impl RecordingView {
         v_flex()
             .size_full()
             .child(header)
+            .when_some(live.engine_error.clone(), |el, (engine, message)| {
+                el.child(
+                    h_flex()
+                        .px_6()
+                        .py_2()
+                        .gap_2()
+                        .items_start()
+                        .bg(cx.theme().danger.opacity(0.1))
+                        .text_sm()
+                        .child(Icon::new(IconName::TriangleAlert).small().text_color(cx.theme().danger).mt(px(2.)))
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .font_medium()
+                                        .text_color(cx.theme().danger)
+                                        .child(trf("Transkription mit {} fehlgeschlagen: {}", &[&engine, &message])),
+                                )
+                                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(tr(
+                                    "Die Aufnahme läuft weiter und wird gespeichert. Danach kannst du sie erneut transkribieren.",
+                                ))),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_xs()
+                                .text_color(cx.theme().danger)
+                                .child(trf("{} Abschnitte ohne Text", &[&live.failed_chunks])),
+                        ),
+                )
+            })
+            .children(live.warnings.iter().enumerate().map(|(i, w)| {
+                h_flex()
+                    .px_6()
+                    .py_2()
+                    .gap_2()
+                    .bg(cx.theme().warning.opacity(0.15))
+                    .text_sm()
+                    .child(Icon::new(IconName::TriangleAlert).small().text_color(cx.theme().warning))
+                    .child(div().flex_1().min_w_0().child(w.clone()))
+                    .child(Button::new(("dismiss-warning", i)).xsmall().ghost().icon(IconName::X).on_click(cx.listener(move |this, _, _, cx| {
+                        if let Phase::Recording(live) = &mut this.phase {
+                            if i < live.warnings.len() {
+                                live.warnings.remove(i);
+                            }
+                        }
+                        cx.notify();
+                    })))
+            }))
             .when(mic_silent, |el| {
                 el.child(
                     h_flex()
@@ -793,6 +973,61 @@ impl RecordingView {
     }
 }
 
+/// Two choices that mean the same engine (local Whisper has no model id).
+fn same_engine(a: &SttChoice, b: &SttChoice) -> bool {
+    a.is_local() && b.is_local() || a == b
+}
+
+/// Puts a local Whisper engine back into the cache; cloud engines are dropped.
+fn keep_local(slot: &SharedEngine, engine: Engine) {
+    if !engine.is_cloud() {
+        *slot.lock().unwrap() = Some(engine);
+    }
+}
+
+/// Fails before a recording starts when the final-pass engine can't be
+/// used, so the user fixes it instead of finding out afterwards.
+fn check_final_engine(config: &Config) -> Result<()> {
+    let choice = &config.final_engine;
+    if same_engine(choice, &config.live_engine) {
+        return Ok(());
+    }
+    let result = if choice.is_local() {
+        let model = config.whisper_model_path();
+        if model.exists() {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(trf("Whisper-Modell nicht gefunden: {} — scripts/download-model.sh ausführen", &[&model.display()])))
+        }
+    } else {
+        cloud_stt::check(config.connection(&choice.connection), &choice.connection, &choice.model)
+    };
+    result.map_err(|e| anyhow::anyhow!(trf("Feinschliff mit {} nicht möglich: {}", &[&config.engine_label(choice), &format!("{e:#}")])))
+}
+
+/// Saves a recording with its live transcript when the final-pass engine
+/// couldn't even be set up, marked with why.
+fn save_live_only(rec: &Recording, live_label: &str, error: String, language: &str, bookmarks: &[Bookmark]) -> Result<finalize::Saved> {
+    let mut store = Store::open(&paths::database())?;
+    let title = trf("Besprechung {}", &[&i18n::date_time(&rec.started_at)]);
+    let id = store.insert_meeting(
+        &NewMeeting {
+            title: &title,
+            started_at: rec.started_at,
+            duration_secs: rec.duration_secs,
+            language,
+            dir: &rec.dir,
+        },
+        &rec.live_lines,
+    )?;
+    store.set_transcript_info(id, &trf("Live-Transkript ({})", &[&live_label]), Some(&error))?;
+    store.add_bookmarks(id, bookmarks)?;
+    if let Err(e) = mostalgia_core::ask::index_meeting(id) {
+        eprintln!("[mostalgia] search index: {e:#}");
+    }
+    Ok(finalize::Saved { meeting_id: id, error: Some(error) })
+}
+
 fn bookmark_row(b: &Bookmark, cx: &App) -> Div {
     let theme = cx.theme();
     h_flex()
@@ -822,8 +1057,11 @@ impl Render for RecordingView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content = match &self.phase {
             Phase::Setup => self.render_setup(cx).into_any_element(),
-            Phase::Loading => self.render_busy(tr("Erinnerungen werden geladen …"), false, cx).into_any_element(),
-            Phase::Finalizing { what } => self.render_busy(what, true, cx).into_any_element(),
+            Phase::Loading => {
+                let detail = self.config.engine_label(&self.config.live_engine).into();
+                self.render_busy(tr("Erinnerungen werden geladen …"), Some(detail), false, cx).into_any_element()
+            }
+            Phase::Finalizing { what, detail } => self.render_busy(what, Some(detail.clone()), true, cx).into_any_element(),
             Phase::Recording(_) => self.render_live(cx).into_any_element(),
         };
         div().size_full().track_focus(&self.focus).child(content)

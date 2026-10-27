@@ -15,7 +15,7 @@ use crate::config::Config;
 use crate::i18n::{tr, trf};
 use crate::store::Store;
 use crate::connections::{Api, api_error, unreachable};
-use crate::llm::{ANTHROPIC_VERSION, CLAUDE_FALLBACK_MODELS};
+use crate::llm::{ANTHROPIC_VERSION, effort_hint};
 use crate::paths;
 use crate::summary::SummaryRequest;
 
@@ -226,7 +226,7 @@ fn ask_claude(question: &str, history: &[(String, String)], req: &SummaryRequest
         messages.push(json!({"role": "assistant", "content": a}));
     }
     messages.push(json!({"role": "user", "content": question}));
-    let mut effort = req.effort.clone();
+    let effort = req.effort.clone();
     let client = reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(900)).build()?;
 
     for round in 0..MAX_ROUNDS {
@@ -242,24 +242,15 @@ fn ask_claude(question: &str, history: &[(String, String)], req: &SummaryRequest
         if let Some(e) = &effort {
             body["output_config"] = json!({ "effort": e });
         }
-        let mut request = client
+        let request = client
             .post(format!("{}/messages", conn.base()))
             .header("x-api-key", &key)
             .header("anthropic-version", ANTHROPIC_VERSION);
-        if CLAUDE_FALLBACK_MODELS.contains(&model.as_str()) {
-            body["fallbacks"] = json!("default");
-            request = request.header("anthropic-beta", "server-side-fallback-2026-07-01");
-        }
         let resp = request.json(&body).send().map_err(|e| unreachable(conn, e))?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().unwrap_or_default();
-            // Older models have no effort control; retry the round without it.
-            if effort.is_some() && body.contains("effort") {
-                effort = None;
-                continue;
-            }
-            return Err(api_error(conn, status, &body));
+            return Err(effort_hint(api_error(conn, status, &body), effort.is_some()));
         }
 
         // Rebuild the assistant's content blocks from the stream so they can
@@ -378,7 +369,7 @@ fn ask_openai(question: &str, history: &[(String, String)], req: &SummaryRequest
         .timeout(std::time::Duration::from_secs(900))
         .connect_timeout(std::time::Duration::from_secs(10))
         .build()?;
-    let mut effort = req.effort.clone().filter(|_| !crate::llm::openai_efforts(conn, &req.model).is_empty());
+    let effort = req.effort.clone().filter(|_| !crate::llm::openai_efforts(conn, &req.model).is_empty());
     let mut round = 0;
     while round < MAX_ROUNDS {
         let mut body = json!({"model": req.model, "messages": messages, "tools": tools_openai(), "stream": false});
@@ -393,14 +384,10 @@ fn ask_openai(question: &str, history: &[(String, String)], req: &SummaryRequest
         let status = resp.status();
         let text = resp.text().unwrap_or_default();
         if !status.is_success() {
-            if effort.is_some() && text.contains("reasoning_effort") {
-                effort = None;
-                continue;
-            }
             if round == 0 && no_tool_support(&text) {
                 return retrieve_then_answer(question, history, req, events);
             }
-            return Err(api_error(conn, status, &text));
+            return Err(effort_hint(api_error(conn, status, &text), effort.is_some()));
         }
         let v: Value = serde_json::from_str(&text).with_context(|| trf("{}: Antwort konnte nicht gelesen werden", &[&conn.name]))?;
         let msg = v["choices"][0]["message"].clone();

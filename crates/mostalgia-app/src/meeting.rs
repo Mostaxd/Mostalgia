@@ -14,12 +14,13 @@ use gpui_kit::*;
 use gpui_kit::component::menu::DropdownMenu;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use mostalgia_core::config::Config;
+use mostalgia_core::config::{Config, SttChoice};
 use mostalgia_core::playback::{self, Player};
 use mostalgia_core::store::{Meeting, Store};
 use mostalgia_core::i18n::{self, tr, trf};
-use mostalgia_core::{Source, paths, summary};
+use mostalgia_core::{Source, cloud_stt, finalize, paths, summary};
 
+use crate::recording::SharedEngine;
 use crate::ui;
 
 /// Bars per waveform row.
@@ -48,6 +49,20 @@ enum Edit {
     Title(Entity<InputState>),
 }
 
+/// One engine to pick from in the "transcribe again" dialog.
+struct EngineOption {
+    choice: SttChoice,
+    label: String,
+    /// The connection's name for cloud engines (where the audio goes).
+    cloud: Option<String>,
+    cost: Option<f64>,
+}
+
+struct Retranscribe {
+    options: Vec<EngineOption>,
+    selected: usize,
+}
+
 pub struct MeetingView {
     pub id: i64,
     meeting: Option<Meeting>,
@@ -60,6 +75,14 @@ pub struct MeetingView {
     notice: Option<SharedString>,
     edit: Option<Edit>,
     scroll: ScrollHandle,
+    /// The app's cached local Whisper, reused for transcribing again.
+    engine: Option<SharedEngine>,
+    /// The "transcribe again" dialog, while open.
+    retranscribe: Option<Retranscribe>,
+    /// Engine label while transcribing again.
+    retranscribing: Option<SharedString>,
+    /// Why the last "transcribe again" failed.
+    transcribe_error: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -77,6 +100,10 @@ impl MeetingView {
             notice: None,
             edit: None,
             scroll: ScrollHandle::new(),
+            engine: None,
+            retranscribe: None,
+            retranscribing: None,
+            transcribe_error: None,
             _subscriptions: Vec::new(),
         };
         this.reload(cx);
@@ -84,6 +111,13 @@ impl MeetingView {
             this.tab = 1;
         }
         this
+    }
+
+    /// Shares the app's cached Whisper engine (so transcribing again doesn't
+    /// load a second copy).
+    pub fn with_engine(mut self, engine: SharedEngine) -> Self {
+        self.engine = Some(engine);
+        self
     }
 
     pub fn set_tab(&mut self, tab: usize, cx: &mut Context<Self>) {
@@ -115,6 +149,7 @@ impl MeetingView {
         let req = match Config::load().summary_request().and_then(|req| req.connection.require_key().map(|_| req)) {
             Ok(req) => req,
             Err(e) => {
+                // Errors from here already name the connection.
                 self.error = Some(format!("{e:#}").into());
                 cx.notify();
                 return;
@@ -125,6 +160,7 @@ impl MeetingView {
         self.tab = 0;
         cx.notify();
         let id = self.id;
+        let provider = req.connection.name.clone();
         let task = cx.background_spawn(async move {
             let store = Store::open(&paths::database())?;
             let meeting = store.get(id)?.ok_or_else(|| anyhow::anyhow!(tr("Besprechung nicht gefunden")))?;
@@ -144,7 +180,7 @@ impl MeetingView {
             this.update(cx, |this, cx| {
                 this.summarizing = false;
                 if let Err(e) = result {
-                    this.error = Some(trf("Zusammenfassung fehlgeschlagen: {}", &[&format!("{e:#}")]).into());
+                    this.error = Some(trf("Zusammenfassung mit {} fehlgeschlagen: {}", &[&provider, &format!("{e:#}")]).into());
                 }
                 this.reload(cx);
                 cx.emit(MeetingEvent::Changed);
@@ -152,6 +188,293 @@ impl MeetingView {
             .ok();
         })
         .detach();
+    }
+
+    /// Opens the "transcribe again" dialog with the local engine and every
+    /// configured cloud model, preselecting the final-pass engine.
+    pub fn open_retranscribe(&mut self, cx: &mut Context<Self>) {
+        let Some(m) = &self.meeting else { return };
+        if self.retranscribing.is_some() || m.tracks().is_empty() {
+            return;
+        }
+        let config = Config::load();
+        let hours = m.duration_secs / 3600.;
+        let mut options = vec![EngineOption {
+            choice: SttChoice::local(),
+            label: config.engine_label(&SttChoice::local()),
+            cloud: None,
+            cost: None,
+        }];
+        for conn in config.connections.iter().filter(|c| !c.stt_models().is_empty() && c.is_configured()) {
+            for model in conn.stt_models() {
+                options.push(EngineOption {
+                    choice: SttChoice { connection: conn.id.clone(), model: model.id.to_string() },
+                    label: format!("{} · {}", conn.name, model.id),
+                    cloud: Some(conn.name.clone()),
+                    cost: cloud_stt::estimated_cost(conn, model.id, hours),
+                });
+            }
+        }
+        let wanted = &config.final_engine;
+        let selected = match options.iter().position(|o| o.choice == *wanted || o.choice.is_local() && wanted.is_local()) {
+            Some(i) => i,
+            // The configured engine isn't usable; list it anyway so starting
+            // it shows why instead of quietly picking another.
+            None => {
+                options.push(EngineOption {
+                    choice: wanted.clone(),
+                    label: config.engine_label(wanted),
+                    cloud: Some(config.connection(&wanted.connection).map_or(wanted.connection.clone(), |c| c.name.clone())),
+                    cost: None,
+                });
+                options.len() - 1
+            }
+        };
+        self.retranscribe = Some(Retranscribe { options, selected });
+        cx.notify();
+    }
+
+    fn start_retranscribe(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.retranscribe.take() else { return };
+        let Some(m) = &self.meeting else { return };
+        let option = &dialog.options[dialog.selected];
+        let choice = option.choice.clone();
+        let label: SharedString = option.label.clone().into();
+        let language = m.language.clone();
+        self.player = None;
+        self.position = None;
+        self.edit = None;
+        self.transcribe_error = None;
+        self.retranscribing = Some(label.clone());
+        cx.notify();
+
+        let id = self.id;
+        let slot = self.engine.clone();
+        let task = cx.background_spawn(async move {
+            let config = Config::load();
+            let vad = config.vad_model_path();
+            let opts = finalize::FinalPassOptions {
+                vad_model: vad.exists().then_some(vad),
+                diarize: config.diarize,
+                denoise_mic: config.denoise,
+            };
+            let cached = slot.as_ref().filter(|_| choice.is_local()).and_then(|s| s.lock().unwrap().take());
+            let mut engine = match cached {
+                Some(engine) => engine,
+                None => finalize::engine_for(&config, &choice)?,
+            };
+            let result = engine.set_language(&language).and_then(|_| finalize::retranscribe(id, &mut engine, &opts));
+            if let Some(slot) = slot.filter(|_| !engine.is_cloud()) {
+                *slot.lock().unwrap() = Some(engine);
+            }
+            result
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                this.retranscribing = None;
+                match result {
+                    Ok(lines) => {
+                        this.notice = Some(trf("Neu transkribiert mit {}: {} Zeilen", &[&label, &lines]).into());
+                        this.tab = 1;
+                    }
+                    Err(e) => {
+                        this.transcribe_error = Some(trf("Transkription mit {} fehlgeschlagen: {}", &[&label, &format!("{e:#}")]).into());
+                    }
+                }
+                this.reload(cx);
+                cx.emit(MeetingEvent::Changed);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Progress of "transcribe again", or the transcript's engine error with
+    /// a way to transcribe again; shown above every tab.
+    fn render_transcript_status(&mut self, m: &Meeting, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let theme = cx.theme();
+        if let Some(label) = &self.retranscribing {
+            return Some(
+                h_flex()
+                    .mx_8()
+                    .mb_3()
+                    .p_3()
+                    .gap_3()
+                    .rounded(theme.radius)
+                    .bg(theme.muted)
+                    .text_sm()
+                    .child(gpui_kit::component::spinner::Spinner::new().small())
+                    .child(div().font_medium().child(trf("Transkribiere mit {} …", &[label])))
+                    .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Bei langen Aufnahmen kann das einige Minuten dauern.")))
+                    .into_any_element(),
+            );
+        }
+        let transient = self.transcribe_error.is_some();
+        let error: SharedString = self.transcribe_error.clone().or_else(|| m.transcript_error.clone().map(Into::into))?;
+        let has_audio = !m.tracks().is_empty();
+        Some(
+            h_flex()
+                .mx_8()
+                .mb_3()
+                .p_3()
+                .gap_3()
+                .items_start()
+                .rounded(theme.radius)
+                .bg(theme.danger.opacity(0.1))
+                .text_sm()
+                .child(Icon::new(IconName::TriangleAlert).small().text_color(theme.danger).mt(px(2.)))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap_1()
+                        .child(div().text_color(theme.danger).font_medium().child(error))
+                        .child(div().text_xs().text_color(theme.muted_foreground).child(if transient {
+                            tr("Das bisherige Transkript bleibt unverändert.")
+                        } else {
+                            tr("Die Aufnahme ist sicher gespeichert. Mit „Erneut transkribieren“ wählst du ein Modell und versuchst es nochmal.")
+                        })),
+                )
+                .child(
+                    Button::new("retranscribe-banner")
+                        .small()
+                        .outline()
+                        .icon(IconName::RefreshCw)
+                        .label(tr("Erneut transkribieren"))
+                        .disabled(!has_audio)
+                        .when(!has_audio, |b| b.tooltip(tr("Audiodateien gelöscht")))
+                        .on_click(cx.listener(|this, _, _, cx| this.open_retranscribe(cx))),
+                )
+                .when(transient, |el| {
+                    el.child(Button::new("dismiss-transcribe-err").xsmall().ghost().icon(IconName::X).on_click(cx.listener(|this, _, _, cx| {
+                        this.transcribe_error = None;
+                        cx.notify();
+                    })))
+                })
+                .into_any_element(),
+        )
+    }
+
+    fn render_retranscribe_dialog(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let dialog = self.retranscribe.as_ref()?;
+        let theme = cx.theme().clone();
+        let rows = dialog.options.iter().enumerate().map(|(i, o)| {
+            let selected = i == dialog.selected;
+            h_flex()
+                .id(("engine-option", i))
+                .gap_3()
+                .px_3()
+                .py_2()
+                .rounded(theme.radius)
+                .border(ui::border_width(cx))
+                .border_color(if selected { theme.primary } else { theme.border })
+                .when(selected, |el| el.bg(theme.primary.opacity(0.06)))
+                .cursor_pointer()
+                .hover(|s| s.bg(theme.muted.opacity(0.5)))
+                .child(
+                    div()
+                        .flex_none()
+                        .size(px(16.))
+                        .rounded_full()
+                        .border_2()
+                        .border_color(if selected { theme.primary } else { theme.muted_foreground })
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .when(selected, |el| el.child(div().size(px(6.)).rounded_full().bg(theme.primary))),
+                )
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .child(div().text_sm().font_medium().child(o.label.clone()))
+                        .child(div().text_xs().text_color(theme.muted_foreground).child(match &o.cloud {
+                            Some(name) => trf("Audio geht an {}", &[name]),
+                            None => tr("Auf diesem Rechner, nichts verlässt ihn").to_string(),
+                        })),
+                )
+                .when_some(o.cost, |el, usd| el.child(div().flex_none().text_xs().text_color(theme.muted_foreground).child(cost_label(usd))))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(d) = &mut this.retranscribe {
+                        d.selected = i;
+                        cx.notify();
+                    }
+                }))
+        });
+        let selected = &dialog.options[dialog.selected];
+        let warning = selected.cloud.as_ref().map(|name| trf("Audio geht an {}", &[name]));
+        Some(
+            div()
+                .id("retranscribe-overlay")
+                .absolute()
+                .inset_0()
+                .bg(gpui_kit::black().opacity(0.45))
+                .flex()
+                .items_center()
+                .justify_center()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.retranscribe = None;
+                    cx.notify();
+                }))
+                .child(
+                    v_flex()
+                        .id("retranscribe-dialog")
+                        .w(px(480.))
+                        .max_h(relative(0.9))
+                        .p_5()
+                        .gap_3()
+                        .rounded(theme.radius_lg)
+                        .border(ui::border_width(cx))
+                        .border_color(theme.border)
+                        .bg(theme.background)
+                        .shadow_lg()
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(Icon::new(IconName::RefreshCw).text_color(theme.primary))
+                                .child(div().text_lg().font_semibold().child(tr("Erneut transkribieren"))),
+                        )
+                        .child(div().text_sm().text_color(theme.muted_foreground).child(tr("Mit welchem Modell soll die Aufnahme neu transkribiert werden?")))
+                        .child(v_flex().id("engine-options").gap_2().min_h_0().overflow_y_scroll().children(rows))
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .text_xs()
+                                .text_color(theme.warning)
+                                .child(Icon::new(IconName::TriangleAlert).xsmall())
+                                .child(tr("Ersetzt das Transkript. Umbenannte Sprecher werden zurückgesetzt.")),
+                        )
+                        .when_some(warning, |el, w| {
+                            el.child(
+                                h_flex()
+                                    .gap_2()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(Icon::new(IconName::Globe).xsmall())
+                                    .child(w),
+                            )
+                        })
+                        .child(
+                            h_flex()
+                                .justify_end()
+                                .gap_2()
+                                .child(Button::new("retranscribe-cancel").ghost().label(tr("Abbrechen")).on_click(cx.listener(|this, _, _, cx| {
+                                    this.retranscribe = None;
+                                    cx.notify();
+                                })))
+                                .child(
+                                    Button::new("retranscribe-start")
+                                        .primary()
+                                        .icon(IconName::RefreshCw)
+                                        .label(tr("Transkribieren"))
+                                        .on_click(cx.listener(|this, _, _, cx| this.start_retranscribe(cx))),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
     }
 
     /// Shows the transcript at `secs` and plays from there (for links
@@ -409,6 +732,16 @@ impl MeetingView {
                                 .on_click(cx.listener(|this, _, _, cx| this.play_from(0.0, cx))),
                         )
                     })
+                    .child({
+                        let has_audio = !m.tracks().is_empty();
+                        Button::new("retranscribe")
+                            .small()
+                            .ghost()
+                            .icon(IconName::RefreshCw)
+                            .tooltip(if has_audio { tr("Erneut transkribieren") } else { tr("Audiodateien gelöscht") })
+                            .disabled(!has_audio || self.retranscribing.is_some())
+                            .on_click(cx.listener(|this, _, _, cx| this.open_retranscribe(cx)))
+                    })
                     .child(
                         Button::new("delete")
                             .small()
@@ -491,16 +824,45 @@ impl MeetingView {
 
     fn render_transcript(&mut self, m: &Meeting, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
+        let has_audio = !m.tracks().is_empty();
+        let engine_line = h_flex()
+            .mb_3()
+            .gap_2()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .when_some(m.transcript_engine.clone(), |el, engine| {
+                el.child(Icon::new(if engine.contains("Whisper") { IconName::Cpu } else { IconName::Globe }).xsmall())
+                    .child(div().min_w_0().child(if m.transcript_error.is_some() {
+                        engine
+                    } else {
+                        trf("Transkribiert mit {}", &[&engine])
+                    }))
+            })
+            .child(div().flex_1())
+            .child(
+                Button::new("retranscribe-tab")
+                    .xsmall()
+                    .ghost()
+                    .icon(IconName::RefreshCw)
+                    .label(tr("Erneut transkribieren"))
+                    .disabled(!has_audio || self.retranscribing.is_some())
+                    .when(!has_audio, |b| b.tooltip(tr("Audiodateien gelöscht")))
+                    .on_click(cx.listener(|this, _, _, cx| this.open_retranscribe(cx))),
+            );
         if m.segments.is_empty() {
-            return div()
-                .py_16()
-                .text_center()
-                .text_color(theme.muted_foreground)
-                .child(tr("In dieser Aufnahme wurde keine Sprache erkannt."))
+            return v_flex()
+                .child(engine_line)
+                .child(
+                    div()
+                        .py_16()
+                        .text_center()
+                        .text_color(theme.muted_foreground)
+                        .child(tr("In dieser Aufnahme wurde keine Sprache erkannt.")),
+                )
                 .into_any_element();
         }
         let position = self.position;
-        let mut rows: Vec<AnyElement> = Vec::new();
+        let mut rows: Vec<AnyElement> = vec![engine_line.into_any_element()];
 
         if let Some(Edit::Speaker(current, input)) = &self.edit {
             rows.push(
@@ -695,6 +1057,8 @@ impl Render for MeetingView {
                 .into_any_element();
         };
         let header = self.render_header(&m, cx);
+        let status = self.render_transcript_status(&m, cx);
+        let dialog = self.render_retranscribe_dialog(cx);
         let body = match self.tab {
             0 => self.render_summary(&m, cx),
             1 => self.render_transcript(&m, cx),
@@ -706,9 +1070,11 @@ impl Render for MeetingView {
 
         v_flex()
             .size_full()
+            .relative()
             .key_context("Meeting")
             .on_action(cx.listener(Self::export))
             .child(header)
+            .children(status)
             .child(
                 div().px_8().child(
                     TabBar::new("meeting-tabs")
@@ -769,6 +1135,7 @@ impl Render for MeetingView {
                         .child(div().max_w(px(860.)).px_8().py_6().child(body)),
                 ),
             )
+            .children(dialog)
             .into_any_element()
     }
 }
@@ -780,6 +1147,15 @@ fn summary_body(markdown: &str) -> String {
         Some(rest) => rest.split_once('\n').map_or("", |(_, body)| body).trim_start().to_string(),
         None => trimmed.to_string(),
     }
+}
+
+/// Estimated price in US dollars, e.g. "≈ 0,02 $" / "≈ $0.02".
+fn cost_label(usd: f64) -> String {
+    let de = i18n::lang() == i18n::Lang::De;
+    if usd < 0.01 {
+        return if de { "< 0,01 $".into() } else { "< $0.01".into() };
+    }
+    if de { format!("≈ {:.2} $", usd).replace('.', ",") } else { format!("≈ ${usd:.2}") }
 }
 
 /// ~/Documents (or the home folder) as the export dialog's starting point.

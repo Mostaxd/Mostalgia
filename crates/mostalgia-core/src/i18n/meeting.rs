@@ -42,4 +42,18 @@ pub const EN: &[(&str, &str)] = &[
     ("Exportiert: {}", "Exported: {}"),
     ("Besprechung nicht gefunden", "Meeting not found"),
     ("Besprechung nicht gefunden.", "Meeting not found."),
+    // Transcribing again
+    ("Zusammenfassung mit {} fehlgeschlagen: {}", "Summary with {} failed: {}"),
+    ("Erneut transkribieren", "Transcribe again"),
+    ("Audiodateien gelöscht", "Audio files deleted"),
+    ("Transkribiert mit {}", "Transcribed with {}"),
+    ("Transkribiere mit {} …", "Transcribing with {} …"),
+    ("Bei langen Aufnahmen kann das einige Minuten dauern.", "Long recordings can take a few minutes."),
+    ("Das bisherige Transkript bleibt unverändert.", "The existing transcript is unchanged."),
+    ("Die Aufnahme ist sicher gespeichert. Mit „Erneut transkribieren“ wählst du ein Modell und versuchst es nochmal.", "The recording is safely saved. Use “Transcribe again” to pick a model and try again."),
+    ("Mit welchem Modell soll die Aufnahme neu transkribiert werden?", "Which model should transcribe the recording again?"),
+    ("Auf diesem Rechner, nichts verlässt ihn", "On this computer, nothing leaves it"),
+    ("Ersetzt das Transkript. Umbenannte Sprecher werden zurückgesetzt.", "Replaces the transcript. Renamed speakers are reset."),
+    ("Transkribieren", "Transcribe"),
+    ("Neu transkribiert mit {}: {} Zeilen", "Transcribed again with {}: {} lines"),
 ];

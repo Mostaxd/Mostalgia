@@ -189,7 +189,8 @@ impl Config {
 
     /// Where the work happens with the current choices.
     pub fn mode(&self) -> Mode {
-        if !self.live_engine.is_local() || !self.final_engine.is_local() {
+        let stt_cloud = |e: &SttChoice| !e.is_local() && self.connection(&e.connection).is_none_or(|c| !c.is_local());
+        if stt_cloud(&self.live_engine) || stt_cloud(&self.final_engine) {
             return Mode::Cloud;
         }
         let ai_local = [self.summary_provider.as_str(), self.ask_provider.as_str()]

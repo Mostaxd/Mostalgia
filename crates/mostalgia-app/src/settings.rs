@@ -1,27 +1,25 @@
 //! Settings, grouped into categories (list on the left, a responsive
 //! card grid on the right) with a search across all of them.
 
+use std::collections::{HashMap, HashSet};
+
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, StyledExt, h_flex, switch::Switch, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use gpui_kit::component::menu::DropdownMenu;
-use schemars::JsonSchema;
-use serde::Deserialize;
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use mostalgia_core::audio::{self, SourceInfo};
-use mostalgia_core::config::Config;
-use mostalgia_core::{paths, summary};
+use mostalgia_core::cloud_stt;
+use mostalgia_core::config::{Config, Mode, SttChoice};
+use mostalgia_core::connections::{self, Api, Connection, PRESETS};
+use mostalgia_core::llm::{self, ModelInfo};
+use mostalgia_core::paths;
 
 use mostalgia_core::i18n::{tr, trf};
 
 use crate::{themes, ui};
-
-/// Pick a summary model (from the model dropdown).
-#[derive(Clone, PartialEq, Debug, Deserialize, JsonSchema, Action)]
-#[action(namespace = mostalgia, no_json)]
-pub struct SelectSummaryModel(pub String);
 
 pub enum SettingsEvent {
     Changed,
@@ -41,11 +39,26 @@ pub struct SettingsView {
     /// Result of the last device test, per kind.
     test: [Option<Result<f32, String>>; 2],
     testing: Option<Kind>,
-    api_key: Entity<InputState>,
-    key_status: SharedString,
-    /// Models of the selected provider (live if a key is set, else built-in).
-    models: Vec<summary::ModelInfo>,
-    models_live: bool,
+    /// Model lists per connection id (built-in until the provider answers).
+    models: HashMap<String, Vec<ModelInfo>>,
+    models_live: HashSet<String>,
+    /// Last connection test per connection id.
+    status: HashMap<String, ConnStatus>,
+    /// Where each connection's key comes from; `None` until read.
+    keys: Option<HashMap<String, KeyState>>,
+    auto_tested: bool,
+    /// The add/edit connection panel, when open.
+    form: Option<ConnForm>,
+    form_name: Entity<InputState>,
+    form_url: Entity<InputState>,
+    form_key: Entity<InputState>,
+    form_models: Entity<InputState>,
+    /// Free-text model id, for the slot (and connection) it's typed for.
+    custom_model: Entity<InputState>,
+    custom_target: Option<(Slot, String)>,
+    /// Processing mode last clicked, to explain what's still missing.
+    chosen_mode: Option<Mode>,
+    shortcut_error: Option<String>,
     gpu: Option<String>,
     scroll: ScrollHandle,
     category: Category,
@@ -58,6 +71,85 @@ pub struct SettingsView {
     /// Also list unplugged ports in the device pickers.
     show_all_devices: bool,
     _subscriptions: Vec<Subscription>,
+}
+
+#[derive(Clone)]
+enum ConnStatus {
+    Testing,
+    Ok(String),
+    Failed(String),
+}
+
+#[derive(Clone, PartialEq)]
+enum KeyState {
+    Env,
+    Keyring,
+    Missing,
+    Error(String),
+}
+
+fn key_state(c: &Connection) -> KeyState {
+    match c.api_key() {
+        Ok(Some(_)) if c.key_from_env() => KeyState::Env,
+        Ok(Some(_)) => KeyState::Keyring,
+        Ok(None) => KeyState::Missing,
+        Err(e) => KeyState::Error(format!("{e:#}")),
+    }
+}
+
+/// What a model picker sets.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Slot {
+    Summary,
+    Ask,
+    Live,
+    Final,
+}
+
+struct ConnForm {
+    /// Id of the connection being edited; `None` when adding.
+    editing: Option<String>,
+    preset: &'static str,
+    /// Editing: a key is stored (an empty key field keeps it).
+    has_key: bool,
+    remove_key: bool,
+    error: Option<String>,
+}
+
+/// "0,36" / "0.36" for the UI language.
+fn usd(amount: f64) -> String {
+    let s = format!("{amount:.2}");
+    if mostalgia_core::i18n::lang() == mostalgia_core::i18n::Lang::De { s.replace('.', ",") } else { s }
+}
+
+fn cost_label(conn: &Connection, model: &str) -> Option<String> {
+    let cost = cloud_stt::estimated_cost(conn, model, 1.0)?;
+    Some(if cost <= 0.0 { tr("kostenlos (eigener Server)").to_string() } else { trf("≈ {} $/Std.", &[&usd(cost)]) })
+}
+
+fn effort_label(e: &str) -> String {
+    tr(match e {
+        "low" => "Niedrig",
+        "medium" => "Mittel",
+        "high" => "Hoch",
+        "xhigh" => "Sehr hoch",
+        "max" => "Maximum",
+        _ => "Unbekannt",
+    })
+    .to_string()
+}
+
+/// A thinking level valid for `efforts`, keeping `current` if it is.
+fn valid_effort(efforts: &[String], current: &str) -> Option<String> {
+    if efforts.is_empty() || efforts.iter().any(|e| e == current) {
+        return None;
+    }
+    Some(if efforts.iter().any(|e| e == "high") { "high".into() } else { efforts.last().cloned().unwrap_or_default() })
+}
+
+/// Whether a connection's server may offer models we don't know of.
+fn free_stt_models(c: &Connection) -> bool {
+    matches!(c.preset.as_str(), "custom" | "litellm" | "vllm")
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -95,7 +187,7 @@ impl Category {
         tr(match self {
             Category::Aufnahme => "Aufnahme",
             Category::Sprecher => "Sprecher",
-            Category::Ki => "KI & Zusammenfassung",
+            Category::Ki => "KI & Transkription",
             Category::Darstellung => "Darstellung",
             Category::Speicher => "Speicher & Export",
             Category::System => "Tastenkürzel & System",
@@ -106,7 +198,7 @@ impl Category {
         tr(match self {
             Category::Aufnahme => "Geräte, Sprache und Spracherkennung",
             Category::Sprecher => "Wer hat was gesagt",
-            Category::Ki => "Anbieter, Modell und Denktiefe für Zusammenfassungen",
+            Category::Ki => "Verbindungen, Modelle und wo transkribiert wird",
             Category::Darstellung => "Design, Schrift und Animationen",
             Category::Speicher => "Wo Aufnahmen liegen und wie exportiert wird",
             Category::System => "Tastenkürzel, Tray-Symbol und Systeminfo",
@@ -212,11 +304,25 @@ fn pretty_binding(b: &str) -> String {
 
 impl SettingsView {
     pub fn new(gpu: Option<String>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let api_key = cx.new(|cx| InputState::new(window, cx).masked(true).placeholder("sk-ant-…"));
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Einstellungen durchsuchen")));
-        let sub = cx.subscribe_in(&search, window, |this, input, event: &gpui_kit::component::input::InputEvent, _, cx| {
-            if let gpui_kit::component::input::InputEvent::Change = event {
+        let sub = cx.subscribe_in(&search, window, |this, input, event: &InputEvent, _, cx| {
+            if let InputEvent::Change = event {
                 this.query = input.read(cx).value().to_string();
+                cx.notify();
+            }
+        });
+        let form_name = cx.new(|cx| InputState::new(window, cx));
+        let form_url = cx.new(|cx| InputState::new(window, cx).placeholder("https://…/v1"));
+        let form_key = cx.new(|cx| InputState::new(window, cx).masked(true));
+        let form_models = cx.new(|cx| InputState::new(window, cx).placeholder("llama3.3, qwen3:32b"));
+        let custom_model = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Modell-ID")));
+        let custom_sub = cx.subscribe_in(&custom_model, window, |this, _, event: &InputEvent, window, cx| {
+            if let InputEvent::PressEnter { .. } = event {
+                this.apply_custom_model(window, cx);
+            }
+        });
+        let url_sub = cx.subscribe(&form_url, |_, _, event: &InputEvent, cx| {
+            if let InputEvent::Change = event {
                 cx.notify();
             }
         });
@@ -227,10 +333,20 @@ impl SettingsView {
             sources: None,
             test: [None, None],
             testing: None,
-            api_key,
-            key_status: SharedString::default(),
-            models: Vec::new(),
-            models_live: false,
+            models: HashMap::new(),
+            models_live: HashSet::new(),
+            status: HashMap::new(),
+            keys: None,
+            auto_tested: false,
+            form: None,
+            form_name,
+            form_url,
+            form_key,
+            form_models,
+            custom_model,
+            custom_target: None,
+            chosen_mode: None,
+            shortcut_error: None,
             gpu,
             scroll: ScrollHandle::new(),
             category,
@@ -239,11 +355,11 @@ impl SettingsView {
             shortcut: None,
             tray_available: None,
             show_all_devices: false,
-            _subscriptions: vec![sub],
+            _subscriptions: vec![sub, custom_sub, url_sub],
         };
         this.load_system_status(cx);
-        this.refresh_key_status();
-        this.load_models(cx);
+        this.load_keys(cx);
+        this.load_ai_models(cx);
         this.load_sources(cx);
         this
     }
@@ -277,6 +393,7 @@ impl SettingsView {
             eprintln!("[mostalgia] saving settings: {e:#}");
         }
         self.scroll.set_offset(point(px(0.), px(0.)));
+        self.auto_test(cx);
         cx.notify();
     }
 
@@ -285,71 +402,9 @@ impl SettingsView {
         self.config.ui_language = value.into();
         mostalgia_core::i18n::set_lang(mostalgia_core::i18n::resolve(value));
         self.search.update(cx, |s, cx| s.set_placeholder(tr("Einstellungen durchsuchen"), window, cx));
-        self.refresh_key_status();
+        self.custom_model.update(cx, |s, cx| s.set_placeholder(tr("Modell-ID"), window, cx));
         self.save(cx);
         cx.refresh_windows();
-    }
-
-    fn refresh_key_status(&mut self) {
-        let Ok(provider) = self.config.summary_connection() else {
-            self.key_status = SharedString::default();
-            return;
-        };
-        self.key_status = match provider.api_key() {
-            Ok(Some(_)) if provider.key_from_env() => tr("Aus der Umgebungsvariable").into(),
-            Ok(Some(_)) => tr("Im GNOME-Schlüsselbund gespeichert").into(),
-            Ok(None) => trf("Kein {}-Schlüssel hinterlegt — Zusammenfassungen sind aus", &[&provider.name]).into(),
-            Err(e) => trf("Schlüsselbund nicht erreichbar: {}", &[&format!("{e:#}")]).into(),
-        };
-    }
-
-    /// Shows the built-in model list now and swaps in the live one if the
-    /// provider's API answers.
-    fn load_models(&mut self, cx: &mut Context<Self>) {
-        let Ok(conn) = self.config.summary_connection() else { return };
-        let provider = conn.id.clone();
-        self.models = mostalgia_core::llm::fallback_models(&conn);
-        self.models_live = false;
-        let task = cx.background_spawn(async move {
-            let key = conn.require_key().ok()?;
-            mostalgia_core::llm::list_models(&conn, key.as_deref()).ok()
-        });
-        cx.spawn(async move |this, cx| {
-            if let Some(models) = task.await {
-                this.update(cx, |this, cx| {
-                    if this.config.summary_provider == provider {
-                        this.models = models;
-                        this.models_live = true;
-                        cx.notify();
-                    }
-                })
-                .ok();
-            }
-        })
-        .detach();
-    }
-
-    fn set_provider(&mut self, provider: String, cx: &mut Context<Self>) {
-        if self.config.summary_provider == provider {
-            return;
-        }
-        let Some(conn) = self.config.connection(&provider).cloned() else { return };
-        self.config.summary_provider = provider;
-        self.config.summary_model = conn.preset().default_model.into();
-        self.refresh_key_status();
-        self.load_models(cx);
-        self.save(cx);
-    }
-
-    fn select_model(&mut self, action: &SelectSummaryModel, _: &mut Window, cx: &mut Context<Self>) {
-        self.config.summary_model = action.0.clone();
-        // Keep the thinking level valid for the new model.
-        if let Some(m) = self.models.iter().find(|m| m.id == action.0) {
-            if !m.efforts.is_empty() && !m.efforts.contains(&self.config.summary_effort) {
-                self.config.summary_effort = if m.efforts.iter().any(|e| e == "high") { "high".into() } else { m.efforts.last().cloned().unwrap_or_default() };
-            }
-        }
-        self.save(cx);
     }
 
     fn load_sources(&mut self, cx: &mut Context<Self>) {
@@ -394,23 +449,6 @@ impl SettingsView {
             .ok();
         })
         .detach();
-    }
-
-    fn save_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let key = self.api_key.read(cx).value().to_string();
-        if key.trim().is_empty() {
-            return;
-        }
-        let Ok(conn) = self.config.summary_connection() else { return };
-        match conn.save_api_key(&key) {
-            Ok(()) => {
-                self.api_key.update(cx, |s, cx| s.set_value("", window, cx));
-                self.refresh_key_status();
-                self.load_models(cx);
-            }
-            Err(e) => self.key_status = trf("Speichern fehlgeschlagen: {}", &[&format!("{e:#}")]).into(),
-        }
-        cx.notify();
     }
 
     fn render_devices(&mut self, kind: Kind, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -683,6 +721,1122 @@ impl SettingsView {
     }
 }
 
+// ── KI & Transkription: state ──
+impl SettingsView {
+    /// Marks a connection's card as failed (e.g. after a summary or cloud
+    /// transcription error elsewhere in the app).
+    pub fn set_connection_error(&mut self, id: &str, error: String, cx: &mut Context<Self>) {
+        self.status.insert(id.to_string(), ConnStatus::Failed(error));
+        cx.notify();
+    }
+
+    /// Reads where every connection's key comes from (keyring access can
+    /// block, so off the UI thread).
+    fn load_keys(&mut self, cx: &mut Context<Self>) {
+        let conns = self.config.connections.clone();
+        let task = cx.background_spawn(async move { conns.iter().map(|c| (c.id.clone(), key_state(c))).collect::<HashMap<_, _>>() });
+        cx.spawn(async move |this, cx| {
+            let keys = task.await;
+            this.update(cx, |this, cx| {
+                this.keys = Some(keys);
+                this.auto_test(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Set up enough to be used (`false` while keys are still being read).
+    fn configured(&self, c: &Connection) -> bool {
+        !c.base().is_empty()
+            && (!c.needs_key() || self.keys.as_ref().is_some_and(|k| matches!(k.get(&c.id), Some(KeyState::Env | KeyState::Keyring))))
+    }
+
+    /// Tests every configured connection once, the first time the KI
+    /// category is shown.
+    fn auto_test(&mut self, cx: &mut Context<Self>) {
+        if self.auto_tested || self.category != Category::Ki || self.keys.is_none() {
+            return;
+        }
+        self.auto_tested = true;
+        let ids: Vec<String> = self.config.connections.iter().filter(|c| self.configured(c)).map(|c| c.id.clone()).collect();
+        for id in ids {
+            self.test_connection(id, cx);
+        }
+    }
+
+    fn test_connection(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(conn) = self.config.connection(&id).cloned() else { return };
+        if matches!(self.status.get(&id), Some(ConnStatus::Testing)) {
+            return;
+        }
+        self.status.insert(id.clone(), ConnStatus::Testing);
+        cx.notify();
+        let task = cx.background_spawn(async move { (llm::test(&conn).map_err(|e| format!("{e:#}")), key_state(&conn)) });
+        cx.spawn(async move |this, cx| {
+            let (result, key) = task.await;
+            this.update(cx, |this, cx| {
+                if let Some(keys) = &mut this.keys {
+                    keys.insert(id.clone(), key);
+                }
+                let ok = result.is_ok();
+                this.status.insert(id.clone(), match result {
+                    Ok(note) => ConnStatus::Ok(note),
+                    Err(e) => ConnStatus::Failed(e),
+                });
+                if ok && (this.config.summary_provider == id || this.ask_conn_id() == id) && !this.models_live.contains(&id) {
+                    this.load_models(&id, cx);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Connection id used for "ask your meetings".
+    fn ask_conn_id(&self) -> String {
+        if self.config.ask_provider.is_empty() { self.config.summary_provider.clone() } else { self.config.ask_provider.clone() }
+    }
+
+    fn load_ai_models(&mut self, cx: &mut Context<Self>) {
+        let summary = self.config.summary_provider.clone();
+        self.load_models(&summary, cx);
+        let ask = self.ask_conn_id();
+        if ask != summary {
+            self.load_models(&ask, cx);
+        }
+    }
+
+    /// Shows the built-in model list now and swaps in the live one if the
+    /// provider answers.
+    fn load_models(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(conn) = self.config.connection(id).cloned() else { return };
+        let id = id.to_string();
+        self.models.entry(id.clone()).or_insert_with(|| llm::fallback_models(&conn));
+        let task = cx.background_spawn(async move {
+            let key = conn.require_key().ok()?;
+            llm::list_models(&conn, key.as_deref()).ok()
+        });
+        cx.spawn(async move |this, cx| {
+            if let Some(models) = task.await {
+                this.update(cx, |this, cx| {
+                    this.models.insert(id.clone(), models);
+                    this.models_live.insert(id);
+                    this.fill_empty_models(cx);
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    /// A model for a slot whose connection has no default (Ollama & co.),
+    /// once the list is known.
+    fn fill_empty_models(&mut self, cx: &mut Context<Self>) {
+        let first = |this: &Self, id: &str| this.models.get(id).and_then(|m| m.first()).map(|m| m.id.clone());
+        let mut changed = false;
+        if self.config.summary_model.is_empty() {
+            if let Some(m) = first(self, &self.config.summary_provider) {
+                self.config.summary_model = m;
+                changed = true;
+            }
+        }
+        if !self.config.ask_provider.is_empty() && self.config.ask_model.is_empty() {
+            if let Some(m) = first(self, &self.config.ask_provider) {
+                self.config.ask_model = m;
+                changed = true;
+            }
+        }
+        if changed {
+            self.save(cx);
+        }
+    }
+
+    /// The preset's default model, else the first one listed.
+    fn initial_model(&self, conn: &Connection) -> String {
+        let default = conn.preset().default_model;
+        if !default.is_empty() {
+            return default.into();
+        }
+        self.models
+            .get(&conn.id)
+            .and_then(|m| m.first())
+            .map(|m| m.id.clone())
+            .or_else(|| conn.models.first().cloned())
+            .unwrap_or_default()
+    }
+
+    /// Thinking levels `model` on connection `id` supports.
+    fn efforts(&self, id: &str, model: &str) -> Vec<String> {
+        let Some(conn) = self.config.connection(id) else { return Vec::new() };
+        if let Some(m) = self.models.get(id).and_then(|l| l.iter().find(|m| m.id == model)) {
+            return m.efforts.clone();
+        }
+        match conn.api {
+            Api::Anthropic if !model.is_empty() => llm::EFFORTS.iter().map(|e| e.to_string()).collect(),
+            Api::Anthropic => Vec::new(),
+            Api::OpenAi => llm::openai_efforts(conn, model),
+        }
+    }
+
+    fn set_summary_connection(&mut self, id: String, cx: &mut Context<Self>) {
+        let Some(conn) = self.config.connection(&id).cloned() else { return };
+        if self.config.summary_provider != id {
+            self.config.summary_provider = id.clone();
+            self.load_models(&id, cx);
+            self.config.summary_model = self.initial_model(&conn);
+        }
+        self.fix_efforts();
+        self.save(cx);
+    }
+
+    fn set_ask_connection(&mut self, id: Option<String>, cx: &mut Context<Self>) {
+        match id {
+            None => {
+                self.config.ask_provider.clear();
+                self.config.ask_model.clear();
+            }
+            Some(id) => {
+                let Some(conn) = self.config.connection(&id).cloned() else { return };
+                if self.config.ask_provider == id {
+                    return;
+                }
+                self.config.ask_provider = id.clone();
+                self.load_models(&id, cx);
+                self.config.ask_model = self.initial_model(&conn);
+            }
+        }
+        self.fix_efforts();
+        self.save(cx);
+    }
+
+    /// Keeps both thinking levels valid for their models.
+    fn fix_efforts(&mut self) {
+        let summary = self.efforts(&self.config.summary_provider, &self.config.summary_model);
+        if let Some(e) = valid_effort(&summary, &self.config.summary_effort) {
+            self.config.summary_effort = e;
+        }
+        let ask_model = if self.config.ask_model.is_empty() { self.config.summary_model.clone() } else { self.config.ask_model.clone() };
+        let ask = self.efforts(&self.ask_conn_id(), &ask_model);
+        if let Some(e) = valid_effort(&ask, &self.config.ask_effort) {
+            self.config.ask_effort = e;
+        }
+    }
+
+    fn select_model(&mut self, slot: Slot, conn: String, model: String, cx: &mut Context<Self>) {
+        match slot {
+            Slot::Summary => self.config.summary_model = model,
+            Slot::Ask => self.config.ask_model = model,
+            Slot::Live => self.config.live_engine = SttChoice { connection: conn, model },
+            Slot::Final => self.config.final_engine = SttChoice { connection: conn, model },
+        }
+        self.fix_efforts();
+        self.save(cx);
+    }
+
+    fn open_custom_model(&mut self, slot: Slot, conn: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.custom_target = Some((slot, conn));
+        self.custom_model.update(cx, |s, cx| {
+            s.set_value("", window, cx);
+            s.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn apply_custom_model(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let value = self.custom_model.read(cx).value().trim().to_string();
+        let Some((slot, conn)) = self.custom_target.clone() else { return };
+        if value.is_empty() {
+            return;
+        }
+        self.custom_target = None;
+        self.custom_model.update(cx, |s, cx| s.set_value("", window, cx));
+        self.select_model(slot, conn, value, cx);
+    }
+
+    /// The connection cloud transcription would use, with (live, final)
+    /// models: OpenAI and Groq first (the summary connection if it's one of
+    /// them), then self-hosted Whisper servers.
+    fn cloud_stt_default(&self) -> Option<(String, String, String)> {
+        let summary = self.config.summary_provider.as_str();
+        let mut candidates: Vec<&Connection> =
+            self.config.connections.iter().filter(|c| !c.stt_models().is_empty() && self.configured(c)).collect();
+        candidates.sort_by_key(|c| (free_stt_models(c), c.id != summary));
+        let conn = candidates.first()?;
+        let stt = conn.stt_models();
+        let (live, fin) = if conn.preset == "openai" { ("gpt-4o-mini-transcribe", "gpt-4o-transcribe") } else { (stt[0].id, stt[0].id) };
+        Some((conn.id.clone(), live.into(), fin.into()))
+    }
+
+    fn set_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
+        self.chosen_mode = Some(mode);
+        match mode {
+            Mode::Local | Mode::Hybrid => {
+                self.config.live_engine = SttChoice::local();
+                self.config.final_engine = SttChoice::local();
+            }
+            Mode::Cloud => {
+                if let Some((conn, live, fin)) = self.cloud_stt_default() {
+                    self.config.live_engine = SttChoice { connection: conn.clone(), model: live };
+                    self.config.final_engine = SttChoice { connection: conn, model: fin };
+                }
+            }
+        }
+        self.save(cx);
+    }
+
+    /// Uses a local connection for summaries and questions.
+    fn use_local_ai(&mut self, id: String, cx: &mut Context<Self>) {
+        self.set_ask_connection(None, cx);
+        self.set_summary_connection(id, cx);
+    }
+
+    /// Where a connection is in use: summaries, ask, live, final.
+    fn uses(&self, id: &str) -> [bool; 4] {
+        [
+            self.config.summary_provider == id,
+            self.ask_conn_id() == id,
+            self.config.live_engine.connection == id,
+            self.config.final_engine.connection == id,
+        ]
+    }
+
+    fn open_form(&mut self, editing: Option<String>, preset: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+        let existing = editing.as_ref().and_then(|id| self.config.connection(id).cloned());
+        let p = existing.as_ref().map_or(connections::preset(preset), |c| c.preset());
+        let (name, url, models) = match &existing {
+            Some(c) => (c.name.clone(), c.base_url.clone(), c.models.join(", ")),
+            None => (tr(p.name).to_string(), p.base_url.to_string(), String::new()),
+        };
+        let has_key = existing
+            .as_ref()
+            .is_some_and(|c| matches!(self.keys.as_ref().and_then(|k| k.get(&c.id)), Some(KeyState::Keyring | KeyState::Env)));
+        self.form_name.update(cx, |s, cx| s.set_value(name, window, cx));
+        self.form_url.update(cx, |s, cx| s.set_value(url, window, cx));
+        self.form_models.update(cx, |s, cx| s.set_value(models, window, cx));
+        let placeholder = if has_key {
+            tr("Leer lassen = gespeicherten Schlüssel behalten")
+        } else if p.needs_key {
+            tr("API-Schlüssel einfügen")
+        } else {
+            tr("Optional")
+        };
+        self.form_key.update(cx, |s, cx| {
+            s.set_value("", window, cx);
+            s.set_placeholder(placeholder, window, cx);
+        });
+        self.form = Some(ConnForm { editing, preset: p.id, has_key, remove_key: false, error: None });
+        cx.notify();
+    }
+
+    fn save_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(form) = &self.form else { return };
+        let p = connections::preset(form.preset);
+        let name = self.form_name.read(cx).value().trim().to_string();
+        let url = self.form_url.read(cx).value().trim().to_string();
+        let key = self.form_key.read(cx).value().trim().to_string();
+        let models: Vec<String> =
+            self.form_models.read(cx).value().split([',', '\n']).map(|m| m.trim().to_string()).filter(|m| !m.is_empty()).collect();
+        if !(url.starts_with("http://") || url.starts_with("https://")) {
+            if let Some(form) = &mut self.form {
+                form.error = Some(tr("Bitte eine Base-URL mit http:// oder https:// angeben.").into());
+            }
+            cx.notify();
+            return;
+        }
+        let name = if name.is_empty() { tr(p.name).to_string() } else { name };
+        let remove_key = form.remove_key;
+        let conn = match form.editing.clone() {
+            Some(id) => {
+                let Some(c) = self.config.connections.iter_mut().find(|c| c.id == id) else { return };
+                c.name = name;
+                c.base_url = url;
+                c.models = models;
+                c.clone()
+            }
+            None => {
+                let id = connections::new_id(&self.config.connections, p.id);
+                let mut c = Connection::from_preset(p, &id);
+                c.name = name;
+                c.base_url = url;
+                c.models = models;
+                self.config.connections.push(c.clone());
+                c
+            }
+        };
+        self.form = None;
+        self.form_key.update(cx, |s, cx| s.set_value("", window, cx));
+        self.models.remove(&conn.id);
+        self.models_live.remove(&conn.id);
+        self.save(cx);
+        // Keyring writes can block: store the key, then test.
+        let id = conn.id.clone();
+        self.status.insert(id.clone(), ConnStatus::Testing);
+        let task = cx.background_spawn(async move {
+            if !key.is_empty() {
+                conn.save_api_key(&key)?;
+            } else if remove_key {
+                conn.delete_api_key()?;
+            }
+            Ok::<_, anyhow::Error>(key_state(&conn))
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                this.status.remove(&id);
+                match result {
+                    Ok(state) => {
+                        this.keys.get_or_insert_with(HashMap::new).insert(id.clone(), state);
+                        if this.uses(&id)[0] || this.uses(&id)[1] {
+                            this.load_models(&id, cx);
+                        }
+                        let configured = this.config.connection(&id).is_some_and(|c| this.configured(c));
+                        if configured {
+                            this.test_connection(id, cx);
+                        }
+                    }
+                    Err(e) => {
+                        this.status.insert(id, ConnStatus::Failed(format!("{e:#}")));
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn remove_connection(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.uses(&id).iter().any(|u| *u) {
+            return;
+        }
+        let Some(pos) = self.config.connections.iter().position(|c| c.id == id) else { return };
+        let conn = self.config.connections.remove(pos);
+        self.status.remove(&id);
+        self.models.remove(&id);
+        if let Some(keys) = &mut self.keys {
+            keys.remove(&id);
+        }
+        if self.form.as_ref().is_some_and(|f| f.editing.as_deref() == Some(id.as_str())) {
+            self.form = None;
+        }
+        self.save(cx);
+        cx.background_spawn(async move {
+            if let Err(e) = conn.delete_api_key() {
+                eprintln!("[mostalgia] removing key of {}: {e:#}", conn.name);
+            }
+        })
+        .detach();
+    }
+}
+
+/// A choice in one of the KI pickers.
+#[derive(Clone)]
+enum Pick {
+    SummaryConn(String),
+    AskConn(Option<String>),
+    /// Slot, connection id, model id.
+    Model(Slot, String, String),
+    /// Type a model id for the slot on this connection.
+    Custom(Slot, String),
+}
+
+/// A dropdown entry: label, checked, what it does (`None`: a heading).
+type Choice = (String, bool, Option<Pick>);
+
+fn chip(text: impl Into<SharedString>, color: Hsla, theme: &gpui_kit::component::Theme) -> Div {
+    h_flex()
+        .gap_1p5()
+        .flex_none()
+        .px_2()
+        .py_0p5()
+        .rounded(theme.radius * 2.)
+        .bg(color.opacity(0.12))
+        .text_color(color)
+        .text_xs()
+        .font_semibold()
+        .child(div().size(px(6.)).rounded_full().bg(color))
+        .child(text.into())
+}
+
+// ── KI & Transkription: cards ──
+impl SettingsView {
+    fn pick(&mut self, pick: Pick, window: &mut Window, cx: &mut Context<Self>) {
+        match pick {
+            Pick::SummaryConn(id) => self.set_summary_connection(id, cx),
+            Pick::AskConn(id) => self.set_ask_connection(id, cx),
+            Pick::Model(slot, conn, model) => self.select_model(slot, conn, model, cx),
+            Pick::Custom(slot, conn) => self.open_custom_model(slot, conn, window, cx),
+        }
+    }
+
+    fn picker(&self, id: &'static str, label: String, items: Vec<Choice>, cx: &mut Context<Self>) -> AnyElement {
+        let weak = cx.entity().downgrade();
+        Button::new(id)
+            .small()
+            .outline()
+            .label(label)
+            .dropdown_caret(true)
+            .dropdown_menu(move |menu, _, _| {
+                let mut menu = menu.scrollable(true).max_h(px(360.));
+                for (label, checked, pick) in &items {
+                    menu = match pick {
+                        None => menu.label(label.clone()),
+                        Some(pick) => {
+                            let (pick, weak) = (pick.clone(), weak.clone());
+                            menu.item(PopupMenuItem::new(label.clone()).checked(*checked).on_click(move |_, window, cx| {
+                                weak.update(cx, |this, cx| this.pick(pick.clone(), window, cx)).ok();
+                            }))
+                        }
+                    };
+                }
+                menu
+            })
+            .into_any_element()
+    }
+
+    fn conn_label(&self, c: &Connection) -> String {
+        if self.keys.is_some() && !self.configured(c) { trf("{} (nicht eingerichtet)", &[&c.name]) } else { c.name.clone() }
+    }
+
+    /// "Bleibt lokal (Ollama)" / "Text der Besprechung geht an OpenAI (Cloud)".
+    fn privacy_line(&self, id: &str, cx: &App) -> Div {
+        let theme = cx.theme();
+        let (local, text) = match self.config.connection(id) {
+            Some(c) if c.is_local() => (true, trf("Bleibt lokal ({})", &[&c.name])),
+            Some(c) => (false, trf("Text der Besprechung geht an {} (Cloud)", &[&c.name])),
+            None => (false, trf("Verbindung \"{}\" gibt es nicht mehr", &[&id])),
+        };
+        h_flex()
+            .gap_2()
+            .text_xs()
+            .text_color(if local { theme.success } else { theme.muted_foreground })
+            .child(Icon::new(if local { IconName::HardDrive } else { IconName::Globe }).xsmall().flex_none())
+            .child(div().flex_1().min_w_0().child(text))
+    }
+
+    fn custom_model_row(&self, slot: Slot, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (target, conn) = self.custom_target.clone()?;
+        if target != slot {
+            return None;
+        }
+        let name = self.config.connection(&conn).map_or(conn.clone(), |c| c.name.clone());
+        let theme = cx.theme().clone();
+        Some(
+            v_flex()
+                .gap_1()
+                .child(div().text_xs().text_color(theme.muted_foreground).child(trf("Modell-ID bei {} eingeben", &[&name])))
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(div().flex_1().min_w(px(140.)).child(Input::new(&self.custom_model).small()))
+                        .child(
+                            Button::new(SharedString::from(format!("custom-ok-{slot:?}")))
+                                .small()
+                                .primary()
+                                .label(tr("Übernehmen"))
+                                .on_click(cx.listener(|this, _, window, cx| this.apply_custom_model(window, cx))),
+                        )
+                        .child(Button::new(SharedString::from(format!("custom-cancel-{slot:?}"))).small().ghost().label(tr("Abbrechen")).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.custom_target = None;
+                                cx.notify();
+                            }),
+                        )),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn effort_row(&self, slot: Slot, efforts: &[String], cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let current = if slot == Slot::Ask { self.config.ask_effort.clone() } else { self.config.summary_effort.clone() };
+        let buttons: Vec<AnyElement> = efforts
+            .iter()
+            .map(|e| {
+                let on = &current == e;
+                let value = e.clone();
+                Button::new(SharedString::from(format!("effort-{slot:?}-{e}")))
+                    .small()
+                    .label(effort_label(e))
+                    .when(on, |b| b.primary())
+                    .when(!on, |b| b.ghost())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        match slot {
+                            Slot::Ask => this.config.ask_effort = value.clone(),
+                            _ => this.config.summary_effort = value.clone(),
+                        }
+                        this.save(cx);
+                    }))
+                    .into_any_element()
+            })
+            .collect();
+        v_flex()
+            .gap_2()
+            .child(
+                v_flex()
+                    .child(div().text_sm().child(tr("Denktiefe")))
+                    .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Mehr Denken = gründlicher, aber langsamer (bis zu Minuten)."))),
+            )
+            .child(h_flex().flex_wrap().gap_1().children(buttons))
+            .into_any_element()
+    }
+
+    /// Model dropdown items for an LLM slot on connection `id`.
+    fn model_choices(&self, slot: Slot, id: &str, current: &str) -> Vec<Choice> {
+        let mut items: Vec<Choice> = self
+            .models
+            .get(id)
+            .into_iter()
+            .flatten()
+            .map(|m| (m.display_name.clone(), m.id == current, Some(Pick::Model(slot, id.to_string(), m.id.clone()))))
+            .collect();
+        if !current.is_empty() && !items.iter().any(|(_, on, _)| *on) {
+            items.insert(0, (current.to_string(), true, Some(Pick::Model(slot, id.to_string(), current.to_string()))));
+        }
+        items.push((tr("Eigenes Modell …").into(), false, Some(Pick::Custom(slot, id.to_string()))));
+        items
+    }
+
+    fn model_label(&self, id: &str, model: &str) -> String {
+        if model.is_empty() {
+            return tr("Modell wählen").into();
+        }
+        self.models.get(id).and_then(|l| l.iter().find(|m| m.id == model)).map_or(model.to_string(), |m| m.display_name.clone())
+    }
+
+    fn render_ai_use(&mut self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
+        let row = |label: &str, hint: Option<&str>, control: AnyElement| settings_row(label, hint, control, &theme);
+        let conns = self.config.connections.clone();
+        let summary_id = self.config.summary_provider.clone();
+        let summary_model = self.config.summary_model.clone();
+
+        let summary_conn_label = self.config.connection(&summary_id).map_or_else(|| tr("Verbindung wählen").to_string(), |c| self.conn_label(c));
+        let summary_conns: Vec<Choice> =
+            conns.iter().map(|c| (self.conn_label(c), c.id == summary_id, Some(Pick::SummaryConn(c.id.clone())))).collect();
+        let summary_conn_picker = self.picker("summary-conn", summary_conn_label, summary_conns, cx);
+        let summary_models = self.model_choices(Slot::Summary, &summary_id, &summary_model);
+        let summary_model_picker = self.picker("summary-model", self.model_label(&summary_id, &summary_model), summary_models, cx);
+        let summary_efforts = self.efforts(&summary_id, &summary_model);
+        let live_list = self.models_live.contains(&summary_id);
+
+        let separate = !self.config.ask_provider.is_empty();
+        let ask_id = self.ask_conn_id();
+        let ask_model = if self.config.ask_model.is_empty() { summary_model.clone() } else { self.config.ask_model.clone() };
+        let ask_label = if separate {
+            self.config.connection(&ask_id).map_or(ask_id.clone(), |c| self.conn_label(c))
+        } else {
+            tr("Wie Zusammenfassungen").to_string()
+        };
+        let mut ask_conns: Vec<Choice> = vec![(tr("Wie Zusammenfassungen").into(), !separate, Some(Pick::AskConn(None)))];
+        ask_conns.extend(conns.iter().map(|c| (self.conn_label(c), separate && c.id == ask_id, Some(Pick::AskConn(Some(c.id.clone()))))));
+        let ask_conn_picker = self.picker("ask-conn", ask_label, ask_conns, cx);
+        let ask_model_picker = separate.then(|| {
+            let items = self.model_choices(Slot::Ask, &ask_id, &ask_model);
+            self.picker("ask-model", self.model_label(&ask_id, &ask_model), items, cx)
+        });
+        let ask_efforts = self.efforts(&ask_id, &ask_model);
+
+        let summary_custom = self.custom_model_row(Slot::Summary, cx);
+        let ask_custom = self.custom_model_row(Slot::Ask, cx);
+        let summary_effort_row = (!summary_efforts.is_empty()).then(|| self.effort_row(Slot::Summary, &summary_efforts, cx));
+        let ask_effort_row = (!ask_efforts.is_empty()).then(|| self.effort_row(Slot::Ask, &ask_efforts, cx));
+        let summary_privacy = self.privacy_line(&summary_id, cx);
+        let ask_privacy = self.privacy_line(&ask_id, cx);
+        let auto = Switch::new("set-auto-sum").checked(self.config.auto_summary).on_change(cx.listener(|this, v: &bool, _, cx| {
+            this.config.auto_summary = *v;
+            this.save(cx);
+        }));
+
+        ui::card(cx)
+            .child(div().font_semibold().child(tr("Zusammenfassungen & Fragen")))
+            .child(ui::section_title(tr("ZUSAMMENFASSUNGEN"), cx))
+            .child(row(tr("Verbindung"), None, summary_conn_picker))
+            .child(row(
+                tr("Modell"),
+                Some(tr(if live_list { "Liste vom Anbieter" } else { "Eingebaute Liste (Schlüssel fehlt oder offline)" })),
+                summary_model_picker,
+            ))
+            .children(summary_custom)
+            .children(summary_effort_row)
+            .child(summary_privacy)
+            .child(row(tr("Automatisch nach jeder Aufnahme"), None, auto.into_any_element()))
+            .child(div().h(px(1.)).bg(theme.border))
+            .child(ui::section_title(tr("FRAGEN (ASK)"), cx))
+            .child(row(tr("Verbindung"), Some(tr("Für „Frag deine Besprechungen“")), ask_conn_picker))
+            .children(ask_model_picker.map(|p| row(tr("Modell"), None, p)))
+            .children(ask_custom)
+            .children(ask_effort_row)
+            .child(ask_privacy)
+    }
+
+    fn stt_hint(&self, choice: &SttChoice) -> String {
+        if choice.is_local() {
+            return tr("Auf diesem Rechner (GPU) · kostenlos").into();
+        }
+        match self.config.connection(&choice.connection) {
+            None => trf("Verbindung \"{}\" gibt es nicht mehr", &[&choice.connection]),
+            Some(c) => {
+                let place = if c.is_local() { trf("Bleibt lokal ({})", &[&c.name]) } else { trf("Audio geht an {} (Cloud)", &[&c.name]) };
+                match cost_label(c, &choice.model) {
+                    Some(cost) => format!("{place} · {cost}"),
+                    None => place,
+                }
+            }
+        }
+    }
+
+    fn stt_picker(&self, slot: Slot, id: &'static str, cx: &mut Context<Self>) -> AnyElement {
+        let current = if slot == Slot::Live { self.config.live_engine.clone() } else { self.config.final_engine.clone() };
+        let mut items: Vec<Choice> =
+            vec![(tr("Whisper large-v3-turbo (lokal)").into(), current.is_local(), Some(Pick::Model(slot, String::new(), String::new())))];
+        let mut listed = current.is_local();
+        for c in self.config.connections.iter().filter(|c| !c.stt_models().is_empty() && self.configured(c)) {
+            for m in c.stt_models() {
+                let on = current.connection == c.id && current.model == m.id;
+                listed |= on;
+                let label = match cost_label(c, m.id) {
+                    Some(cost) => format!("{} · {} — {cost}", c.name, m.id),
+                    None => format!("{} · {}", c.name, m.id),
+                };
+                items.push((label, on, Some(Pick::Model(slot, c.id.clone(), m.id.into()))));
+            }
+            if free_stt_models(c) {
+                items.push((trf("{}: eigenes Modell …", &[&c.name]), false, Some(Pick::Custom(slot, c.id.clone()))));
+            }
+        }
+        if !listed {
+            items.insert(1, (self.config.engine_label(&current), true, Some(Pick::Model(slot, current.connection.clone(), current.model.clone()))));
+        }
+        self.picker(id, self.config.engine_label(&current), items, cx)
+    }
+
+    fn render_processing(&mut self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
+        let mode = self.config.mode();
+        let tile = |m: Mode, icon: IconName, text: &'static str, cx: &mut Context<Self>| {
+            let on = mode == m;
+            v_flex()
+                .id(SharedString::from(format!("mode-{m:?}")))
+                .flex_1()
+                .min_w(px(170.))
+                .p_3()
+                .gap_1()
+                .rounded(theme.radius)
+                .border_1()
+                .border_color(if on { theme.primary } else { theme.border })
+                .when(on, |el| el.bg(theme.primary.opacity(0.08)))
+                .cursor_pointer()
+                .hover(|s| s.bg(theme.muted))
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .when(on, |el| el.text_color(theme.primary))
+                        .child(Icon::new(icon).small())
+                        .child(div().font_semibold().child(m.label()))
+                        .when(m == Mode::Hybrid, |el| el.child(div().text_xs().text_color(theme.muted_foreground).child(tr("Standard")))),
+                )
+                .child(div().text_xs().text_color(theme.muted_foreground).child(tr(text)))
+                .on_click(cx.listener(move |this, _, _, cx| this.set_mode(m, cx)))
+        };
+        let tiles = h_flex()
+            .flex_wrap()
+            .gap_2()
+            .child(tile(Mode::Local, IconName::Cpu, "Alles auf diesem Rechner: Whisper auf der GPU, KI über Ollama/LM Studio o. ä.", cx))
+            .child(tile(Mode::Hybrid, IconName::Sparkles, "Transkription lokal, Zusammenfassungen und Fragen mit einem Cloud-Modell", cx))
+            .child(tile(
+                Mode::Cloud,
+                IconName::Globe,
+                "Transkription in der Cloud — für Rechner ohne starke GPU. Audio wird an den Anbieter gesendet.",
+                cx,
+            ));
+
+        // What the last click couldn't do on its own.
+        let mut hint: Option<AnyElement> = None;
+        if self.chosen_mode == Some(Mode::Local) && mode != Mode::Local {
+            let mut cloud: Vec<String> = Vec::new();
+            for (what, id) in [(tr("Zusammenfassungen"), self.config.summary_provider.clone()), (tr("Fragen"), self.ask_conn_id())] {
+                if let Some(c) = self.config.connection(&id).filter(|c| !c.is_local()) {
+                    cloud.push(format!("{what} → {}", c.name));
+                }
+            }
+            let locals: Vec<Connection> = self.config.connections.iter().filter(|c| c.is_local() && self.configured(c)).cloned().collect();
+            let mut actions = h_flex().flex_wrap().gap_2();
+            if locals.is_empty() {
+                actions = actions.child(
+                    Button::new("mode-add-local")
+                        .small()
+                        .outline()
+                        .icon(IconName::Plus)
+                        .label(tr("Füge eine lokale Verbindung hinzu (z. B. Ollama)"))
+                        .on_click(cx.listener(|this, _, window, cx| this.open_form(None, "ollama", window, cx))),
+                );
+            } else {
+                for c in locals {
+                    let id = c.id.clone();
+                    actions = actions.child(
+                        Button::new(SharedString::from(format!("use-local-{}", c.id)))
+                            .small()
+                            .outline()
+                            .label(trf("{} verwenden", &[&c.name]))
+                            .on_click(cx.listener(move |this, _, _, cx| this.use_local_ai(id.clone(), cx))),
+                    );
+                }
+            }
+            hint = Some(
+                v_flex()
+                    .gap_2()
+                    .p_3()
+                    .rounded(theme.radius)
+                    .bg(theme.warning.opacity(0.1))
+                    .text_sm()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(Icon::new(IconName::TriangleAlert).small().text_color(theme.warning).flex_none())
+                            .child(div().flex_1().min_w_0().child(tr("Transkription ist jetzt lokal. Noch in der Cloud:"))),
+                    )
+                    .children(cloud.into_iter().map(|t| div().pl_6().text_xs().child(t)))
+                    .child(actions)
+                    .into_any_element(),
+            );
+        } else if self.chosen_mode == Some(Mode::Cloud) && mode != Mode::Cloud {
+            hint = Some(
+                h_flex()
+                    .gap_2()
+                    .p_3()
+                    .rounded(theme.radius)
+                    .bg(theme.warning.opacity(0.1))
+                    .text_sm()
+                    .child(Icon::new(IconName::TriangleAlert).small().text_color(theme.warning).flex_none())
+                    .child(div().flex_1().min_w_0().child(tr(
+                        "Keine Verbindung mit Cloud-Transkription eingerichtet. Richte OpenAI, Groq oder einen eigenen Whisper-Server ein.",
+                    )))
+                    .into_any_element(),
+            );
+        }
+
+        let live = self.config.live_engine.clone();
+        let fin = self.config.final_engine.clone();
+        let live_picker = self.stt_picker(Slot::Live, "stt-live", cx);
+        let final_picker = self.stt_picker(Slot::Final, "stt-final", cx);
+        let live_hint = self.stt_hint(&live);
+        let final_hint = self.stt_hint(&fin);
+        let live_custom = self.custom_model_row(Slot::Live, cx);
+        let final_custom = self.custom_model_row(Slot::Final, cx);
+        let row = |label: &str, hint: Option<&str>, control: AnyElement| settings_row(label, hint, control, &theme);
+
+        ui::card(cx)
+            .child(div().font_semibold().child(tr("Verarbeitung")))
+            .child(tiles)
+            .children(hint)
+            .child(row(tr("Live-Transkription"), Some(&live_hint), live_picker))
+            .children(live_custom)
+            .when(!live.is_local(), |el| {
+                el.child(div().text_xs().text_color(theme.muted_foreground).child(tr("Live-Text ohne Zwischenstände (Cloud rechnet pro Anfrage ab)")))
+            })
+            .child(row(tr("Feinschliff nach der Aufnahme"), Some(&final_hint), final_picker))
+            .children(final_custom)
+            .child(div().text_xs().text_color(theme.muted_foreground).child(tr(
+                "Bei einem Fehler wird nichts automatisch umgestellt: Mostalgia zeigt den Fehler, die Aufnahme bleibt gespeichert und kann mit „Erneut transkribieren“ nachbearbeitet werden.",
+            )))
+    }
+
+    fn render_connections(&mut self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
+        let mut tiles: Vec<AnyElement> = Vec::new();
+        for c in self.config.connections.clone() {
+            let configured = self.configured(&c);
+            let key = self.keys.as_ref().and_then(|k| k.get(&c.id).cloned());
+            let status = self.status.get(&c.id).cloned();
+            let uses = self.uses(&c.id);
+            let in_use = uses.iter().any(|u| *u);
+            let (chip_el, note, error) = match (&status, &key) {
+                (Some(ConnStatus::Testing), _) => (chip(tr("Prüfe …"), theme.muted_foreground, &theme), None, None),
+                (Some(ConnStatus::Ok(note)), _) => (chip(tr("Verbunden"), theme.success, &theme), Some(note.clone()), None),
+                (Some(ConnStatus::Failed(e)), _) => (chip(tr("Fehler"), theme.danger, &theme), None, Some(e.clone())),
+                (None, Some(KeyState::Error(e))) if c.needs_key() => (chip(tr("Fehler"), theme.danger, &theme), None, Some(e.clone())),
+                _ if self.keys.is_none() => (chip(tr("Prüfe …"), theme.muted_foreground, &theme), None, None),
+                _ if !configured => (chip(tr("Nicht eingerichtet"), theme.muted_foreground, &theme), None, None),
+                _ => (chip(tr("Nicht geprüft"), theme.muted_foreground, &theme), None, None),
+            };
+            let (privacy, privacy_color) = if c.is_local() {
+                (mostalgia_core::connections::local_label(c.base()).to_string(), theme.success)
+            } else if uses[2] || uses[3] {
+                (trf("Cloud · Text und Audio gehen an {}", &[&c.name]), theme.info)
+            } else {
+                (trf("Cloud · Text geht an {}", &[&c.name]), theme.info)
+            };
+            let used_for: Vec<AnyElement> = ["Zusammenfassungen", "Fragen", "Live-Transkription", "Feinschliff"]
+                .into_iter()
+                .zip(uses)
+                .filter(|(_, on)| *on)
+                .map(|(label, _)| {
+                    div()
+                        .px_1p5()
+                        .rounded(theme.radius)
+                        .border_1()
+                        .border_color(theme.border)
+                        .text_xs()
+                        .child(tr(label))
+                        .into_any_element()
+                })
+                .collect();
+            let preset_name = tr(c.preset().name);
+            let failed = error.is_some();
+            let (test_id, edit_id) = (c.id.clone(), c.id.clone());
+            let remove_id = c.id.clone();
+            let testing = matches!(status, Some(ConnStatus::Testing));
+            tiles.push(
+                v_flex()
+                    .flex_1()
+                    .min_w(px(260.))
+                    .p_3()
+                    .gap_2()
+                    .rounded(theme.radius)
+                    .border_1()
+                    .border_color(if failed { theme.danger.opacity(0.5) } else { theme.border })
+                    .child(
+                        h_flex()
+                            .flex_wrap()
+                            .justify_between()
+                            .gap_2()
+                            .child(
+                                h_flex()
+                                    .min_w_0()
+                                    .gap_2()
+                                    .child(div().font_semibold().child(c.name.clone()))
+                                    .when(preset_name != c.name, |el| el.child(div().text_xs().text_color(theme.muted_foreground).child(preset_name))),
+                            )
+                            .child(chip_el),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_family(theme.mono_font_family.clone())
+                            .text_color(theme.muted_foreground)
+                            .truncate()
+                            .child(if c.base().is_empty() { tr("Keine URL").to_string() } else { c.base().to_string() }),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_1p5()
+                            .text_xs()
+                            .text_color(privacy_color)
+                            .child(Icon::new(if c.is_local() { IconName::HardDrive } else { IconName::Globe }).xsmall().flex_none())
+                            .child(div().flex_1().min_w_0().child(privacy)),
+                    )
+                    .when_some(note, |el, n| el.child(div().text_xs().text_color(theme.muted_foreground).child(n)))
+                    .when_some(error, |el, e| el.child(div().w_full().text_xs().text_color(theme.danger).child(e)))
+                    .when(!used_for.is_empty(), |el| {
+                        el.child(
+                            h_flex()
+                                .flex_wrap()
+                                .gap_1()
+                                .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Verwendet für:")))
+                                .children(used_for),
+                        )
+                    })
+                    .child(
+                        h_flex()
+                            .flex_wrap()
+                            .gap_1()
+                            .child(
+                                Button::new(SharedString::from(format!("conn-test-{}", c.id)))
+                                    .xsmall()
+                                    .outline()
+                                    .icon(IconName::RefreshCw)
+                                    .label(tr("Testen"))
+                                    .loading(testing)
+                                    .on_click(cx.listener(move |this, _, _, cx| this.test_connection(test_id.clone(), cx))),
+                            )
+                            .child(
+                                Button::new(SharedString::from(format!("conn-edit-{}", c.id)))
+                                    .xsmall()
+                                    .ghost()
+                                    .icon(IconName::Pencil)
+                                    .label(tr("Bearbeiten"))
+                                    .on_click(cx.listener(move |this, _, window, cx| this.open_form(Some(edit_id.clone()), "custom", window, cx))),
+                            )
+                            .child(
+                                Button::new(SharedString::from(format!("conn-remove-{}", c.id)))
+                                    .xsmall()
+                                    .ghost()
+                                    .icon(IconName::Trash)
+                                    .label(tr("Entfernen"))
+                                    .disabled(in_use)
+                                    .when(in_use, |b| b.tooltip(tr("Wird noch verwendet — erst eine andere Verbindung wählen")))
+                                    .on_click(cx.listener(move |this, _, _, cx| this.remove_connection(remove_id.clone(), cx))),
+                            ),
+                    )
+                    .into_any_element(),
+            );
+        }
+        let form = self.form.is_some().then(|| self.render_form(cx));
+        ui::card(cx)
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w(px(200.))
+                            .child(div().font_semibold().child(tr("Verbindungen")))
+                            .child(div().text_xs().text_color(theme.muted_foreground).child(tr(
+                                "Claude, OpenAI, Ollama, LiteLLM oder jeder OpenAI-kompatible Endpunkt. Schlüssel liegen im GNOME-Schlüsselbund.",
+                            ))),
+                    )
+                    .when(self.form.is_none(), |el| {
+                        el.child(
+                            Button::new("conn-add")
+                                .small()
+                                .primary()
+                                .icon(IconName::Plus)
+                                .label(tr("Verbindung hinzufügen"))
+                                .on_click(cx.listener(|this, _, window, cx| this.open_form(None, "ollama", window, cx))),
+                        )
+                    }),
+            )
+            .children(form)
+            .child(h_flex().flex_wrap().items_start().gap_3().children(tiles))
+    }
+
+    fn render_form(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let Some(form) = &self.form else { return div().into_any_element() };
+        let p = connections::preset(form.preset);
+        let editing = form.editing.clone();
+        let existing = editing.as_ref().and_then(|id| self.config.connection(id).cloned());
+        let probe = existing.clone().unwrap_or_else(|| Connection::from_preset(p, &connections::new_id(&self.config.connections, p.id)));
+        let from_env = probe.key_from_env();
+        let (has_key, remove_key, error) = (form.has_key, form.remove_key, form.error.clone());
+        let field = |label: &str, input: &Entity<InputState>, hint: Option<String>| {
+            v_flex()
+                .gap_1()
+                .child(div().text_sm().child(label.to_string()))
+                .child(Input::new(input).small())
+                .when_some(hint, |el, h| el.child(div().text_xs().text_color(theme.muted_foreground).child(h)))
+        };
+        let key_hint = if from_env {
+            Some(match p.env_var {
+                Some(var) => format!("{} ({var})", tr("Aus der Umgebungsvariable")),
+                None => tr("Aus der Umgebungsvariable").to_string(),
+            })
+        } else if remove_key {
+            Some(tr("Wird beim Speichern entfernt.").to_string())
+        } else if p.needs_key && !p.key_url.is_empty() {
+            Some(trf("Schlüssel erstellen: {}", &[&p.key_url]))
+        } else if !p.needs_key {
+            Some(tr("Nur nötig, wenn der Server einen Schlüssel verlangt.").to_string())
+        } else {
+            None
+        };
+        let title = match &existing {
+            Some(c) => trf("{} bearbeiten", &[&c.name]),
+            None => tr("Neue Verbindung").to_string(),
+        };
+        let mut presets: Vec<AnyElement> = Vec::new();
+        if editing.is_none() {
+            for preset in PRESETS {
+                let on = preset.id == p.id;
+                let id = preset.id;
+                presets.push(
+                    Button::new(SharedString::from(format!("preset-{id}")))
+                        .xsmall()
+                        .label(tr(preset.name))
+                        .when(on, |b| b.primary())
+                        .when(!on, |b| b.outline())
+                        .on_click(cx.listener(move |this, _, window, cx| this.open_form(None, id, window, cx)))
+                        .into_any_element(),
+                );
+            }
+        }
+        let url_hint = if p.id == "custom" {
+            Some(tr("Pflichtfeld, z. B. http://server:8000/v1").to_string())
+        } else {
+            Some(tr("Vorgabe des Anbieters; bei Bedarf anpassen.").to_string())
+        };
+        let form_url = self.form_url.read(cx).value().to_string();
+        let local = connections::is_local_url(&form_url);
+        v_flex()
+            .p_3()
+            .gap_3()
+            .rounded(theme.radius)
+            .border_1()
+            .border_color(theme.primary.opacity(0.5))
+            .bg(theme.primary.opacity(0.04))
+            .child(div().font_semibold().child(title))
+            .when(!presets.is_empty(), |el| {
+                el.child(v_flex().gap_1().child(div().text_sm().child(tr("Anbieter"))).child(h_flex().flex_wrap().gap_1().children(presets)))
+            })
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap_3()
+                    .items_start()
+                    .child(div().flex_1().min_w(px(200.)).child(field(tr("Name"), &self.form_name, None)))
+                    .child(div().flex_1().min_w(px(240.)).child(field(tr("Base-URL"), &self.form_url, url_hint))),
+            )
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap_3()
+                    .items_end()
+                    .child(div().flex_1().min_w(px(240.)).child(field(tr("API-Schlüssel"), &self.form_key, key_hint)))
+                    .when(has_key && !from_env, |el| {
+                        el.child(
+                            Button::new("form-remove-key")
+                                .small()
+                                .ghost()
+                                .label(if remove_key { tr("Schlüssel behalten") } else { tr("Schlüssel entfernen") })
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    if let Some(f) = &mut this.form {
+                                        f.remove_key = !f.remove_key;
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                    }),
+            )
+            .when(p.api == Api::OpenAi, |el| {
+                el.child(field(
+                    tr("Eigene Modell-IDs (optional, mit Komma getrennt)"),
+                    &self.form_models,
+                    Some(tr("Nur nötig, wenn der Server keine Modellliste liefert").to_string()),
+                ))
+            })
+            .child(
+                h_flex()
+                    .gap_1p5()
+                    .text_xs()
+                    .text_color(if local { theme.success } else { theme.muted_foreground })
+                    .child(Icon::new(if local { IconName::HardDrive } else { IconName::Globe }).xsmall().flex_none())
+                    .child(div().flex_1().min_w_0().child(if local {
+                        connections::local_label(&form_url)
+                    } else {
+                        tr("Cloud · Text (und bei Cloud-Transkription Audio) geht an diesen Anbieter")
+                    })),
+            )
+            .when_some(error, |el, e| el.child(div().text_sm().text_color(theme.danger).child(e)))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(Button::new("form-save").small().primary().label(tr("Speichern")).on_click(cx.listener(|this, _, window, cx| this.save_form(window, cx))))
+                    .child(Button::new("form-cancel").small().ghost().label(tr("Abbrechen")).on_click(cx.listener(|this, _, _, cx| {
+                        this.form = None;
+                        cx.notify();
+                    }))),
+            )
+            .into_any_element()
+    }
+}
+
 impl Render for SettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let lang = self.config.language.clone();
@@ -889,117 +2043,29 @@ impl Render for SettingsView {
             element: speakers.into_any_element(),
         });
 
-        // ── KI & Zusammenfassung ──
-        let provider = self.config.summary_provider.clone();
-        let provider_name = self.config.summary_connection().map(|c| c.name).unwrap_or_default();
-        let current = self.models.iter().find(|m| m.id == self.config.summary_model).cloned();
-        let model_label = current.as_ref().map_or(self.config.summary_model.clone(), |m| m.display_name.clone());
-        let efforts: Vec<String> = current.as_ref().map(|m| m.efforts.clone()).unwrap_or_default();
-        let models = self.models.clone();
-        let effort_label = |e: &str| tr(match e {
-            "low" => "Niedrig",
-            "medium" => "Mittel",
-            "high" => "Hoch",
-            "xhigh" => "Sehr hoch",
-            "max" => "Maximum",
-            _ => "Unbekannt",
-        })
-        .to_string();
-        let mut effort_buttons: Vec<AnyElement> = Vec::new();
-        for e in &efforts {
-            let on = &self.config.summary_effort == e;
-            let value = e.clone();
-            effort_buttons.push(
-                Button::new(SharedString::from(format!("effort-{e}")))
-                    .small()
-                    .label(effort_label(e))
-                    .when(on, |b| b.primary())
-                    .when(!on, |b| b.ghost())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.config.summary_effort = value.clone();
-                        this.save(cx);
-                    }))
-                    .into_any_element(),
-            );
-        }
-        let provider_button = |p: &mostalgia_core::connections::Connection, cx: &mut Context<Self>| {
-            let id = p.id.clone();
-            Button::new(SharedString::from(format!("provider-{}", p.id)))
-                .small()
-                .label(p.name.clone())
-                .when(provider == p.id, |b| b.primary())
-                .when(provider != p.id, |b| b.ghost())
-                .on_click(cx.listener(move |this, _, _, cx| this.set_provider(id.clone(), cx)))
-                .into_any_element()
-        };
-        let provider_buttons: Vec<AnyElement> = self.config.connections.clone().iter().map(|c| provider_button(c, cx)).collect();
-        let model_card = ui::card(cx)
-            .child(title("Modell"))
-            .child(row(
-                tr("Anbieter"),
-                None,
-                h_flex().flex_wrap().gap_1().children(provider_buttons).into_any_element(),
-            ))
-            .child(row(
-                tr("Modell"),
-                Some(tr(if self.models_live { "Liste vom Anbieter" } else { "Eingebaute Liste (Schlüssel fehlt oder offline)" })),
-                Button::new("summary-model")
-                    .small()
-                    .outline()
-                    .label(model_label)
-                    .dropdown_caret(true)
-                    .dropdown_menu(move |menu, _, _| {
-                        let mut menu = menu.scrollable(true).max_h(px(360.));
-                        for m in &models {
-                            menu = menu.menu(m.display_name.clone(), Box::new(SelectSummaryModel(m.id.clone())));
-                        }
-                        menu
-                    })
-                    .into_any_element(),
-            ))
-            .when(!efforts.is_empty(), |el| {
-                el.child(
-                    v_flex()
-                        .gap_2()
-                        .child(
-                            v_flex()
-                                .child(div().text_sm().child(tr("Denktiefe")))
-                                .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Mehr Denken = gründlicher, aber langsamer (bis zu Minuten)."))),
-                        )
-                        .child(h_flex().flex_wrap().gap_1().children(effort_buttons)),
-                )
-            });
+        // ── KI & Transkription ──
         cards.push(Card {
             category: Category::Ki,
-            title: "Modell",
-            keywords: "ki claude deepseek anbieter modell opus sonnet haiku denktiefe thinking effort zusammenfassung ai provider model summary",
-            wide: false,
-            element: model_card.into_any_element(),
+            title: "Verbindungen",
+            keywords: "verbindung verbindungen anbieter provider connection connections endpoint endpunkt url base-url api key schlüssel keyring schlüsselbund claude anthropic openai deepseek ollama litellm lm studio lmstudio vllm openrouter groq together custom eigener lokal local cloud test testen",
+            wide: true,
+            element: self.render_connections(cx).into_any_element(),
         });
-        let key_card = ui::card(cx)
-            .child(div().font_semibold().child(trf("{}-API-Schlüssel", &[&provider_name])))
-            .child(div().text_sm().text_color(theme.muted_foreground).child(tr("Gesendet wird nur der Text der Besprechung, nie Audio.")))
-            .child(
-                h_flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .child(div().flex_1().min_w(px(180.)).child(Input::new(&self.api_key)))
-                    .child(Button::new("save-key").primary().label(tr("Speichern")).on_click(cx.listener(|this, _, window, cx| this.save_key(window, cx)))),
-            )
-            .child(div().text_xs().text_color(theme.muted_foreground).child(self.key_status.clone()))
-            .child(row(
-                tr("Automatisch nach jeder Aufnahme"),
-                None,
-                switch("set-auto-sum", self.config.auto_summary, cx, |c, v| c.auto_summary = v),
-            ));
         cards.push(Card {
             category: Category::Ki,
-            title: "API-Schlüssel",
-            keywords: "api schlüssel key anthropic deepseek automatisch zusammenfassung automatic summary",
-            wide: false,
-            element: key_card.into_any_element(),
+            title: "Verarbeitung",
+            keywords: "verarbeitung processing modus mode lokal local hybrid cloud whisper groq openai transkription transcription live feinschliff final stt kosten cost gpu audio",
+            wide: true,
+            element: self.render_processing(cx).into_any_element(),
         });
 
+        cards.push(Card {
+            category: Category::Ki,
+            title: "Zusammenfassungen & Fragen",
+            keywords: "ki ai zusammenfassung zusammenfassungen summary summaries fragen ask modell model denktiefe thinking effort reasoning automatisch automatic claude openai ollama deepseek lokal local cloud",
+            wide: false,
+            element: self.render_ai_use(cx).into_any_element(),
+        });
         // ── Darstellung ──
         let ui_lang = self.config.ui_language.clone();
         let lang_button = |id: &'static str, label: &'static str, value: &'static str, cx: &mut Context<Self>| {
@@ -1097,12 +2163,13 @@ impl Render for SettingsView {
                     .child(Button::new("install-shortcut").small().primary().icon(IconName::Keyboard).label(tr("Super + Shift + R einrichten")).on_click(cx.listener(|this, _, _, cx| {
                         match install_shortcut() {
                             Ok(b) => this.shortcut = Some(b),
-                            Err(e) => this.key_status = format!("{e:#}").into(),
+                            Err(e) => this.shortcut_error = Some(format!("{e:#}")),
                         }
                         cx.notify();
                     })))
                     .into_any_element(),
             })
+            .when_some(self.shortcut_error.clone(), |el, e| el.child(div().text_xs().text_color(theme.danger).child(e)))
             .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Ändern oder entfernen: GNOME-Einstellungen → Tastatur → Eigene Tastenkürzel.")));
         cards.push(Card {
             category: Category::System,
@@ -1230,7 +2297,6 @@ impl Render for SettingsView {
         h_flex()
             .size_full()
             .key_context("Settings")
-            .on_action(cx.listener(Self::select_model))
             .child(nav)
             .child(
                 div().flex_1().min_w_0().h_full().child(

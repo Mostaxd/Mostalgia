@@ -51,6 +51,8 @@ goes to the language model you pick — and you can pick a fully local one too.
 - **Provisional text after ~1 s** while someone is still talking, replaced by the clean line when they pause.
 - **Silero VAD** decides what's speech, so silence never turns into “Vielen Dank.” hallucinations.
 - After you stop, a **final pass** re-transcribes the full tracks for the archive.
+- **Local, Hybrid or Cloud**: Whisper on your GPU, or cloud speech-to-text (OpenAI, Groq, a self-hosted Whisper server) for machines without one — chosen separately for live text and the final pass, with the cost per hour shown.
+- **No silent fallbacks**: if a provider fails you see which one and why, the audio stays on disk, and *Transcribe again* lets you pick another engine.
 - German, English or auto-detect; optional noise suppression (RNNoise).
 
 </td></tr>
@@ -58,8 +60,8 @@ goes to the language model you pick — and you can pick a fully local one too.
 
 ### ✨ Summaries
 - A title, short overview, key points, **decisions**, **action items with owners and deadlines**, and open questions — in the meeting's own language.
-- Pick the provider, model and **thinking level** (Claude Opus/Sonnet/Haiku, DeepSeek …).
-- Streams, so even “Maximum” thinking doesn't time out.
+- **Bring your own model**: Claude, OpenAI, DeepSeek, or any OpenAI-compatible endpoint — **Ollama, LiteLLM, LM Studio, vLLM, OpenRouter, Groq, Together** or your own URL. Each connection shows whether it's connected, not set up, or failing (and why).
+- Pick the model and **thinking level** where the model supports it; streams, so even “Maximum” thinking doesn't time out.
 
 </td><td valign="top">
 
@@ -67,6 +69,7 @@ goes to the language model you pick — and you can pick a fully local one too.
 - “What did Anna promise last week?” — answers **with clickable sources** that open the meeting at that line and play the audio.
 - **Hybrid search**: BM25 keywords + multilingual e5 embeddings, fused with RRF, all local (~25 ms).
 - Says so when nobody said it — no confident inventions.
+- Works with local models too; a model without tool calling gets the search results up front.
 
 </td></tr>
 <tr><td valign="top">
@@ -94,6 +97,8 @@ goes to the language model you pick — and you can pick a fully local one too.
 | ![Transcript](docs/screenshots/transcript-night.png) **Transcript** — click a time to play, click a chip to rename | ![Audio](docs/screenshots/audio.png) **Audio** — waveform per track, click to jump |
 | ![New recording](docs/screenshots/new-recording.png) **New recording** | ![Settings](docs/screenshots/settings-recording.png) **Settings** — tidy categories |
 | ![Arabic summary](docs/screenshots/arabic-summary.png) **Arabic / RTL** done right | ![Delete](docs/screenshots/delete.png) **Forget a meeting** — all of it |
+| ![AI & transcription settings](docs/screenshots/settings-ai.png) **Connections & modes** — local, hybrid or cloud, at a glance | ![Transcribe again](docs/screenshots/retranscribe.png) **Transcribe again** — you pick the engine, nothing switches by itself |
+| ![Provider error](docs/screenshots/engine-error.png) **Clear errors** — which provider failed and why; the recording keeps going | |
 
 **Twenty themes**, each with its own palette, corners, fonts and speaker colours:
 
@@ -121,9 +126,11 @@ cargo build --release --features vulkan
 ./scripts/install-desktop.sh
 ./scripts/install-gnome-shortcut.sh
 
-# 5. For summaries and Ask: an API key (stored in the GNOME keyring)
+# 5. For summaries and Ask: an API key (stored in the GNOME keyring) …
 mostalgia set-api-key                       # Anthropic (Claude)
-mostalgia set-api-key --provider deepseek   # optional
+mostalgia set-api-key --provider openai     # or deepseek, groq, …
+# … or keep it all local with Ollama
+mostalgia connections add ollama
 ```
 
 Then launch **Mostalgia** from the app grid, or `mostalgia-app`. The tray icon
@@ -132,18 +139,20 @@ needs GNOME's AppIndicator extension:
 
 ## Privacy — what goes where
 
-| | Stays on your laptop | Leaves it |
-|---|---|---|
-| Microphone & desktop audio | ✅ always (WAV files in `~/.local/share/mostalgia`) | never |
-| Transcription (Whisper), speech detection, speaker separation | ✅ runs on your GPU/CPU | never |
-| Search index for *Ask* (BM25 + embeddings) | ✅ | never |
-| Summaries | — | **transcript text** goes to the provider you chose (e.g. Claude) |
-| *Ask* answers | — | only the **few passages** the model looks up, plus your question |
-| API keys | ✅ GNOME keyring | sent only to their own provider |
+Mostalgia always shows where your data goes: every connection carries a
+*local* or *cloud* badge, and the processing mode is spelled out in settings.
 
-Prefer nothing at all to leave the machine? Point summaries and Ask at a local
-model (support for any OpenAI-compatible endpoint such as Ollama or LiteLLM is
-next on the roadmap).
+| Mode | Transcription | Summaries & *Ask* | Leaves your laptop |
+|---|---|---|---|
+| **Local** | Whisper on your GPU | a local model (Ollama, LM Studio, vLLM …) | nothing |
+| **Hybrid** *(default)* | Whisper on your GPU | Claude, OpenAI, DeepSeek … | meeting **text** for summaries; only the **few passages** *Ask* looks up |
+| **Cloud** | OpenAI, Groq or your Whisper server | any | **audio** to the transcription provider, text as above |
+
+| | Where it lives |
+|---|---|
+| Recordings (WAV) | always on your disk, `~/.local/share/mostalgia` — whatever the mode |
+| Search index for *Ask* (BM25 + embeddings) | always local |
+| API keys | GNOME keyring, sent only to their own provider |
 
 ## How it works
 
@@ -159,7 +168,7 @@ flowchart LR
   W -->|"provisional + final lines"| UI["Desktop app (GPUI)"]
   CM & CS -->|"after stop"| FP["Final pass<br/>VAD regions → Whisper<br/>+ optional diarization"]
   FP --> DB[("SQLite<br/>FTS5 · passages · vectors")]
-  DB --> SUM["Summary<br/>(Claude / DeepSeek)"]
+  DB --> SUM["Summary<br/>(Claude · OpenAI · Ollama · …)"]
   DB --> ASK["Ask<br/>BM25 + e5 → RRF → LLM with tools"]
   SUM & ASK --> UI
 ```
@@ -187,13 +196,16 @@ A few numbers from an RTX PRO 3000 laptop:
 
 ```text
 mostalgia start [--source mic|system|both] [--speakers] [--diarize] [--denoise] [--language de|en|auto]
+                [--engine local|<connection>/<model>] [--final-engine …]
 mostalgia list | show <id> | search <words> | ask "<question>"
-mostalgia summarize <id> [--provider claude|deepseek] [--summary-model …] [--effort low…max]
+mostalgia summarize <id> [--provider <connection>] [--summary-model …] [--effort low…max]
 mostalgia export <id> --format md|txt|srt|docx [-o file]
 mostalgia delete <id> [--keep-audio]
 mostalgia import <session-folder> | transcribe <file.wav> | reindex [--all]
+mostalgia retranscribe <id> --engine local|openai/gpt-4o-transcribe|groq/whisper-large-v3-turbo
+mostalgia connections [list | add <preset> [--url …] | test <id> | remove <id>]
 mostalgia toggle | open           # control the running app (shortcut-friendly)
-mostalgia devices | models | set-api-key [--provider …]
+mostalgia devices | models [--provider <connection>] | set-api-key [--provider <connection>]
 ```
 
 The CLI speaks German or English, following the app's language setting.
@@ -220,10 +232,6 @@ from the library, the search index and — if you tick the box — the disk.
 
 ## Roadmap
 
-- Any OpenAI-compatible endpoint (OpenAI, Ollama, LiteLLM, LM Studio, OpenRouter …)
-  with a connection overview in settings
-- Processing modes: **Local** (everything on the laptop), **Hybrid** (today),
-  **Cloud** (cloud speech-to-text for machines without a GPU)
 - Meeting templates (stand-up, 1:1, customer call, interview)
 - Action-item tracker across meetings, weekly digest
 - Voice profiles that remember your colleagues
@@ -237,6 +245,6 @@ from the library, the search index and — if you tick the box — the disk.
 - [nnnoiseless](https://github.com/jneem/nnnoiseless) (RNNoise)
 - [GPUI](https://github.com/zed-industries/zed) and gpui-component / gpui-kit for the UI; [Lucide](https://lucide.dev) icons
 - Fonts (SIL OFL): Inter, JetBrains Mono, IBM Plex Sans, Atkinson Hyperlegible, Noto Sans Arabic, Pixelify Sans, VT323
-- Summaries by [Claude](https://www.anthropic.com/claude) or DeepSeek — your choice
+- Summaries by [Claude](https://www.anthropic.com/claude), OpenAI, DeepSeek or a local model via Ollama, LiteLLM & co. — your choice
 
 Brand, icon and palette: see [`assets/brand/BRANDING.md`](assets/brand/BRANDING.md).

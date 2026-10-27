@@ -310,7 +310,8 @@ impl MostalgiaApp {
                 return;
             }
         }
-        let view = cx.new(|cx| MeetingView::new(id, cx));
+        let engine = self.engine.clone();
+        let view = cx.new(|cx| MeetingView::new(id, cx).with_engine(engine));
         let sub = cx.subscribe_in(&view, window, |this, _, event: &MeetingEvent, _, cx| match event {
             MeetingEvent::Changed => this.reload(cx),
             MeetingEvent::Deleted => {

@@ -118,9 +118,9 @@ impl Recorder {
         let mic_live = load(cfg.mic)?;
         let sys_live = load(cfg.system)?;
         if !cfg.vad_model.exists() {
-            let _ = events.send(Event::Warning(format!(
-                "VAD model {} not found — using the energy gate",
-                cfg.vad_model.display()
+            let _ = events.send(Event::Warning(crate::i18n::trf(
+                "Sprachfilter-Modell {} fehlt — erkenne Sprache nur an der Lautstärke (scripts/download-model.sh)",
+                &[&cfg.vad_model.display()],
             )));
         }
 
@@ -157,7 +157,7 @@ impl Recorder {
             match crate::diarize::LiveSpeakers::new() {
                 Ok(s) => Some(s),
                 Err(e) => {
-                    let _ = events.send(Event::Warning(format!("speaker detection off: {e:#}")));
+                    let _ = events.send(Event::Warning(crate::i18n::trf("Sprechertrennung aus: {}", &[&format!("{e:#}")])));
                     None
                 }
             }

@@ -13,8 +13,6 @@ use crate::i18n::{tr, trf};
 pub const ANTHROPIC_VERSION: &str = "2026-10-21";
 /// Effort levels from least to most thinking.
 pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
-/// Claude models that accept the server-side refusal fallback.
-pub const CLAUDE_FALLBACK_MODELS: [&str; 4] = ["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"];
 
 /// A model a connection offers.
 #[derive(Clone, Debug, PartialEq)]
@@ -182,22 +180,28 @@ pub struct Completion {
 }
 
 /// One system + user turn, streamed so long thinking can't time out.
-/// `effort` is applied only where the model supports it; a server that
-/// rejects the parameter gets the request again without it.
+/// `effort` is sent only where the model is known to support it; if the
+/// server still rejects it, that is an error (never a silent retry without).
 pub fn complete(conn: &Connection, model: &str, effort: Option<&str>, system: &str, user: &str) -> Result<Completion> {
     let key = conn.require_key()?;
     let key = key.as_deref();
-    let once = |effort: Option<&str>| match conn.api {
-        Api::Anthropic => claude(conn, key.unwrap_or_default(), model, effort, system, user),
-        Api::OpenAi => openai(conn, key, model, effort, system, user),
-    };
     let effort = match conn.api {
         Api::Anthropic => effort,
         Api::OpenAi => effort.filter(|_| !openai_efforts(conn, model).is_empty()),
     };
-    match once(effort) {
-        Err(e) if effort.is_some() && format!("{e:#}").contains("effort") => once(None),
-        other => other,
+    let result = match conn.api {
+        Api::Anthropic => claude(conn, key.unwrap_or_default(), model, effort, system, user),
+        Api::OpenAi => openai(conn, key, model, effort, system, user),
+    };
+    result.map_err(|e| effort_hint(e, effort.is_some()))
+}
+
+/// Adds a pointer to the setting when a server rejects the thinking level.
+pub(crate) fn effort_hint(e: anyhow::Error, effort_sent: bool) -> anyhow::Error {
+    if effort_sent && format!("{e:#}").contains("effort") {
+        e.context(tr("Das Modell unterstützt die gewählte Denktiefe nicht — in den Einstellungen ändern"))
+    } else {
+        e
     }
 }
 
@@ -213,16 +217,10 @@ fn claude(conn: &Connection, key: &str, model: &str, effort: Option<&str>, syste
     if let Some(effort) = effort {
         body["output_config"] = json!({ "effort": effort });
     }
-    let mut request = http(1800)?
+    let request = http(1800)?
         .post(format!("{}/messages", conn.base()))
         .header("x-api-key", key)
         .header("anthropic-version", ANTHROPIC_VERSION);
-    if CLAUDE_FALLBACK_MODELS.contains(&model) {
-        // If a safety classifier declines, retry server-side on the
-        // recommended fallback model instead of failing.
-        body["fallbacks"] = json!("default");
-        request = request.header("anthropic-beta", "server-side-fallback-2026-07-01");
-    }
     let resp = request.json(&body).send().map_err(|e| unreachable(conn, e))?;
     if !resp.status().is_success() {
         let status = resp.status();

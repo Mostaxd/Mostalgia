@@ -223,7 +223,7 @@ fn pick_gpu_device() -> (i32, Option<String>) {
 
 /// whisper.cpp and ggml log every model load and VAD call at info level.
 /// Keep warnings and errors; set MOSTALGIA_DEBUG=1 to see everything.
-fn quiet_native_logs() {
+pub(crate) fn quiet_native_logs() {
     use std::ffi::{CStr, c_char, c_void};
     use std::sync::Once;
     use std::sync::atomic::{AtomicU32, Ordering};
