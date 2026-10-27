@@ -59,10 +59,11 @@ Use the tools to find the answer in the transcripts and summaries: search_meetin
 \"last week\" set from_date/to_date), list_meetings for time ranges, read_transcript for more \
 context around a hit. Don't write text before tool calls.\n\n\
 Answer only from the tool results, briefly and concretely, in the language of the question. \
-Back every statement right after it with a marker [[m:<meeting_id>@<seconds>]] (seconds = \
-start_secs of the matching passage; 0 for summaries). If the transcripts don't contain the \
-answer, say so plainly and don't guess. Speakers are \"Me\" (the user), \"Others\", \
-\"Speaker N\" or have names.",
+Cite sources sparingly with the marker [[m:<meeting_id>@<seconds>]] (seconds = start_secs of the \
+passage; 0 for summaries): at most one marker per sentence or bullet, placed at its end before the \
+final punctuation. Use no other citation or time format (no [00:01:23], no lists of times). \
+If the transcripts don't contain the answer, say so plainly and don't guess. Speakers are \
+\"Me\" (the user), \"Others\", \"Speaker N\" or have names.",
         today = Local::now().format("%A, %d.%m.%Y")
     )
 }
@@ -428,7 +429,7 @@ fn retrieve_then_answer(question: &str, history: &[(String, String)], req: &Summ
     }
     user.push_str(&format!(
         "Search results from the meetings (JSON):\n{hits}\n\nQuestion: {question}\n\n\
-Answer only from these results and back every statement with [[m:<meeting_id>@<start_secs>]]."
+Answer only from these results; cite with at most one [[m:<meeting_id>@<start_secs>]] per sentence, at its end."
     ));
     let system = system_prompt().replace("Use the tools to find", "The search results are in the message; use them to find");
     let done = crate::llm::complete(&req.connection, &req.model, req.effort.as_deref(), &system, &user)?;

@@ -15,15 +15,44 @@ use mostalgia_core::config::Config;
 use mostalgia_core::connections;
 use mostalgia_core::i18n::tr;
 
+use mostalgia_core::ask::cite::Target;
+
 use super::{ChatRx, Companion, MoriError, MoriEvent, Point2, Scope, Setup, Turn};
 use crate::ui;
 
-const BUBBLE_W: f32 = 380.;
-const BUBBLE_MAX_H: f32 = 500.;
+const BUBBLE_W: f32 = 400.;
+const BUBBLE_MAX_H: f32 = 520.;
+/// How long "Chat cleared · Undo" stays.
+const UNDO_FOR: Duration = Duration::from_secs(6);
+
+/// Scroll the live transcript to this moment (a time cited in a "This
+/// meeting" answer). The app subscribes and forwards it to the recording view.
+#[derive(Clone, Copy, Debug)]
+pub struct ShowLiveMoment {
+    pub secs: f64,
+}
+
+impl EventEmitter<ShowLiveMoment> for Companion {}
+
+/// The bubble's own state.
+#[derive(Default)]
+pub(crate) struct BubbleState {
+    /// The conversation just cleared with "New chat", restorable for a moment.
+    undo: Option<Undo>,
+    /// Show the "New chat" button (`Config::companion_clear_button`).
+    clear_button: bool,
+}
+
+struct Undo {
+    turns: Vec<Turn>,
+    scope_choice: Option<Scope>,
+    since: Instant,
+}
 
 impl Companion {
     pub(super) fn load_setup(&mut self) {
         let config = Config::load();
+        self.bubble.clear_button = config.companion_clear_button;
         self.setup = Some(match config.ask_request() {
             Ok(req) => Setup {
                 name: req.connection.name.clone(),
@@ -42,6 +71,82 @@ impl Companion {
             self.chat_scroll.scroll_to_bottom();
         }
         cx.notify();
+    }
+
+    /// Starts a fresh conversation (no earlier questions or answers, an
+    /// answer still coming is dropped). Call when a recording starts.
+    pub fn reset(&mut self, cx: &mut Context<Self>) {
+        self.turns.clear();
+        self.chat_rx = None;
+        self.scope_choice = None;
+        self.bubble.undo = None;
+        self.chat_scroll.scroll_to_bottom();
+        cx.notify();
+    }
+
+    /// Takes the finished "This meeting" questions and answers of the
+    /// recording (question, answer with `[[t:…]]` citations) out of the
+    /// bubble, to save with the meeting (`Store::add_companion_chat`).
+    pub fn take_session_chat(&mut self) -> Vec<(String, String)> {
+        let (session, rest): (Vec<Turn>, Vec<Turn>) = std::mem::take(&mut self.turns).into_iter().partition(|t| t.scope == Scope::Meeting);
+        self.turns = rest;
+        if self.bubble.undo.as_ref().is_some_and(|u| u.turns.iter().any(|t| t.scope == Scope::Meeting)) {
+            self.bubble.undo = None;
+        }
+        session
+            .into_iter()
+            .filter(|t| t.done && t.error.is_none() && !t.answer.trim().is_empty())
+            .map(|t| (t.question, t.answer))
+            .collect()
+    }
+
+    /// [`Self::take_session_chat`] and saves it with `meeting_id`; a failure
+    /// shows next to Mori.
+    pub fn save_session_chat(&mut self, meeting_id: i64, cx: &mut Context<Self>) {
+        let chat = self.take_session_chat();
+        if !chat.is_empty() {
+            let result = mostalgia_core::store::Store::open(&mostalgia_core::paths::database()).and_then(|mut s| s.add_companion_chat(meeting_id, &chat));
+            if let Err(e) = result {
+                self.error = Some(MoriError {
+                    message: mostalgia_core::i18n::trf("Der Chat mit Mori konnte nicht gespeichert werden: {}", &[&format!("{e:#}")]),
+                    points: false,
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    /// "New chat": clears the conversation, undoable for a few seconds.
+    fn new_chat(&mut self, cx: &mut Context<Self>) {
+        if self.turns.is_empty() {
+            return;
+        }
+        self.chat_rx = None;
+        let since = Instant::now();
+        self.bubble.undo = Some(Undo { turns: std::mem::take(&mut self.turns), scope_choice: self.scope_choice, since });
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(UNDO_FOR).await;
+            this.update(cx, |this, cx| {
+                if this.bubble.undo.as_ref().is_some_and(|u| u.since == since) {
+                    this.bubble.undo = None;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn undo_new_chat(&mut self, cx: &mut Context<Self>) {
+        if let Some(undo) = self.bubble.undo.take() {
+            // Anything asked in the meantime stays after the restored chat.
+            let newer = std::mem::replace(&mut self.turns, undo.turns);
+            self.turns.extend(newer);
+            self.scope_choice = undo.scope_choice;
+            self.chat_scroll.scroll_to_bottom();
+            cx.notify();
+        }
     }
 
     /// The conversation a question goes to: the user's pick, else this
@@ -97,6 +202,7 @@ impl Companion {
             }
         }
         self.idle_since = Instant::now();
+        self.bubble.undo = None;
         self.chat_scroll.scroll_to_bottom();
         cx.notify();
     }
@@ -182,38 +288,22 @@ impl Companion {
         });
         self.open = true;
         self.load_setup();
+        self.chat_scroll.scroll_to_bottom();
         cx.notify();
     }
 
     fn render_answer(&self, ti: usize, turn: &Turn, cx: &mut Context<Self>) -> Div {
-        let mut out = v_flex().gap_1p5().w_full().text_sm();
-        for (li, line) in turn.answer.lines().enumerate() {
-            if line.trim().is_empty() {
-                continue;
-            }
-            out = out.child(match turn.scope {
-                Scope::Library => {
-                    let weak = cx.entity().downgrade();
-                    crate::ask_view::answer_line(line, &format!("mori-{ti}-{li}"), cx, move |meeting_id, secs, _, cx| {
-                        weak.update(cx, |_, cx| cx.emit(MoriEvent::OpenCitation { meeting_id, secs })).ok();
-                    })
-                }
-                Scope::Meeting => {
-                    let text = line.trim().replace("**", "");
-                    match text.strip_prefix("- ").or_else(|| text.strip_prefix("* ")) {
-                        Some(item) => h_flex()
-                            .w_full()
-                            .items_start()
-                            .gap_2()
-                            .child(div().flex_none().mt(px(8.)).size(px(4.)).rounded_full().bg(cx.theme().muted_foreground))
-                            .child(ui::bidi_text(item.to_string(), true).flex_1().min_w_0())
-                            .into_any_element(),
-                        None => ui::bidi_text(text, true).w_full().into_any_element(),
-                    }
-                }
-            });
-        }
-        out
+        let weak = cx.entity().downgrade();
+        let live = turn.scope == Scope::Meeting;
+        crate::ask_view::cited_answer(&turn.answer, &format!("mori-{ti}"), cx, move |target, _, cx| {
+            weak.update(cx, |_, cx| match target {
+                Target::Meeting { meeting_id, secs } => cx.emit(MoriEvent::OpenCitation { meeting_id, secs }),
+                Target::Time { secs, .. } if live => cx.emit(ShowLiveMoment { secs }),
+                Target::Time { .. } => {}
+            })
+            .ok();
+        })
+        .text_sm()
     }
 
     pub(super) fn render_bubble(&mut self, o: Point2, (w, h): (f32, f32), cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -249,22 +339,19 @@ impl Companion {
             .border_b_1()
             .border_color(theme.border)
             .child(div().font_semibold().child("Mori"))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .when(!setup.name.is_empty(), |el| el.child(format!("· {} · {}", setup.name, setup.model))),
-            )
             .when(!setup.name.is_empty(), |el| {
                 let (color, label) = match setup.local {
                     Some(l) => (theme.success, l.split(" · ").next().unwrap_or(l).to_string()),
                     None => (theme.warning, tr("Cloud").to_string()),
                 };
+                let which = format!("{} · {}", setup.name, setup.model);
+                let tip: SharedString = match setup.local {
+                    Some(l) => format!("{which}\n{l}").into(),
+                    None => format!("{which}\n{}", mostalgia_core::i18n::trf("Fragen und Transkripttext gehen an {}", &[&setup.name])).into(),
+                };
                 el.child(
                     div()
+                        .id("mori-privacy")
                         .flex_none()
                         .px_2()
                         .rounded_full()
@@ -273,14 +360,19 @@ impl Companion {
                         .text_xs()
                         .font_medium()
                         .child(label)
-                        .id("mori-privacy")
-                        .tooltip({
-                            let tip: SharedString = match setup.local {
-                                Some(l) => l.into(),
-                                None => mostalgia_core::i18n::trf("Fragen und Transkripttext gehen an {}", &[&setup.name]).into(),
-                            };
-                            move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
-                        }),
+                        .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)),
+                )
+            })
+            .child(div().flex_1())
+            .when(self.bubble.clear_button && !self.turns.is_empty(), |el| {
+                el.child(
+                    Button::new("mori-new-chat")
+                        .xsmall()
+                        .ghost()
+                        .icon(IconName::Eraser)
+                        .label(tr("Neuer Chat"))
+                        .tooltip(tr("Leert diese Unterhaltung (rückgängig machbar)"))
+                        .on_click(cx.listener(|this, _, _, cx| this.new_chat(cx))),
                 )
             })
             .child(Button::new("mori-close").xsmall().ghost().icon(IconName::X).on_click(cx.listener(|this, _, _, cx| {
@@ -291,7 +383,7 @@ impl Companion {
         let scope_toggle = h_flex()
             .gap_1()
             .px_3()
-            .pt_2()
+            .py_2()
             .child(
                 Button::new("mori-scope-meeting")
                     .xsmall()
@@ -342,6 +434,28 @@ impl Companion {
                     .into_any_element(),
             );
         } else if self.turns.is_empty() {
+            if self.bubble.undo.as_ref().is_some_and(|u| u.since.elapsed() < UNDO_FOR) {
+                body.push(
+                    h_flex()
+                        .gap_2()
+                        .px_2p5()
+                        .py_1p5()
+                        .rounded(theme.radius)
+                        .bg(theme.muted)
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(div().flex_1().child(tr("Chat geleert")))
+                        .child(
+                            Button::new("mori-undo-clear")
+                                .xsmall()
+                                .ghost()
+                                .icon(IconName::Undo2)
+                                .label(tr("Rückgängig"))
+                                .on_click(cx.listener(|this, _, _, cx| this.undo_new_chat(cx))),
+                        )
+                        .into_any_element(),
+                );
+            }
             body.push(
                 div()
                     .text_sm()

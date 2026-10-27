@@ -4828,9 +4828,11 @@ dependencies = [
  "image",
  "ksni",
  "mostalgia-core",
+ "raw-window-handle",
  "schemars",
  "serde",
  "serde_json",
+ "x11rb",
  "zbus",
 ]
 

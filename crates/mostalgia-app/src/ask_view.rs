@@ -10,7 +10,10 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, StyledExt, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use mostalgia_core::ask::{self, AskEvent, Piece};
+use mostalgia_core::ask::cite::{self, Mark, Target};
+use mostalgia_core::ask::{self, AskEvent};
+use mostalgia_core::paths;
+use mostalgia_core::store::Store;
 use mostalgia_core::config::Config;
 use mostalgia_core::i18n::{self, tr, trf};
 
@@ -174,90 +177,247 @@ impl AskView {
         }
     }
 
-    fn render_line(&self, line: &str, key: (usize, usize), cx: &mut Context<Self>) -> AnyElement {
+    fn render_answer(&self, answer: &str, ti: usize, cx: &mut Context<Self>) -> Div {
         let weak = cx.entity().downgrade();
-        answer_line(line, &format!("{}-{}", key.0, key.1), cx, move |meeting_id, secs, _, cx| {
-            weak.update(cx, |_, cx| cx.emit(AskViewEvent::OpenCitation { meeting_id, secs })).ok();
+        cited_answer(answer, &format!("ask-{ti}"), cx, move |target, _, cx| {
+            if let Target::Meeting { meeting_id, secs } = target {
+                weak.update(cx, |_, cx| cx.emit(AskViewEvent::OpenCitation { meeting_id, secs })).ok();
+            }
         })
     }
 }
 
-/// One answer line: words and citation chips in a wrapping flow
-/// (right-to-left for Arabic). `key` makes the chip ids unique; clicking a
-/// chip calls `on_cite` with the meeting and second.
-pub fn answer_line(line: &str, key: &str, cx: &App, on_cite: impl Fn(i64, f64, &mut Window, &mut App) + Clone + 'static) -> AnyElement {
-    let theme = cx.theme().clone();
-    let mut line = line.trim_end().replace("**", "");
-    let mut bullet = false;
-    if let Some(rest) = line.trim_start().strip_prefix("- ").or_else(|| line.trim_start().strip_prefix("* ")) {
-        line = rest.to_string();
-        bullet = true;
+/// Title and short date of a meeting cited in an answer, cached for a
+/// while so rendering doesn't hit the database every frame.
+fn meeting_label(id: i64) -> (String, String) {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::time::Instant;
+    static CACHE: Mutex<Option<HashMap<i64, (String, String, Instant)>>> = Mutex::new(None);
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let cache = cache.get_or_insert_with(HashMap::new);
+    if let Some((t, d, at)) = cache.get(&id) {
+        if at.elapsed() < Duration::from_secs(30) {
+            return (t.clone(), d.clone());
+        }
     }
-    let heading = line.starts_with('#');
-    let line = line.trim_start_matches('#').trim().to_string();
-    let rtl = ui::is_rtl(&line);
-    let mut items: Vec<AnyElement> = Vec::new();
-    for (i, piece) in ask::parse_answer(&line).into_iter().enumerate() {
-        match piece {
-            Piece::Text(t) => {
-                for w in t.split_whitespace() {
-                    items.push(div().flex_none().child(w.to_string()).into_any_element());
+    let found = Store::open(&paths::database()).ok().and_then(|s| s.title(id).ok().flatten());
+    let (title, date) = match found {
+        Some((t, start)) => (t, i18n::short_date(&start)),
+        None => (trf("Besprechung #{}", &[&id]), String::new()),
+    };
+    cache.insert(id, (title.clone(), date.clone(), Instant::now()));
+    (title, date)
+}
+
+fn shorten(text: &str, max: usize) -> String {
+    if text.chars().count() > max {
+        format!("{}…", text.chars().take(max - 1).collect::<String>().trim_end())
+    } else {
+        text.to_string()
+    }
+}
+
+/// Hover text for a citation: "0:42" or "Budget review · Oct 27 · 0:42".
+fn cite_tooltip(target: &Target) -> String {
+    match *target {
+        Target::Meeting { meeting_id, .. } => {
+            let (title, date) = meeting_label(meeting_id);
+            [title, date, target.time_label()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ")
+        }
+        Target::Time { .. } => target.time_label(),
+    }
+}
+
+fn tooltip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    let text: SharedString = text.into();
+    move |window, cx| gpui_kit::component::tooltip::Tooltip::new(text.clone()).build(window, cx)
+}
+
+/// One word or citation of a line; words and the markers right after them
+/// stay together when the line wraps.
+enum Token {
+    Word(String),
+    Cite(usize, Target),
+}
+
+/// An answer as readable prose: each citation becomes a small number after
+/// the word it belongs to, and a compact "Sources" row follows — time chips
+/// for the current meeting, grouped by meeting for library answers.
+/// Clicking a number or chip calls `on_cite`. `key` makes element ids unique.
+pub fn cited_answer(answer: &str, key: &str, cx: &App, on_cite: impl Fn(Target, &mut Window, &mut App) + Clone + 'static) -> Div {
+    let theme = cx.theme().clone();
+    let cited = cite::parse(&answer.replace("**", ""));
+    let mut out = v_flex().w_full().gap_1p5().line_height(relative(1.55));
+    for (li, line) in cited.lines().into_iter().enumerate() {
+        // Line kind from its leading text: bullet, heading or plain.
+        let mut line = line;
+        let mut bullet = false;
+        let mut heading = false;
+        if let Some(Mark::Text(first)) = line.first_mut() {
+            let trimmed = first.trim_start();
+            if let Some(rest) = trimmed.strip_prefix("- ").or_else(|| trimmed.strip_prefix("* ")).or_else(|| trimmed.strip_prefix("• ")) {
+                *first = rest.to_string();
+                bullet = true;
+            } else if trimmed.starts_with('#') {
+                *first = trimmed.trim_start_matches('#').trim_start().to_string();
+                heading = true;
+            }
+        }
+        if line.iter().all(|m| matches!(m, Mark::Text(t) if t.trim().is_empty())) {
+            continue;
+        }
+        let rtl = line.iter().any(|m| matches!(m, Mark::Text(t) if ui::is_rtl(t)));
+        // Words grouped with the markers glued to them.
+        let mut groups: Vec<Vec<Token>> = Vec::new();
+        let mut glue = false;
+        for mark in line {
+            match mark {
+                Mark::Text(t) => {
+                    let mut first = true;
+                    for w in t.split_whitespace() {
+                        let attach = first && glue && !t.starts_with(char::is_whitespace);
+                        match groups.last_mut() {
+                            Some(g) if attach => g.push(Token::Word(w.to_string())),
+                            _ => groups.push(vec![Token::Word(w.to_string())]),
+                        }
+                        first = false;
+                    }
+                    glue = !t.ends_with(char::is_whitespace);
+                }
+                Mark::Cite { index, target } => {
+                    match groups.last_mut() {
+                        Some(g) => g.push(Token::Cite(index, target)),
+                        None => groups.push(vec![Token::Cite(index, target)]),
+                    }
+                    glue = true;
                 }
             }
-            Piece::Cite(c) => {
-                let (id, secs) = (c.meeting_id, c.secs);
-                // "Titel · dd.mm. · hh:mm:ss" with the title shortened.
-                let parts: Vec<&str> = c.label.split(" · ").collect();
-                let title = parts.first().copied().unwrap_or_default();
-                let short = if title.chars().count() > 22 {
-                    format!("{}…", title.chars().take(21).collect::<String>().trim_end())
-                } else {
-                    title.to_string()
-                };
-                let chip = std::iter::once(short).chain(parts.iter().skip(1).map(|p| p.to_string())).collect::<Vec<_>>().join(" · ");
-                let on_cite = on_cite.clone();
-                items.push(
-                    h_flex()
-                        .id(SharedString::from(format!("cite-{key}-{i}")))
+        }
+        let items = groups.into_iter().enumerate().map(|(gi, group)| {
+            let parts = group.into_iter().enumerate().map(|(ci, tok)| match tok {
+                Token::Word(w) => div().flex_none().child(w).into_any_element(),
+                Token::Cite(n, target) => {
+                    let on_cite = on_cite.clone();
+                    div()
+                        .id(SharedString::from(format!("cite-{key}-{li}-{gi}-{ci}")))
                         .flex_none()
-                        .gap_1()
-                        .px_1p5()
-                        .rounded(theme.radius)
-                        .bg(theme.primary.opacity(0.12))
-                        .text_color(theme.primary)
-                        .text_xs()
+                        .ml(px(2.))
+                        .mt(px(1.))
+                        .min_w(px(15.))
+                        .h(px(15.))
+                        .px(px(4.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_full()
+                        .bg(theme.muted_foreground.opacity(0.14))
+                        .text_color(theme.muted_foreground)
+                        .text_size(px(10.))
+                        .line_height(px(15.))
+                        .font_medium()
                         .cursor_pointer()
-                        .hover(|s| s.bg(theme.primary.opacity(0.22)))
-                        .child(Icon::new(IconName::Play).xsmall())
-                        .child(chip)
-                        .tooltip({
-                            let full: SharedString = c.label.clone().into();
-                            move |window, cx| gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(window, cx)
-                        })
-                        .on_click(move |_, window, cx| on_cite(id, secs, window, cx))
-                        .into_any_element(),
-                );
+                        .hover(|s| s.bg(theme.primary.opacity(0.18)).text_color(theme.primary))
+                        .child(n.to_string())
+                        .tooltip(tooltip(cite_tooltip(&target)))
+                        .on_click(move |_, window, cx| on_cite(target, window, cx))
+                        .into_any_element()
+                }
+            });
+            h_flex().flex_none().items_start().when(rtl, |el| el.flex_row_reverse()).children(parts)
+        });
+        out = out.child(
+            h_flex()
+                .w_full()
+                .items_start()
+                .gap_2()
+                .when(rtl, |el| el.flex_row_reverse())
+                .when(bullet, |el| el.child(div().flex_none().mt(px(9.)).size(px(4.)).rounded_full().bg(theme.muted_foreground)))
+                .child(
+                    h_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .flex_wrap()
+                        .items_start()
+                        .gap_x(px(4.))
+                        .when(rtl, |el| el.flex_row_reverse())
+                        .when(heading, |el| el.font_semibold())
+                        .children(items),
+                ),
+        );
+    }
+    if cited.sources.is_empty() {
+        return out;
+    }
+
+    // Sources: "0:42  1:13" or "Budget review  0:42  1:13 · Kickoff  4:05".
+    let chip = |n: usize, target: Target| {
+        let on_cite = on_cite.clone();
+        h_flex()
+            .id(SharedString::from(format!("source-{key}-{n}")))
+            .flex_none()
+            .gap(px(4.))
+            .h(px(20.))
+            .px(px(7.))
+            .rounded_full()
+            .bg(theme.muted_foreground.opacity(0.1))
+            .text_color(theme.muted_foreground)
+            .line_height(px(20.))
+            .cursor_pointer()
+            .hover(|s| s.bg(theme.primary.opacity(0.15)).text_color(theme.primary))
+            .child(div().text_size(px(10.)).opacity(0.7).child(n.to_string()))
+            .child(target.time_label())
+            .tooltip(tooltip(match target {
+                Target::Meeting { .. } => trf("{} – öffnen und ab hier abspielen", &[&cite_tooltip(&target)]),
+                Target::Time { .. } => trf("{} – zu dieser Stelle springen", &[&target.time_label()]),
+            }))
+            .on_click(move |_, window, cx| on_cite(target, window, cx))
+            .into_any_element()
+    };
+    let mut row: Vec<AnyElement> = vec![div().flex_none().mr(px(2.)).child(tr("Quellen")).into_any_element()];
+    let mut meetings: Vec<i64> = Vec::new();
+    for t in &cited.sources {
+        if let Target::Meeting { meeting_id, .. } = t {
+            if !meetings.contains(meeting_id) {
+                meetings.push(*meeting_id);
             }
         }
     }
-    h_flex()
-        .w_full()
-        .items_start()
-        .gap_2()
-        .when(rtl, |el| el.flex_row_reverse())
-        .when(bullet, |el| el.child(div().flex_none().mt(px(9.)).size(px(5.)).rounded_full().bg(theme.muted_foreground)))
-        .child(
-            h_flex()
-                .flex_1()
-                .flex_wrap()
-                .items_center()
-                .gap_x(px(4.))
-                .gap_y(px(4.))
-                .when(rtl, |el| el.flex_row_reverse())
-                .when(heading, |el| el.font_semibold())
-                .children(items),
-        )
-        .into_any_element()
+    let numbered = cited.sources.iter().copied().enumerate().map(|(i, t)| (i + 1, t));
+    for (n, t) in numbered.clone().filter(|(_, t)| matches!(t, Target::Time { .. })) {
+        row.push(chip(n, t));
+    }
+    for (gi, id) in meetings.iter().enumerate() {
+        let (title, date) = meeting_label(*id);
+        let full = if date.is_empty() { title.clone() } else { format!("{title} · {date}") };
+        row.push(
+            div()
+                .id(SharedString::from(format!("source-{key}-m{id}")))
+                .flex_none()
+                .when(gi > 0 || row.len() > 1, |el| el.ml(px(6.)))
+                .max_w(px(220.))
+                .truncate()
+                .child(shorten(&title, 28))
+                .tooltip(tooltip(full))
+                .into_any_element(),
+        );
+        for (n, t) in numbered.clone().filter(|(_, t)| matches!(t, Target::Meeting { meeting_id, .. } if meeting_id == id)) {
+            row.push(chip(n, t));
+        }
+    }
+    out.child(
+        h_flex()
+            .w_full()
+            .mt_1()
+            .flex_wrap()
+            .items_center()
+            .gap_x(px(4.))
+            .gap_y(px(4.))
+            .text_xs()
+            .line_height(px(20.))
+            .text_color(theme.muted_foreground)
+            .children(row),
+    )
 }
 
 impl Render for AskView {
@@ -334,13 +494,7 @@ impl Render for AskView {
                     )
                     .into_any_element(),
             );
-            let mut answer = v_flex().gap_2().w_full();
-            for (li, line) in turn.answer.lines().enumerate() {
-                if line.trim().is_empty() {
-                    continue;
-                }
-                answer = answer.child(self.render_line(line, (ti, li), cx));
-            }
+            let answer = self.render_answer(&turn.answer, ti, cx);
             body.push(
                 v_flex()
                     .gap_2()

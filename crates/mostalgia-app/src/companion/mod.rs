@@ -5,7 +5,13 @@
 
 pub mod art;
 mod bubble;
+pub use bubble::ShowLiveMoment;
 mod points;
+pub mod desktop;
+pub mod feed;
+pub mod host;
+pub mod ipc;
+mod x11;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,6 +28,7 @@ use mostalgia_core::config::Config;
 use mostalgia_core::i18n::{self, tr};
 
 use crate::recording::{LiveState, RecordingView};
+use feed::Feed;
 use art::Pose;
 
 pub enum MoriEvent {
@@ -116,7 +123,14 @@ struct Point2 {
 }
 
 pub struct Companion {
-    recording: Entity<RecordingView>,
+    /// The recording she follows (this window's, or the app's over IPC).
+    recording: Feed,
+    /// She runs in her own desktop window (`mostalgia-app --mori`).
+    desktop_mode: bool,
+    /// That window's X11 side (`None` in the app window, or without X11).
+    desktop: Option<desktop::Placement>,
+    /// The recording seen last (a new one starts a fresh chat).
+    session_seen: Option<u64>,
     enabled: bool,
     scale: f32,
     points_interval: u32,
@@ -146,6 +160,7 @@ pub struct Companion {
     scope_choice: Option<Scope>,
     chat_scroll: ScrollHandle,
     setup: Option<Setup>,
+    bubble: bubble::BubbleState,
     lang_seen: Option<i18n::Lang>,
     // Live points
     points: Vec<LivePoint>,
@@ -163,7 +178,17 @@ pub struct Companion {
 }
 
 impl Companion {
+    /// Mori over the app window's content, following its recording screen.
     pub fn new(recording: Entity<RecordingView>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::build(Feed::Window(recording), false, None, window, cx)
+    }
+
+    /// Mori in her own desktop window.
+    pub(crate) fn new_desktop(feed: Feed, placement: Option<desktop::Placement>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::build(feed, true, placement, window, cx)
+    }
+
+    fn build(recording: Feed, desktop_mode: bool, placement: Option<desktop::Placement>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Frag Mori …")));
         let sub = cx.subscribe_in(&input, window, |this, input, event: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { .. } = event {
@@ -174,6 +199,9 @@ impl Companion {
         });
         let mut this = Self {
             recording,
+            desktop_mode,
+            desktop: placement,
+            session_seen: None,
             enabled: false,
             scale: 1.,
             points_interval: 0,
@@ -198,6 +226,7 @@ impl Companion {
             scope_choice: None,
             chat_scroll: ScrollHandle::new(),
             setup: None,
+            bubble: Default::default(),
             lang_seen: None,
             points: Vec::new(),
             next_point: 0,
@@ -216,10 +245,20 @@ impl Companion {
     /// Re-reads her settings (after the settings screen changed them).
     pub fn reload_config(&mut self, cx: &mut Context<Self>) {
         let config = Config::load();
-        self.enabled = config.companion;
+        // On the desktop she lives in her own window, not over the app's
+        // (whose process only runs while she's turned on).
+        self.enabled = self.desktop_mode || config.companion && !config.companion_desktop;
         self.scale = config.companion_scale.clamp(0.5, 2.);
         self.points_interval = config.companion_points_interval_secs;
         self.pos = config.companion_pos;
+        let size = self.size();
+        if let Some(p) = &mut self.desktop
+            && p.drag.is_none()
+        {
+            // No position yet (or reset): `settle` puts her top right.
+            p.mori = config.companion_desktop_pos.unwrap_or((i32::MIN / 2, i32::MIN / 2));
+            p.settle(size);
+        }
         self.reduce_motion = config.reduce_motion;
         if !self.enabled {
             self.open = false;
@@ -246,8 +285,17 @@ impl Companion {
         ((self.viewport.0 - w - 2. * MARGIN).max(0.), (self.viewport.1 - h - 2. * MARGIN).max(0.))
     }
 
+    /// On the desktop: whether her window is grown for the bubble or cards.
+    fn grown(&self) -> bool {
+        self.open || self.expanded || self.error.is_some() || !self.visible_points().is_empty()
+    }
+
     /// Her top-left in window coordinates.
     fn origin(&self) -> Point2 {
+        if let Some(p) = &self.desktop {
+            let (_, (x, y)) = p.layout(self.size(), self.grown());
+            return Point2 { x, y };
+        }
         let (rx, ry) = self.room();
         match self.pos {
             Some((fx, fy)) => Point2 { x: MARGIN + fx.clamp(0., 1.) * rx, y: MARGIN + fy.clamp(0., 1.) * ry },
@@ -272,6 +320,10 @@ impl Companion {
 
     fn mouse_down(&mut self, ev: &MouseDownEvent, cx: &mut Context<Self>) {
         let o = self.origin();
+        if let Some(p) = &mut self.desktop {
+            let pointer = p.x.pointer().map(|(x, y, _)| (x, y)).unwrap_or_default();
+            p.drag = Some(desktop::DesktopDrag { pointer, window: p.mori, wm_move: false, since: Instant::now() });
+        }
         self.drag = Some(Drag {
             mouse: Point2 { x: ev.position.x.into(), y: ev.position.y.into() },
             origin: o,
@@ -281,14 +333,40 @@ impl Companion {
         cx.notify();
     }
 
-    fn mouse_move(&mut self, ev: &MouseMoveEvent, cx: &mut Context<Self>) {
+    fn mouse_move(&mut self, ev: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
         let Some(drag) = &mut self.drag else { return };
         let (x, y): (f32, f32) = (ev.position.x.into(), ev.position.y.into());
         let (dx, dy) = (x - drag.mouse.x, y - drag.mouse.y);
         if !drag.moved && dx.hypot(dy) < DRAG_THRESHOLD {
             return;
         }
+        let first = !drag.moved;
         drag.moved = true;
+        if let Some(p) = &mut self.desktop {
+            let Some(d) = &mut p.drag else { return };
+            if first {
+                // The window manager moves the window (across monitors,
+                // with its snapping); `tick` notices when it's dropped.
+                d.wm_move = true;
+                d.since = Instant::now();
+                window.start_window_move();
+            } else if d.wm_move && d.since.elapsed() > Duration::from_millis(250) && ev.pressed_button == Some(MouseButton::Left) {
+                // Still getting the motion: the window manager didn't take
+                // over, so move the window ourselves.
+                d.wm_move = false;
+            }
+            if !d.wm_move {
+                let d = *d;
+                if let Ok((px_, py_, _)) = p.x.pointer() {
+                    p.mori = (d.window.0 + px_ - d.pointer.0, d.window.1 + py_ - d.pointer.1);
+                    let (size, grown) = (self.size(), self.grown());
+                    if let Some(p) = &mut self.desktop {
+                        p.apply_window(size, grown);
+                    }
+                }
+            }
+            return;
+        }
         let (ox, oy) = (drag.origin.x + dx, drag.origin.y + dy);
         self.set_origin(ox, oy);
         cx.notify();
@@ -296,6 +374,19 @@ impl Companion {
 
     fn mouse_up(&mut self, cx: &mut Context<Self>) {
         let Some(drag) = self.drag.take() else { return };
+        if self.desktop.is_some() {
+            if drag.moved {
+                self.end_desktop_drag(false);
+            } else {
+                if let Some(p) = &mut self.desktop {
+                    p.drag = None;
+                }
+                self.toggle_bubble(cx);
+            }
+            self.idle_since = Instant::now();
+            cx.notify();
+            return;
+        }
         if drag.moved {
             self.save_pos();
         } else {
@@ -303,6 +394,54 @@ impl Companion {
         }
         self.idle_since = Instant::now();
         cx.notify();
+    }
+
+    /// A drag of her desktop window ended: where is she now? Keeps her on
+    /// a monitor, turns the bubble towards its middle and remembers it.
+    fn end_desktop_drag(&mut self, wm_moved: bool) {
+        let (size, grown) = (self.size(), self.grown());
+        let Some(p) = &mut self.desktop else { return };
+        if wm_moved {
+            p.read_back(size, grown);
+        }
+        p.drag = None;
+        p.settle(size);
+        p.save();
+        self.drag = None;
+    }
+
+    /// Sizes and moves her desktop window for what's shown, keeping her in
+    /// place, and lets only her, the bubble and the cards take the mouse.
+    fn place_desktop_window(&mut self, o: Point2) {
+        let (w, h) = self.size();
+        let grown = self.grown();
+        let cards = self.expanded || self.error.is_some() || !self.visible_points().is_empty();
+        let open = self.open;
+        let Some(p) = &mut self.desktop else { return };
+        let ((vw, vh), _) = p.layout((w, h), grown);
+        self.viewport = (vw, vh);
+        // While the window manager moves the window, leave it alone.
+        if p.drag.is_some_and(|d| d.wm_move) && self.drag.as_ref().is_some_and(|d| d.moved) {
+            return;
+        }
+        let pad = desktop::PAD;
+        let mut input = vec![(o.x - pad, o.y - pad, w + 2. * pad, h + 2. * pad)];
+        if open {
+            // The bubble's side, full height.
+            input.push(if p.right { (0., 0., (o.x - 4.).max(0.), vh) } else { (o.x + w + 4., 0., vw - (o.x + w + 4.), vh) });
+        }
+        if cards {
+            let (x0, x1) = if p.right { ((o.x + w - desktop::CARD_W - 8.).max(0.), o.x + w + pad) } else { ((o.x - pad).max(0.), o.x + desktop::CARD_W + 8.) };
+            let (y0, y1) = if self.expanded {
+                (0., vh)
+            } else if p.bottom {
+                (0., o.y)
+            } else {
+                (o.y + h, vh)
+            };
+            input.push((x0, y0, x1 - x0, y1 - y0));
+        }
+        p.apply((w, h), grown, &input);
     }
 
     /// The frame image for her current pose, rendered at the pixel size
@@ -360,10 +499,16 @@ impl Companion {
 
     /// A new recording clears what's left of the last one; the bubble's
     /// default conversation follows whether one is running.
-    fn track_recording(&mut self, recording: bool) {
-        if recording == self.was_recording {
-            return;
+    /// Returns whether a new recording began (the chat starts fresh).
+    fn track_recording(&mut self, recording: bool, session: Option<u64>) -> bool {
+        let new_session = session.is_some() && session != self.session_seen;
+        if session.is_some() {
+            self.session_seen = session;
         }
+        if recording == self.was_recording && !new_session {
+            return false;
+        }
+        let mut reset = false;
         self.was_recording = recording;
         self.scope_choice = None;
         self.idle_since = Instant::now();
@@ -372,7 +517,9 @@ impl Companion {
             self.points_mark = 0.;
             self.points_from = 0.;
             self.expanded = false;
+            reset = true;
         }
+        reset
     }
 
     fn start_ticking(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -394,8 +541,21 @@ impl Companion {
             self.ticking = false;
             return None;
         }
-        let live = self.recording.read(cx).live_state();
-        self.track_recording(live.is_some());
+        let (live, session) = {
+            let feed = self.recording.read(cx);
+            (feed.live_state(), feed.session_id())
+        };
+        if self.track_recording(live.is_some(), session) {
+            self.reset(cx);
+        }
+        // The window manager dropped her window somewhere.
+        let wm_moving = self.drag.as_ref().is_some_and(|d| d.moved) && self.desktop.as_ref().and_then(|p| p.drag).is_some_and(|d| d.wm_move);
+        if wm_moving && self.desktop.as_ref().and_then(|p| p.x.pointer().ok()).is_some_and(|(_, _, down)| !down) {
+            self.end_desktop_drag(true);
+            self.idle_since = Instant::now();
+            cx.notify();
+        }
+        let moving = self.drag.as_ref().is_some_and(|d| d.moved) && self.desktop.is_some();
         let mut changed = self.poll_chat(cx);
         changed |= self.poll_points();
         if let Some(l) = live {
@@ -415,7 +575,8 @@ impl Companion {
             changed = true;
         }
         let busy = self.chat_rx.is_some() || self.points_rx.is_some();
-        let animate = !self.reduce_motion && window.is_window_active() && self.demo_pose.is_none();
+        // On the desktop she's always in view, not only in an active window.
+        let animate = !self.reduce_motion && (self.desktop_mode || window.is_window_active()) && self.demo_pose.is_none();
         if animate && art::frame_count(self.pose) > 1 {
             self.frame = (self.frame + 1) % art::frame_count(self.pose);
             changed = true;
@@ -423,7 +584,9 @@ impl Companion {
         if changed {
             cx.notify();
         }
-        Some(if animate {
+        Some(if moving {
+            Duration::from_millis(50)
+        } else if animate {
             Duration::from_secs_f32(1. / art::FPS.clamp(1, MAX_FPS) as f32)
         } else if busy {
             Duration::from_millis(100)
@@ -452,6 +615,13 @@ impl Companion {
         self.points.clear();
         self.expanded = false;
         cx.notify();
+    }
+
+    /// A recording was saved as `meeting_id`: her pinned points (and the
+    /// chat) go with it.
+    pub fn recording_saved(&mut self, meeting_id: i64, cx: &mut Context<Self>) {
+        self.save_pinned(meeting_id, cx);
+        self.save_session_chat(meeting_id, cx);
     }
 
     /// Back to normal after the screenshot demos.
@@ -510,6 +680,9 @@ impl Render for Companion {
         }
         let (w, h) = self.size();
         let o = self.origin();
+        if self.desktop.is_some() {
+            self.place_desktop_window(o);
+        }
         let image = self.frame_image((h * window.scale_factor()).round() as u32);
         let dragging = self.drag.as_ref().is_some_and(|d| d.moved);
 
@@ -524,8 +697,11 @@ impl Render for Companion {
             .when(dragging, |el| el.cursor_grabbing())
             .on_mouse_down(MouseButton::Left, cx.listener(|this, ev: &MouseDownEvent, _, cx| this.mouse_down(ev, cx)))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _, cx| this.mouse_up(cx)))
-            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| this.mouse_move(ev, cx)))
-            .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Mori · klicken zum Fragen, ziehen zum Verschieben")).build(window, cx))
+            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, window, cx| this.mouse_move(ev, window, cx)))
+            // (Her desktop window is too small for the tooltip.)
+            .when(!self.desktop_mode, |el| {
+                el.tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Mori · klicken zum Fragen, ziehen zum Verschieben")).build(window, cx))
+            })
             .child(img(image).size_full());
 
         let bubble = self.render_bubble(o, (w, h), cx);
@@ -563,7 +739,7 @@ impl Render for Companion {
                         .left_0()
                         .size_full()
                         .when(dragging, |el| el.cursor_grabbing())
-                        .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| this.mouse_move(ev, cx)))
+                        .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, window, cx| this.mouse_move(ev, window, cx)))
                         .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _, cx| this.mouse_up(cx)))
                         .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _, cx| this.mouse_up(cx))),
                 )

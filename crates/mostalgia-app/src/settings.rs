@@ -389,7 +389,9 @@ impl SettingsView {
     fn set_category(&mut self, category: Category, cx: &mut Context<Self>) {
         self.category = category;
         self.config.settings_category = category.id().into();
-        self.config.companion_pos = Config::load().companion_pos;
+        let disk = Config::load();
+        self.config.companion_pos = disk.companion_pos;
+        self.config.companion_desktop_pos = disk.companion_desktop_pos;
         if let Err(e) = self.config.save() {
             eprintln!("[mostalgia] saving settings: {e:#}");
         }
@@ -423,7 +425,9 @@ impl SettingsView {
 
     fn save(&mut self, cx: &mut Context<Self>) {
         // Dragging Mori stores her position while this screen is open.
-        self.config.companion_pos = Config::load().companion_pos;
+        let disk = Config::load();
+        self.config.companion_pos = disk.companion_pos;
+        self.config.companion_desktop_pos = disk.companion_desktop_pos;
         if let Err(e) = self.config.save() {
             eprintln!("[mostalgia] saving settings: {e:#}");
         }
@@ -833,6 +837,40 @@ impl SettingsView {
                     h_flex().flex_wrap().gap_1().children([0, 60, 90, 120, 180].map(|s| interval_button(s, cx))).into_any_element(),
                 ))
                 .child(row(
+                    tr("Wo"),
+                    Some(tr("Auf dem Desktop steht sie über allen Fenstern, z. B. über Teams, und lässt sich auf jeden Bildschirm ziehen.")),
+                    h_flex()
+                        .flex_wrap()
+                        .gap_1()
+                        .children([(false, "mori-where-window", "Im App-Fenster"), (true, "mori-where-desktop", "Auf dem Desktop (bleibt im Vordergrund)")].map(
+                            |(desktop, id, label)| {
+                                let selected = self.config.companion_desktop == desktop;
+                                Button::new(id)
+                                    .small()
+                                    .label(tr(label))
+                                    .when(selected, |b| b.primary())
+                                    .when(!selected, |b| b.ghost())
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.config.companion_desktop = desktop;
+                                        this.save(cx);
+                                    }))
+                                    .into_any_element()
+                            },
+                        ))
+                        .into_any_element(),
+                ))
+                .child(row(
+                    tr("Leeren-Knopf im Chat zeigen"),
+                    Some(tr("Ein Knopf in Moris Sprechblase, der den Chat leert (rückgängig machbar).")),
+                    Switch::new("set-mori-clear")
+                        .checked(self.config.companion_clear_button)
+                        .on_change(cx.listener(|this, v: &bool, _, cx| {
+                            this.config.companion_clear_button = *v;
+                            this.save(cx);
+                        }))
+                        .into_any_element(),
+                ))
+                .child(row(
                     tr("Position"),
                     Some(tr("Zieh Mori mit der Maus an eine andere Stelle.")),
                     Button::new("mori-reset-pos")
@@ -840,10 +878,18 @@ impl SettingsView {
                         .outline()
                         .icon(IconName::RefreshCw)
                         .label(tr("Position zurücksetzen"))
-                        .disabled(self.config.companion_pos.is_none() && Config::load().companion_pos.is_none())
+                        .disabled({
+                            let disk = Config::load();
+                            if self.config.companion_desktop { disk.companion_desktop_pos.is_none() } else { disk.companion_pos.is_none() }
+                        })
                         .on_click(cx.listener(|this, _, _, cx| {
                             let mut disk = Config::load();
-                            disk.companion_pos = None;
+                            if this.config.companion_desktop {
+                                disk.companion_desktop_pos = None;
+                                this.config.companion_desktop_pos = None;
+                            } else {
+                                disk.companion_pos = None;
+                            }
                             if let Err(e) = disk.save() {
                                 eprintln!("[mostalgia] saving settings: {e:#}");
                             }
@@ -860,9 +906,11 @@ impl SettingsView {
                     .text_xs()
                     .text_color(theme.muted_foreground)
                     .child(Icon::new(IconName::Info).xsmall().mt(px(2.)).flex_none())
-                    .child(div().flex_1().min_w_0().child(tr(
-                        "Mori lebt im Mostalgia-Fenster. Unter GNOME Wayland können Apps kein Fenster dauerhaft im Vordergrund halten oder an eine feste Stelle setzen, deshalb gibt es kein eigenes Mori-Fenster.",
-                    ))),
+                    .child(div().flex_1().min_w_0().child(if self.config.companion_desktop {
+                        tr("Auf dem Desktop läuft Mori als kleines eigenes Fenster über XWayland: Unter GNOME Wayland dürfen nur solche Fenster im Vordergrund bleiben und frei platziert werden. Klicks neben ihr gehen an das Fenster darunter.")
+                    } else {
+                        tr("Mori lebt im Mostalgia-Fenster. Damit sie über anderen Fenstern steht, wähle „Auf dem Desktop“.")
+                    })),
             )
     }
 }
@@ -1288,7 +1336,25 @@ enum Pick {
     Model(Slot, String, String),
     /// Type a model id for the slot on this connection.
     Custom(Slot, String),
+    /// "meeting", "app" or a language code.
+    SummaryLanguage(String),
 }
+
+/// Fixed choices for the summary language (code, name in that language).
+const SUMMARY_LANGUAGES: [(&str, &str); 12] = [
+    ("en", "English"),
+    ("de", "Deutsch"),
+    ("fr", "Français"),
+    ("es", "Español"),
+    ("it", "Italiano"),
+    ("nl", "Nederlands"),
+    ("pt", "Português"),
+    ("pl", "Polski"),
+    ("tr", "Türkçe"),
+    ("ar", "العربية"),
+    ("ja", "日本語"),
+    ("zh", "中文"),
+];
 
 /// A dropdown entry: label, checked, what it does (`None`: a heading).
 type Choice = (String, bool, Option<Pick>);
@@ -1316,6 +1382,10 @@ impl SettingsView {
             Pick::AskConn(id) => self.set_ask_connection(id, cx),
             Pick::Model(slot, conn, model) => self.select_model(slot, conn, model, cx),
             Pick::Custom(slot, conn) => self.open_custom_model(slot, conn, window, cx),
+            Pick::SummaryLanguage(code) => {
+                self.config.summary_language = code;
+                self.save(cx);
+            }
         }
     }
 
@@ -1498,6 +1568,25 @@ impl SettingsView {
             this.save(cx);
         }));
 
+        let summary_language = {
+            let current = self.config.summary_language.clone();
+            let mut items: Vec<Choice> = vec![
+                (tr("Wie in der Besprechung").into(), current == "meeting" || current.is_empty(), Some(Pick::SummaryLanguage("meeting".into()))),
+                (tr("In App-Sprache").into(), current == "app", Some(Pick::SummaryLanguage("app".into()))),
+            ];
+            items.extend(SUMMARY_LANGUAGES.iter().map(|(code, name)| (name.to_string(), current == *code, Some(Pick::SummaryLanguage(code.to_string())))));
+            let label = match current.as_str() {
+                "" | "meeting" => tr("Wie in der Besprechung").to_string(),
+                "app" => tr("In App-Sprache").to_string(),
+                code => SUMMARY_LANGUAGES
+                    .iter()
+                    .find(|(c, _)| *c == code)
+                    .map(|(_, n)| n.to_string())
+                    .unwrap_or_else(|| mostalgia_core::summary::language_name(code)),
+            };
+            self.picker("summary-language", label, items, cx)
+        };
+
         ui::card(cx)
             .child(div().font_semibold().child(tr("Zusammenfassungen & Fragen")))
             .child(ui::section_title(tr("ZUSAMMENFASSUNGEN"), cx))
@@ -1509,6 +1598,7 @@ impl SettingsView {
             ))
             .children(summary_custom)
             .children(summary_effort_row)
+            .child(row(tr("Sprache der Zusammenfassung"), None, summary_language))
             .child(summary_privacy)
             .child(row(tr("Automatisch nach jeder Aufnahme"), None, auto.into_any_element()))
             .child(div().h(px(1.)).bg(theme.border))
@@ -2031,12 +2121,12 @@ impl Render for SettingsView {
             .child(title("Sprache & Erkennung"))
             .child(row(
                 tr("Sprache"),
-                None,
+                Some(tr("Empfohlen: „Automatisch erkennen“ – erkennt die Sprache der Besprechung selbst.")),
                 h_flex()
                     .gap_1()
                     .child(choice("set-de", "Deutsch", lang == "de", cx, |c| c.language = "de".into()))
                     .child(choice("set-en", "English", lang == "en", cx, |c| c.language = "en".into()))
-                    .child(choice("set-auto", "Auto", lang == "auto", cx, |c| c.language = "auto".into()))
+                    .child(choice("set-auto", "Automatisch erkennen", lang == "auto", cx, |c| c.language = "auto".into()))
                     .into_any_element(),
             ))
             .child(row(

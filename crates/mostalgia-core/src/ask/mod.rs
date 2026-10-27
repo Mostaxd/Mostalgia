@@ -2,6 +2,7 @@
 //! summaries, and question answering on top of it with cited sources.
 
 pub mod answer;
+pub mod cite;
 pub mod embed;
 pub mod index;
 pub mod search;

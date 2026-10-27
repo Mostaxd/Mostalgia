@@ -56,4 +56,5 @@ pub const EN: &[(&str, &str)] = &[
     ("Ersetzt das Transkript. Umbenannte Sprecher werden zurückgesetzt.", "Replaces the transcript. Renamed speakers are reset."),
     ("Transkribieren", "Transcribe"),
     ("Neu transkribiert mit {}: {} Zeilen", "Transcribed again with {}: {} lines"),
+    (" · auf {}", " · in {}"),
 ];

@@ -89,7 +89,11 @@ struct Live {
     speech_at: Option<Instant>,
     speech_since: Option<Instant>,
     speech_secs: f64,
+    /// Identifies this recording (for Mori on the desktop).
+    session: u64,
 }
+
+static NEXT_SESSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl Live {
     fn new(recorder: Option<Recorder>, rx: Receiver<Event>, choice: SttChoice) -> Self {
@@ -113,6 +117,7 @@ impl Live {
             speech_at: None,
             speech_since: None,
             speech_secs: 0.,
+            session: NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
     }
 
@@ -270,6 +275,35 @@ impl RecordingView {
         out
     }
 
+    /// For Mori on the desktop: the finalized lines from index `from` on,
+    /// the provisional text, and how many finalized lines there are.
+    pub fn transcript_delta(&self, from: usize) -> (Vec<mostalgia_core::companion::ContextLine>, Vec<mostalgia_core::companion::ContextLine>, usize) {
+        let Phase::Recording(live) = &self.phase else { return (Vec::new(), Vec::new(), 0) };
+        let total = live.lines.len();
+        let (interim, finalized): (Vec<_>, Vec<_>) = self.transcript_lines(f64::MIN).into_iter().partition(|l| l.interim);
+        let finalized = finalized.into_iter().skip(from).collect();
+        (finalized, interim, total)
+    }
+
+    /// Scrolls the live transcript to the line spoken at `secs` (a time
+    /// Mori cited) and stops following new lines.
+    pub fn scroll_to_time(&mut self, secs: f64, cx: &mut Context<Self>) {
+        let Phase::Recording(live) = &self.phase else { return };
+        let Some(ix) = live.lines.iter().rposition(|l| l.start_secs <= secs + 0.5).or((!live.lines.is_empty()).then_some(0)) else { return };
+        let start = live.lines[ix].start_secs;
+        // Bookmark rows come before the line they precede.
+        let marks = live.bookmarks.iter().filter(|b| b.at_secs <= start).count();
+        self.follow = false;
+        self.scroll.scroll_to_top_of_item(ix + marks);
+        cx.notify();
+    }
+
+    /// Identifies the recording in progress (changes with every new one).
+    pub fn session_id(&self) -> Option<u64> {
+        let Phase::Recording(live) = &self.phase else { return None };
+        Some(live.session)
+    }
+
     pub fn is_active(&self) -> bool {
         !matches!(self.phase, Phase::Setup)
     }
@@ -293,6 +327,9 @@ impl RecordingView {
         self.config.companion_scale = disk.companion_scale;
         self.config.companion_points_interval_secs = disk.companion_points_interval_secs;
         self.config.companion_pos = disk.companion_pos;
+        self.config.companion_clear_button = disk.companion_clear_button;
+        self.config.companion_desktop = disk.companion_desktop;
+        self.config.companion_desktop_pos = disk.companion_desktop_pos;
         if let Err(e) = self.config.save() {
             eprintln!("[mostalgia] saving settings: {e:#}");
         }
@@ -730,7 +767,7 @@ impl RecordingView {
                                     .child(div().text_sm().text_color(cx.theme().muted_foreground).mr_2().child(tr("Sprache")))
                                     .child(lang_button("de", "Deutsch", cx))
                                     .child(lang_button("en", "English", cx))
-                                    .child(lang_button("auto", tr("Automatisch"), cx)),
+                                    .child(lang_button("auto", tr("Automatisch erkennen"), cx).tooltip(tr("Empfohlen: erkennt die Sprache der Besprechung selbst"))),
                             )
                             .child(
                                 Switch::new("labels")

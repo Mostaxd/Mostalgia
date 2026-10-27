@@ -21,6 +21,8 @@ pub struct CloudEngine {
     /// `json` once if the server doesn't support it.
     timestamps: bool,
     client: reqwest::blocking::Client,
+    /// Seconds of audio per language the service reported (auto mode).
+    detected: Vec<(String, f64)>,
 }
 
 impl CloudEngine {
@@ -44,6 +46,7 @@ impl CloudEngine {
             language: None,
             timestamps,
             client: http(300)?,
+            detected: Vec::new(),
         };
         engine.set_language(language);
         Ok(engine)
@@ -74,7 +77,23 @@ impl CloudEngine {
             }
             other => other,
         }
-        .map(|value| parse(&value, duration))
+        .map(|value| {
+            if let Some(code) = value["language"].as_str().and_then(language_code) {
+                match self.detected.iter_mut().find(|(c, _)| *c == code) {
+                    Some((_, total)) => *total += duration,
+                    None => self.detected.push((code, duration)),
+                }
+            }
+            parse(&value, duration)
+        })
+    }
+
+    pub fn reset_detected_language(&mut self) {
+        self.detected.clear();
+    }
+
+    pub fn detected(&self) -> &[(String, f64)] {
+        &self.detected
     }
 
     fn request(&self, wav: &[u8], verbose: bool) -> Result<Value> {
@@ -106,6 +125,15 @@ impl CloudEngine {
             Err(e) => Err(e).with_context(|| trf("{}: unerwartete Antwort der Transkription", &[&self.conn.name])),
         }
     }
+}
+
+/// A reported language ("english" or "en") as a Whisper code.
+fn language_code(reported: &str) -> Option<String> {
+    let r = reported.trim().to_ascii_lowercase();
+    if r.len() == 2 {
+        return Some(r);
+    }
+    (0..100).filter_map(|id| Some((whisper_rs::get_lang_str(id)?, whisper_rs::get_lang_str_full(id)?))).find(|(_, full)| *full == r).map(|(code, _)| code.to_string())
 }
 
 /// Segments from a `verbose_json` or `json` response.

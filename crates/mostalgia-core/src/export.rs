@@ -93,6 +93,11 @@ fn note_lines(m: &Meeting) -> Vec<String> {
         .collect()
 }
 
+/// (question, answer) of the chat with Mori, citations as "(0:27)".
+fn chat_turns(m: &Meeting) -> Vec<(String, String)> {
+    m.chat.iter().map(|t| (t.question.clone(), crate::ask::cite::parse(&t.answer).plain().trim().to_string())).collect()
+}
+
 pub fn markdown(m: &Meeting) -> String {
     let mut out = format!("# {}\n\n_{}_\n\n", m.title, header(m));
     if let Some(body) = summary_body(m) {
@@ -105,6 +110,12 @@ pub fn markdown(m: &Meeting) -> String {
             out.push_str(&format!("- {line}\n"));
         }
         out.push('\n');
+    }
+    if !m.chat.is_empty() {
+        out.push_str(&format!("## {}\n\n", tr("Chat mit Mori")));
+        for (q, a) in chat_turns(m) {
+            out.push_str(&format!("**{q}**\n\n{a}\n\n"));
+        }
     }
     out.push_str(&format!("## {}\n\n", tr("Transkript")));
     for s in &m.segments {
@@ -129,6 +140,12 @@ pub fn text(m: &Meeting) -> String {
             out.push_str(&format!("- {line}\n"));
         }
         out.push('\n');
+    }
+    if !m.chat.is_empty() {
+        out.push_str(&format!("{}\n", tr("Chat mit Mori")));
+        for (q, a) in chat_turns(m) {
+            out.push_str(&format!("> {q}\n{a}\n\n"));
+        }
     }
     out.push_str(&format!("{}\n\n", tr("Transkript")));
     for s in &m.segments {
@@ -187,6 +204,15 @@ pub fn docx(m: &Meeting, path: &Path) -> Result<()> {
         doc = doc.add_paragraph(Paragraph::new().add_run(Run::new().add_text(tr("Notizen von Mori")).bold().size(28)));
         for line in note_lines(m) {
             doc = doc.add_paragraph(para(vec![Run::new().add_text("• ").size(22), Run::new().add_text(line).size(22)]));
+        }
+    }
+    if !m.chat.is_empty() {
+        doc = doc.add_paragraph(Paragraph::new().add_run(Run::new().add_text(tr("Chat mit Mori")).bold().size(28)));
+        for (q, a) in chat_turns(m) {
+            doc = doc.add_paragraph(Paragraph::new().add_run(Run::new().add_text(q).bold().size(22)));
+            for line in a.lines().filter(|l| !l.trim().is_empty()) {
+                doc = doc.add_paragraph(para(runs(line, 22)));
+            }
         }
     }
     doc = doc.add_paragraph(Paragraph::new().add_run(Run::new().add_text(tr("Transkript")).bold().size(28)));

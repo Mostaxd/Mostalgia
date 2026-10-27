@@ -5,6 +5,12 @@ use mostalgia_app::{AppAssets, app, load_fonts, ui};
 actions!(mostalgia, [Quit]);
 
 fn main() {
+    // Mori on the desktop: her own small always-on-top window (started by
+    // the app; `--demo` runs her alone with a fake recording).
+    if std::env::args().any(|a| a == "--mori") {
+        mostalgia_app::companion::desktop::run(std::env::args().any(|a| a == "--demo"));
+        return;
+    }
     gpui_kit::application().with_assets(AppAssets).run(|cx: &mut App| {
         gpui_kit::init(cx);
         let config = mostalgia_core::config::Config::load();

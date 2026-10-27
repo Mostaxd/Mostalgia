@@ -53,6 +53,9 @@ pub struct Config {
     pub summary_model: String,
     /// Thinking level for summaries ("low" … "max"), where the model supports it.
     pub summary_effort: String,
+    /// Language summaries are written in: "meeting" (the language spoken,
+    /// as transcribed or detected), "app" (the UI language) or a code like "en".
+    pub summary_language: String,
     /// Summarize automatically after each recording (needs an API key).
     pub auto_summary: bool,
     /// App theme id ("system" follows GNOME's light/dark setting).
@@ -80,6 +83,14 @@ pub struct Config {
     /// Where Mori stands: her top-left as a fraction (0–1) of the room the
     /// window leaves her horizontally and vertically (`None` = top right).
     pub companion_pos: Option<(f32, f32)>,
+    /// Show the "New chat" button (clear the chat, with undo) in Mori's bubble.
+    pub companion_clear_button: bool,
+    /// Mori stands on the desktop (a small always-on-top window of her own)
+    /// instead of inside the Mostalgia window.
+    pub companion_desktop: bool,
+    /// On the desktop: her top-left in X11 root-window pixels (`None` =
+    /// top right of the primary monitor).
+    pub companion_desktop_pos: Option<(i32, i32)>,
 }
 
 /// Which speech-to-text engine to use: local Whisper (`connection` empty)
@@ -147,6 +158,7 @@ impl Default for Config {
             summary_provider: "claude".into(),
             summary_model: crate::summary::DEFAULT_MODEL.into(),
             summary_effort: crate::summary::DEFAULT_EFFORT.into(),
+            summary_language: "meeting".into(),
             auto_summary: true,
             theme: "system".into(),
             font: String::new(),
@@ -160,6 +172,9 @@ impl Default for Config {
             companion_scale: 1.0,
             companion_points_interval_secs: 90,
             companion_pos: None,
+            companion_clear_button: true,
+            companion_desktop: false,
+            companion_desktop_pos: None,
         }
     }
 }
@@ -181,7 +196,7 @@ impl Config {
     pub fn summary_request(&self) -> Result<crate::summary::SummaryRequest> {
         let connection = self.summary_connection()?;
         let effort = effort_for(&connection, &self.summary_model, &self.summary_effort);
-        Ok(crate::summary::SummaryRequest { connection, model: self.summary_model.clone(), effort })
+        Ok(crate::summary::SummaryRequest { connection, model: self.summary_model.clone(), language: self.summary_language_code(), effort })
     }
 
     /// Connection, model and thinking level for "ask your meetings".
@@ -197,7 +212,19 @@ impl Config {
             .with_context(|| crate::i18n::trf("KI-Verbindung \"{}\" gibt es nicht mehr — in den Einstellungen wählen", &[&self.ask_provider]))?;
         let model = if self.ask_model.is_empty() { self.summary_model.clone() } else { self.ask_model.clone() };
         let effort = effort_for(&connection, &model, &self.ask_effort);
-        Ok(crate::summary::SummaryRequest { connection, model, effort })
+        Ok(crate::summary::SummaryRequest { connection, model, language: self.summary_language_code(), effort })
+    }
+
+    /// The fixed summary language, if one is set ("app" resolves to the UI language).
+    pub fn summary_language_code(&self) -> Option<String> {
+        match self.summary_language.as_str() {
+            "" | "meeting" => None,
+            "app" => Some(match crate::i18n::resolve(&self.ui_language) {
+                crate::i18n::Lang::De => "de".into(),
+                crate::i18n::Lang::En => "en".into(),
+            }),
+            code => Some(code.to_string()),
+        }
     }
 
     /// Where the work happens with the current choices.

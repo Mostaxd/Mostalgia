@@ -1,0 +1,76 @@
+//! Messages between the app and Mori's desktop process (`mostalgia-app
+//! --mori`): one JSON object per line on the child's stdin / stdout.
+
+use serde::{Deserialize, Serialize};
+
+/// One transcript line (as `mostalgia_core::companion::ContextLine`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WireLine {
+    pub at: f64,
+    pub speaker: String,
+    pub text: String,
+}
+
+impl From<&mostalgia_core::companion::ContextLine> for WireLine {
+    fn from(l: &mostalgia_core::companion::ContextLine) -> Self {
+        Self { at: l.at_secs, speaker: l.speaker.clone(), text: l.text.clone() }
+    }
+}
+
+impl WireLine {
+    pub fn to_line(&self, interim: bool) -> mostalgia_core::companion::ContextLine {
+        mostalgia_core::companion::ContextLine { at_secs: self.at, speaker: self.speaker.clone(), text: self.text.clone(), interim }
+    }
+}
+
+/// The recording in progress (`crate::recording::LiveState`, with the
+/// instants as "milliseconds ago").
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WireLive {
+    pub session: u64,
+    pub paused: bool,
+    pub speech_ago_ms: Option<u64>,
+    pub speech_since_ago_ms: Option<u64>,
+    pub speech_secs: f64,
+    pub last_line_end: f64,
+}
+
+/// App → Mori.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub enum ToMori {
+    /// The recording state (`None` = no recording).
+    Live { live: Option<WireLive> },
+    /// Finalized lines `from..` of the current session's transcript, and the
+    /// provisional text being spoken now.
+    Transcript { session: u64, from: usize, lines: Vec<WireLine>, interim: Vec<WireLine> },
+    /// A recording was saved as this meeting: store pinned points and the
+    /// chat with it.
+    Saved { meeting_id: i64 },
+    /// Settings changed (language, theme, Mori's options).
+    ReloadConfig,
+    Quit,
+}
+
+/// Mori → app.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub enum FromMori {
+    /// The window is up.
+    Ready,
+    /// Open a meeting at this moment (a citation in an answer).
+    OpenMeeting { meeting_id: i64, secs: f64 },
+    /// Show the live transcript at this moment (a time cited in a "This
+    /// meeting" answer).
+    ShowLiveMoment { secs: f64 },
+    /// Open Settings → AI & transcription.
+    OpenSettings,
+    /// Pinned points (and the chat) were stored with this meeting.
+    NotesSaved { meeting_id: i64 },
+}
+
+pub fn encode<T: Serialize>(msg: &T) -> String {
+    let mut s = serde_json::to_string(msg).unwrap_or_default();
+    s.push('\n');
+    s
+}

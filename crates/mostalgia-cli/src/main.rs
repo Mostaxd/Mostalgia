@@ -82,7 +82,7 @@ impl SummaryChoice {
             Some(id) => {
                 let connection = connection(&config, id)?;
                 let model = if config.summary_provider == connection.id { config.summary_model.clone() } else { connection.preset().default_model.to_string() };
-                summary::SummaryRequest { connection, model, effort: None }
+                summary::SummaryRequest { connection, model, language: config.summary_language_code(), effort: None }
             }
             None => config.summary_request()?,
         };

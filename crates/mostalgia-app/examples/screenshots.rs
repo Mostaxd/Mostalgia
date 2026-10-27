@@ -161,12 +161,22 @@ fn main() {
                 c.demo_chat(
                     true,
                     "What did we decide so far?",
-                    "- Marketing spend is frozen until the end of June [00:00:27].\n- Anna sends a new forecast by Friday; you send her the sales numbers this afternoon [00:00:36].",
+                    "Two decisions so far:\n- Marketing spend is frozen until the end of June [[t:00:00:27]].\n- Anna sends a new forecast by Friday [[t:00:00:36]]; you send her the sales numbers this afternoon [00:00:44–00:00:52].\n\nThe budget gap comes mostly from the trade show in May [00:00:15, 00:00:27].",
                     cx,
                 );
             });
             std::thread::sleep(std::time::Duration::from_millis(300));
             shot("14-mori-chat", &mut cx);
+            mori(&mut cx, &|c, cx| {
+                c.demo_chat(
+                    false,
+                    "Where did we talk about the trade show?",
+                    "In the budget review: the budget is about ten percent under plan, mostly because of the trade show [[m:1@6]]. Marketing spend was frozen as a result [[m:1@14]], and Anna sends a new forecast [[m:1@19]].",
+                    cx,
+                );
+            });
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            shot("14b-mori-chat-library", &mut cx);
             mori(&mut cx, &|c, cx| c.demo_reset(cx));
         }
         if full {
@@ -263,7 +273,7 @@ fn main() {
                 a.update(cx, |a, cx| {
                     a.demo(
                         "What did we decide about marketing spend?",
-                        "Marketing spend is frozen until the end of June [[m:1@14]]. The reason: the budget is about ten percent under plan, mostly because of the trade show [[m:1@6]].\n- Speaker 1 proposed it and Speaker 2 agreed [[m:1@19]].\n- Anna sends a new forecast to everyone by Friday [[m:1@19]].",
+                        "Marketing spend is frozen until the end of June [[m:1@14]]. The reason: the budget is about ten percent under plan, mostly because of the trade show [[m:1@6]].\n- Speaker 1 proposed it and Speaker 2 agreed [[m:1@19]].\n- Anna sends a new forecast to everyone by Friday [[m:1@19]].\n- The launch sync planned around it: the public beta moves to May 12 [[m:2@95]].",
                         cx,
                     )
                 });

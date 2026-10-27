@@ -24,8 +24,8 @@ labelled by speaker: \"Me\" is the person who recorded the meeting \
 several people). Other labels are named speakers. When people are named \
 in the conversation, use their names.
 
-Write the summary in the language the meeting was held in, as Markdown in \
-exactly this shape, with the headings translated into that language:
+Write the summary in the language named at the top of the user's message \
+(translating the headings below into it), as Markdown in exactly this shape:
 
 # <a short, specific title for the meeting, at most 8 words>
 
@@ -65,6 +65,8 @@ pub fn llm_speaker(label: &str) -> String {
 pub struct SummaryRequest {
     pub connection: Connection,
     pub model: String,
+    /// Language code to write in (e.g. "en"); `None` = the meeting's own.
+    pub language: Option<String>,
     /// Thinking level; ignored where the model has no effort control.
     pub effort: Option<String>,
 }
@@ -97,19 +99,44 @@ pub fn transcript_text(meeting: &Meeting) -> String {
     out
 }
 
-fn user_message(meeting: &Meeting) -> Result<String> {
+/// The language a summary is written in: the request's, else the
+/// meeting's (as transcribed or detected), as a Whisper code like "en".
+pub fn summary_language(req: &SummaryRequest, meeting: &Meeting) -> Option<String> {
+    req.language
+        .clone()
+        .or_else(|| Some(meeting.language.clone()))
+        .filter(|l| !l.is_empty() && l != "auto")
+}
+
+/// "en" → "English" (Whisper's language names), for prompts and labels.
+pub fn language_name(code: &str) -> String {
+    (0..100)
+        .find(|&id| whisper_rs::get_lang_str(id) == Some(code))
+        .and_then(whisper_rs::get_lang_str_full)
+        .map(|name| {
+            let mut c = name.chars();
+            c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+        })
+        .unwrap_or_else(|| code.to_string())
+}
+
+fn user_message(req: &SummaryRequest, meeting: &Meeting) -> Result<String> {
     let transcript = transcript_text(meeting);
     anyhow::ensure!(!transcript.is_empty(), "{}", tr("Die Besprechung hat kein Transkript zum Zusammenfassen"));
+    let language = match summary_language(req, meeting) {
+        Some(code) => format!("Write the summary in {}.", language_name(&code)),
+        None => "Write the summary in the language most of the transcript is in.".to_string(),
+    };
     Ok(format!(
-        "Meeting on {}, {} min.\n\n<transcript>\n{}</transcript>",
-        meeting.started_at.format("%d.%m.%Y %H:%M"),
+        "{language}\n\nMeeting on {}, {} min.\n\n<transcript>\n{}</transcript>",
+        meeting.started_at.format("%Y-%m-%d %H:%M"),
         (meeting.duration_secs / 60.0).round(),
         transcript
     ))
 }
 
 pub fn summarize(req: &SummaryRequest, meeting: &Meeting) -> Result<GeneratedSummary> {
-    let user = user_message(meeting)?;
+    let user = user_message(req, meeting)?;
     let done = crate::llm::complete(&req.connection, &req.model, req.effort.as_deref(), SYSTEM_PROMPT, &user)?;
     let markdown = done.text.trim().to_string();
     anyhow::ensure!(!markdown.is_empty(), "{}: {}", req.connection.name, tr("Das Modell hat eine leere Zusammenfassung geliefert"));

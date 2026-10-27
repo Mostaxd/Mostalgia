@@ -38,6 +38,16 @@ pub struct Note {
     pub created_at: DateTime<Local>,
 }
 
+/// A question asked to Mori about the meeting while it was recorded, with
+/// her answer (citations as `[[t:…]]` markers, see `ask::cite`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChatTurn {
+    pub id: i64,
+    pub question: String,
+    pub answer: String,
+    pub created_at: DateTime<Local>,
+}
+
 pub struct Meeting {
     pub id: i64,
     pub title: String,
@@ -49,6 +59,8 @@ pub struct Meeting {
     pub bookmarks: Vec<Bookmark>,
     /// Mori's pinned notes, by time.
     pub notes: Vec<Note>,
+    /// The chat with Mori during the recording, oldest first.
+    pub chat: Vec<ChatTurn>,
     pub summary: Option<Summary>,
     /// The engine that wrote the transcript ("Whisper … (lokal)", "OpenAI · whisper-1").
     pub transcript_engine: Option<String>,
@@ -111,7 +123,7 @@ pub struct NewMeeting<'a> {
     pub dir: &'a Path,
 }
 
-const SCHEMA_VERSION: i32 = 6;
+const SCHEMA_VERSION: i32 = 7;
 
 const SCHEMA: &str = "
 CREATE TABLE meetings (
@@ -206,6 +218,15 @@ const MIGRATIONS: &[&str] = &[
         created_at INTEGER NOT NULL
     );
     CREATE INDEX notes_meeting ON notes(meeting_id, at_secs);",
+    // 7: the chat with Mori during a recording
+    "CREATE TABLE companion_chat (
+        id         INTEGER PRIMARY KEY,
+        meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        question   TEXT NOT NULL,
+        answer     TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+    );
+    CREATE INDEX companion_chat_meeting ON companion_chat(meeting_id, id);",
 ];
 
 fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
@@ -396,6 +417,7 @@ impl Store {
             })?
             .collect::<rusqlite::Result<_>>()?;
         let notes = self.notes(id)?;
+        let chat = self.companion_chat(id)?;
         Ok(Some(Meeting {
             id,
             title,
@@ -406,10 +428,21 @@ impl Store {
             segments,
             bookmarks,
             notes,
+            chat,
             summary,
             transcript_engine,
             transcript_error,
         }))
+    }
+
+    /// A meeting's title and start, without loading its transcript.
+    pub fn title(&self, id: i64) -> Result<Option<(String, DateTime<Local>)>> {
+        Ok(self
+            .conn
+            .query_row("SELECT title, started_at FROM meetings WHERE id = ?1", [id], |r| {
+                Ok((r.get::<_, String>(0)?, local(r.get(1)?)))
+            })
+            .optional()?)
     }
 
     /// Full-text search over all transcripts. Every word must match (as a
@@ -505,6 +538,34 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Saves the chat with Mori from a recording (question, answer) with
+    /// the meeting, after any already saved.
+    pub fn add_companion_chat(&mut self, meeting_id: i64, turns: &[(String, String)]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO companion_chat (meeting_id, question, answer, created_at) VALUES (?1, ?2, ?3, ?4)",
+            )?;
+            let now = Local::now().timestamp();
+            for (q, a) in turns {
+                stmt.execute(params![meeting_id, q, a, now])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// A meeting's chat with Mori, oldest first.
+    pub fn companion_chat(&self, meeting_id: i64) -> Result<Vec<ChatTurn>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, question, answer, created_at FROM companion_chat WHERE meeting_id = ?1 ORDER BY id")?;
+        let rows = stmt.query_map([meeting_id], |r| {
+            Ok(ChatTurn { id: r.get(0)?, question: r.get(1)?, answer: r.get(2)?, created_at: local(r.get(3)?) })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn delete_note(&self, note_id: i64) -> Result<bool> {
         Ok(self.conn.execute("DELETE FROM notes WHERE id = ?1", [note_id])? > 0)
     }
@@ -536,7 +597,7 @@ impl Store {
     }
 
     /// Removes a meeting and everything derived from it in one transaction:
-    /// transcript (and its search index rows), summary, bookmarks, Mori's notes,
+    /// transcript (and its search index rows), summary, bookmarks, Mori's notes and chat,
     /// speaker names, "ask" passages and their index. With `delete_audio`, the
     /// session's WAV tracks go too (and the folder, if then empty).
     pub fn delete_meeting(&self, meeting_id: i64, delete_audio: bool) -> Result<bool> {
@@ -548,7 +609,7 @@ impl Store {
         let tx = self.conn.unchecked_transaction()?;
         // Explicit deletes (not only ON DELETE CASCADE), so the FTS delete
         // triggers run for every row whatever the connection's settings.
-        for table in ["passages", "index_state", "segments", "summaries", "bookmarks", "notes"] {
+        for table in ["passages", "index_state", "segments", "summaries", "bookmarks", "notes", "companion_chat"] {
             if table_exists(&tx, table)? {
                 tx.execute(&format!("DELETE FROM {table} WHERE meeting_id = ?1"), [meeting_id])?;
             }
@@ -659,6 +720,32 @@ mod tests {
     }
 
     #[test]
+    fn companion_chat_roundtrip_and_cascade() -> Result<()> {
+        let path = std::env::temp_dir().join(format!("mostalgia-chat-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut store = Store::open(&path)?;
+        let new = |dir: &'static str| NewMeeting { title: "C", started_at: Local::now(), duration_secs: 60.0, language: "en", dir: Path::new(dir) };
+        let a = store.insert_meeting(&new("/tmp/chat-a"), &[])?;
+        let b = store.insert_meeting(&new("/tmp/chat-b"), &[])?;
+        store.add_companion_chat(a, &[("What was decided?".into(), "Spend is frozen [[t:27]].".into()), ("Who?".into(), "Anna [[t:36]].".into())])?;
+        store.add_companion_chat(a, &[("And then?".into(), "Nothing yet.".into())])?;
+        store.add_companion_chat(b, &[("Other?".into(), "Other.".into())])?;
+        store.add_companion_chat(b, &[])?;
+        let m = store.get(a)?.unwrap();
+        assert_eq!(m.chat.iter().map(|t| t.question.as_str()).collect::<Vec<_>>(), ["What was decided?", "Who?", "And then?"]);
+        assert_eq!(m.chat[0].answer, "Spend is frozen [[t:27]].");
+        assert!(store.delete_meeting(a, false)?);
+        assert!(store.companion_chat(a)?.is_empty());
+        assert_eq!(store.companion_chat(b)?.len(), 1);
+        // Plain cascade (a meeting replaced from the same directory).
+        store.insert_meeting(&new("/tmp/chat-b"), &[])?;
+        let all: i64 = store.conn.query_row("SELECT COUNT(*) FROM companion_chat", [], |r| r.get(0))?;
+        assert_eq!(all, 0);
+        std::fs::remove_file(&path)?;
+        Ok(())
+    }
+
+    #[test]
     fn delete_removes_everything_searchable() -> Result<()> {
         let path = std::env::temp_dir().join(format!("mostalgia-del-{}.db", std::process::id()));
         let dir = std::env::temp_dir().join(format!("mostalgia-del-session-{}", std::process::id()));
@@ -677,6 +764,7 @@ mod tests {
         store.save_summary(gone, "claude", "m", None, "# Weg\n\nZebra")?;
         store.add_bookmarks(gone, &[Bookmark { at_secs: 1.0, label: "x".into() }])?;
         store.add_note(gone, "fact", "Zebra", 1.0)?;
+        store.add_companion_chat(gone, &[("Zebra?".into(), "Yes [[t:1]].".into())])?;
         crate::ask::index::index_meeting(&mut store, gone)?;
         crate::ask::index::index_meeting(&mut store, keep)?;
         let filter = crate::ask::search::Filter::default();
@@ -698,7 +786,7 @@ mod tests {
             "INSERT INTO segments_fts(segments_fts) VALUES('integrity-check');
              INSERT INTO passages_fts(passages_fts) VALUES('integrity-check');",
         )?;
-        for table in ["segments", "summaries", "bookmarks", "passages", "index_state", "notes"] {
+        for table in ["segments", "summaries", "bookmarks", "passages", "index_state", "notes", "companion_chat"] {
             let n: i64 = store.conn.query_row(&format!("SELECT COUNT(*) FROM {table} WHERE meeting_id = ?1"), [gone], |r| r.get(0))?;
             assert_eq!(n, 0, "{table}");
         }

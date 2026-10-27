@@ -86,6 +86,7 @@ pub fn final_pass_with_notes(
     opts: &FinalPassOptions,
     notes: &mut Vec<String>,
 ) -> Result<Vec<FinalSegment>> {
+    engine.reset_detected_language();
     if opts.vad_model.is_none() {
         notes.push(crate::i18n::tr("Ohne Sprachfilter (Silero-VAD-Modell fehlt — scripts/download-model.sh): Stille kann zu erfundenem Text führen").to_string());
     }
@@ -253,6 +254,7 @@ pub fn save_recording(
         &segments,
     )?;
     store.set_transcript_info(id, &engine_label, error.as_deref())?;
+    store_detected_language(&store, id, language, engine)?;
     store.add_bookmarks(id, bookmarks)?;
     if let Err(e) = crate::ask::index_meeting(id) {
         eprintln!("[mostalgia] search index: {e:#}");
@@ -274,9 +276,22 @@ pub fn retranscribe(meeting_id: i64, engine: &mut Engine, opts: &FinalPassOption
     store.replace_segments(meeting_id, &segments)?;
     let note = (!notes.is_empty()).then(|| notes.join(" · "));
     store.set_transcript_info(meeting_id, &engine.label(), note.as_deref())?;
+    store_detected_language(&store, meeting_id, &meeting.language, engine)?;
     drop(store);
     if let Err(e) = crate::ask::index_meeting(meeting_id) {
         eprintln!("[mostalgia] search index: {e:#}");
     }
     Ok(segments.len())
+}
+
+/// With "auto", remember the language Whisper heard most, so summaries can
+/// be written in it without guessing.
+fn store_detected_language(store: &crate::store::Store, meeting_id: i64, configured: &str, engine: &Engine) -> Result<()> {
+    if configured != "auto" && configured != "" && !configured.starts_with("auto") {
+        return Ok(());
+    }
+    if let Some(code) = engine.detected_language() {
+        store.conn().execute("UPDATE meetings SET language = ?2 WHERE id = ?1", rusqlite::params![meeting_id, code])?;
+    }
+    Ok(())
 }

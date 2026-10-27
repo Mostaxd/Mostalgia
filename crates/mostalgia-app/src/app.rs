@@ -58,6 +58,8 @@ pub struct MostalgiaApp {
     library_focus: FocusHandle,
     /// Mori, drawn over the content when turned on.
     companion: Entity<Companion>,
+    /// Mori on the desktop (her own process), when she's put there.
+    mori_host: crate::companion::host::DesktopHost,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -72,8 +74,13 @@ impl MostalgiaApp {
         let subs = vec![
             cx.subscribe_in(&recording, window, |this, _, event: &RecordingEvent, window, cx| match event {
                 RecordingEvent::Saved(id) => {
-                    // Pinned points go into the meeting before it opens.
-                    this.companion.update(cx, |c, cx| c.save_pinned(*id, cx));
+                    // Pinned points go into the meeting before it opens
+                    // (on the desktop she stores them and says so).
+                    if this.mori_host.is_running() {
+                        this.mori_host.send(&crate::companion::ipc::ToMori::Saved { meeting_id: *id });
+                    } else {
+                        this.companion.update(cx, |c, cx| c.recording_saved(*id, cx));
+                    }
                     this.reload(cx);
                     this.open_meeting(*id, window, cx);
                     if let Screen::Meeting(view) = &this.screen {
@@ -88,6 +95,11 @@ impl MostalgiaApp {
                 }
             }),
             cx.observe_window_appearance(window, |_, window, cx| ui::apply_theme(window, cx)),
+            cx.subscribe(&companion, |this, _, event: &crate::companion::ShowLiveMoment, cx| {
+                this.screen = Screen::Recording;
+                this.recording.update(cx, |r, cx| r.scroll_to_time(event.secs, cx));
+                cx.notify();
+            }),
             cx.subscribe_in(&companion, window, |this, _, event: &MoriEvent, window, cx| match event {
                 MoriEvent::OpenCitation { meeting_id, secs } => {
                     this.open_meeting(*meeting_id, window, cx);
@@ -124,9 +136,16 @@ impl MostalgiaApp {
             rename: None,
             library_focus: cx.focus_handle(),
             companion,
+            mori_host: Default::default(),
             _subscriptions: subs,
         };
         this.reload(cx);
+        this.sync_mori(false);
+        cx.on_app_quit(|this, _| {
+            this.mori_host.stop();
+            async {}
+        })
+        .detach();
         this.start_control(window, cx);
         // Bring the "ask your meetings" index up to date in the background.
         // It's cancelled and joined on quit: exiting while the embedding
@@ -207,6 +226,7 @@ impl MostalgiaApp {
                             this.handle_command(cmd, window, cx);
                         }
                         this.autostart_tick(cx);
+                        this.mori_tick(window, cx);
                         let recording = this.recording.read(cx).is_recording();
                         if recording != was_recording {
                             was_recording = recording;
@@ -222,6 +242,63 @@ impl MostalgiaApp {
             }
         })
         .detach();
+    }
+
+    /// Starts or ends Mori's desktop process to match the settings.
+    fn sync_mori(&mut self, settings_changed: bool) {
+        let config = mostalgia_core::config::Config::load();
+        if config.companion && config.companion_desktop {
+            self.mori_host.start(settings_changed);
+        } else {
+            self.mori_host.stop();
+            self.mori_host.problem = None;
+        }
+    }
+
+    /// Mori's messages from the desktop, and the recording state for her.
+    fn mori_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::companion::ipc::FromMori;
+        let had_problem = self.mori_host.problem.is_some();
+        for event in self.mori_host.poll() {
+            match event {
+                FromMori::Ready => {}
+                FromMori::OpenMeeting { meeting_id, secs } => {
+                    self.open_meeting(meeting_id, window, cx);
+                    if let Some(m) = self.meeting_view() {
+                        m.update(cx, |m, cx| m.jump_to(secs, cx));
+                    }
+                    window.activate_window();
+                }
+                FromMori::ShowLiveMoment { secs } => {
+                    self.screen = Screen::Recording;
+                    self.recording.update(cx, |r, cx| r.scroll_to_time(secs, cx));
+                    window.activate_window();
+                    cx.notify();
+                }
+                FromMori::OpenSettings => {
+                    self.open_settings(window, cx);
+                    if let Some(s) = self.settings_view() {
+                        s.update(cx, |s, cx| s.show_category("ki", cx));
+                    }
+                    window.activate_window();
+                }
+                FromMori::NotesSaved { meeting_id } => {
+                    if let Some(m) = self.meeting_view().filter(|m| m.read(cx).id == meeting_id) {
+                        m.update(cx, |m, cx| m.reload(cx));
+                    }
+                }
+            }
+        }
+        if self.mori_host.problem.is_some() != had_problem {
+            cx.notify();
+        }
+        let recording = self.recording.read(cx);
+        self.mori_host.feed(recording);
+    }
+
+    /// Why Mori isn't on the desktop although she should be.
+    pub fn mori_problem(&self) -> Option<&str> {
+        self.mori_host.problem.as_deref()
     }
 
     fn handle_command(&mut self, cmd: control::Command, window: &mut Window, cx: &mut Context<Self>) {
@@ -358,11 +435,12 @@ impl MostalgiaApp {
             .ok()
             .and_then(|e| e.as_ref().and_then(|e| e.gpu().map(str::to_string)));
         let view = cx.new(|cx| SettingsView::new(gpu, window, cx));
-        let recording = self.recording.clone();
-        let companion = self.companion.clone();
-        let sub = cx.subscribe(&view, move |_, _, _: &SettingsEvent, cx| {
-            recording.update(cx, |r, cx| r.reload_config(cx));
-            companion.update(cx, |c, cx| c.reload_config(cx));
+        let sub = cx.subscribe(&view, |this, _, _: &SettingsEvent, cx| {
+            this.recording.update(cx, |r, cx| r.reload_config(cx));
+            this.companion.update(cx, |c, cx| c.reload_config(cx));
+            this.sync_mori(true);
+            this.mori_host.send(&crate::companion::ipc::ToMori::ReloadConfig);
+            cx.notify();
         });
         self._subscriptions.push(sub);
         self.screen = Screen::Settings(view);
@@ -791,6 +869,7 @@ impl MostalgiaApp {
                 ),
             )
             .when_some(self.error.clone(), |el, e| el.child(div().p_3().text_xs().text_color(theme.danger).child(e)))
+            .when_some(self.mori_host.problem.clone(), |el, e| el.child(div().p_3().text_xs().text_color(theme.warning).child(e)))
             .child(
                 div().p_2().border_t_1().border_color(theme.sidebar_border).child(
                     Button::new("settings")

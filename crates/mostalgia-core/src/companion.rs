@@ -70,8 +70,10 @@ so silently correct obviously misheard words. Speakers: \"Me\" is the user, \
 other labels are names. Lines marked (still speaking) are provisional.
 
 Answer only from the transcript, concisely (a few sentences or short bullets), \
-in the language of the question. Mention the time [hh:mm:ss] when you refer to a \
-moment. If the transcript doesn't say, say so plainly and don't guess.";
+in the language of the question. Cite the moment sparingly as [[t:hh:mm:ss]] with the \
+time of the transcript line (a span as [[t:hh:mm:ss-hh:mm:ss]]): at most one citation per \
+sentence or bullet, placed at its end before the final punctuation. Write no other times in \
+brackets. If the transcript doesn't say, say so plainly and don't guess.";
 
 /// Characters of transcript sent with a live question (the newest part).
 const LIVE_CONTEXT_CHARS: usize = 60_000;

@@ -83,6 +83,8 @@ pub struct MeetingView {
     retranscribing: Option<SharedString>,
     /// Why the last "transcribe again" failed.
     transcribe_error: Option<SharedString>,
+    /// The "Chat with Mori" section is folded away.
+    chat_folded: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -104,6 +106,7 @@ impl MeetingView {
             retranscribe: None,
             retranscribing: None,
             transcribe_error: None,
+            chat_folded: false,
             _subscriptions: Vec::new(),
         };
         this.reload(cx);
@@ -755,10 +758,53 @@ impl MeetingView {
 
     fn render_summary(&mut self, m: &Meeting, cx: &mut Context<Self>) -> AnyElement {
         let summary = self.render_summary_body(m, cx);
-        if m.notes.is_empty() {
+        if m.notes.is_empty() && m.chat.is_empty() {
             return summary;
         }
-        v_flex().gap_6().child(summary).child(self.render_notes(m, cx)).into_any_element()
+        v_flex()
+            .gap_6()
+            .child(summary)
+            .when(!m.notes.is_empty(), |el| el.child(self.render_notes(m, cx)))
+            .when(!m.chat.is_empty(), |el| el.child(self.render_chat(m, cx)))
+            .into_any_element()
+    }
+
+    /// The questions asked to Mori during the recording, with her answers;
+    /// a cited time plays the meeting from there.
+    fn render_chat(&mut self, m: &Meeting, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let folded = self.chat_folded;
+        let header = h_flex()
+            .id("mori-chat-toggle")
+            .gap_1p5()
+            .cursor_pointer()
+            .child(Icon::new(if folded { IconName::ChevronRight } else { IconName::ChevronDown }).xsmall().text_color(theme.muted_foreground))
+            .child(ui::section_title(tr("CHAT MIT MORI"), cx))
+            .child(div().text_xs().text_color(theme.muted_foreground).child(format!("({})", m.chat.len())))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.chat_folded = !this.chat_folded;
+                cx.notify();
+            }));
+        let weak = cx.entity().downgrade();
+        let turns = m.chat.iter().enumerate().map(|(i, t)| {
+            let weak = weak.clone();
+            v_flex()
+                .gap_1()
+                .pl_5()
+                .child(ui::bidi_text(t.question.clone(), true).text_sm().font_medium())
+                .child(
+                    crate::ask_view::cited_answer(&t.answer, &format!("meeting-chat-{i}"), cx, move |target, _, cx| {
+                        weak.update(cx, |this, cx| this.jump_to(target.secs(), cx)).ok();
+                    })
+                    .text_sm()
+                    .text_color(theme.foreground.opacity(0.9)),
+                )
+        });
+        v_flex()
+            .gap_4()
+            .child(header)
+            .when(!folded, |el| el.children(turns))
+            .into_any_element()
     }
 
     /// Mori's pinned points; a click plays the meeting from there.
@@ -865,7 +911,7 @@ impl MeetingView {
                                 &s.effort.as_deref().map(|e| trf(" · Denktiefe {}", &[&e])).unwrap_or_default(),
                                 &i18n::date_time(&s.created_at),
                             ],
-                        ))
+                        ) + &summary_language(m))
                         .child(
                             Button::new("resummarize")
                                 .xsmall()
@@ -1243,4 +1289,14 @@ fn dirs_documents() -> std::path::PathBuf {
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_else(|| ".".into());
     let docs = home.join("Documents");
     if docs.is_dir() { docs } else { home }
+}
+
+/// " · in English": the language the summary is written in (the configured
+/// summary language, else the meeting's), or nothing when unknown.
+fn summary_language(m: &Meeting) -> String {
+    let code = mostalgia_core::config::Config::load().summary_language_code().unwrap_or_else(|| m.language.clone());
+    if code.is_empty() || code == "auto" {
+        return String::new();
+    }
+    trf(" · auf {}", &[&summary::language_name(&code)])
 }

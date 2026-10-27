@@ -60,6 +60,24 @@ impl Engine {
         }
     }
 
+    /// Forgets the languages detected so far (call before a final pass).
+    pub fn reset_detected_language(&mut self) {
+        match self {
+            Self::Local(w) => w.detected.clear(),
+            Self::Cloud(c) => c.reset_detected_language(),
+        }
+    }
+
+    /// The language heard most since the last reset, when transcribing
+    /// with "auto" (a Whisper code like "en").
+    pub fn detected_language(&self) -> Option<String> {
+        let detected = match self {
+            Self::Local(w) => &w.detected,
+            Self::Cloud(c) => c.detected(),
+        };
+        detected.iter().max_by(|a, b| a.1.total_cmp(&b.1)).map(|(code, _)| code.clone())
+    }
+
     /// Description of the discrete GPU in use (local Whisper only).
     pub fn gpu(&self) -> Option<&str> {
         match self {
@@ -89,6 +107,8 @@ impl Engine {
 /// inference state.
 pub struct Whisper {
     state: WhisperState,
+    /// Seconds of audio per detected language since the last reset (auto mode).
+    detected: Vec<(String, f64)>,
     language: Option<String>,
     threads: i32,
     gpu: Option<String>,
@@ -117,6 +137,7 @@ impl Whisper {
             .unwrap_or(4);
         Ok(Self {
             state,
+            detected: Vec::new(),
             language,
             threads,
             gpu,
@@ -166,6 +187,16 @@ impl Whisper {
             .full(params, samples)
             .context("running Whisper inference")?;
 
+        if self.language.is_none() {
+            let id = self.state.full_lang_id_from_state();
+            if let Some(code) = whisper_rs::get_lang_str(id) {
+                let secs = samples.len() as f64 / crate::SAMPLE_RATE as f64;
+                match self.detected.iter_mut().find(|(c, _)| c == code) {
+                    Some((_, total)) => *total += secs,
+                    None => self.detected.push((code.to_string(), secs)),
+                }
+            }
+        }
         let n = self.state.full_n_segments();
         let mut out = Vec::with_capacity(n as usize);
         for i in 0..n {

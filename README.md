@@ -91,23 +91,27 @@ model running on your own machine. You always see which one is doing the work.
 
 ## Meet Mori <img src="docs/screenshots/mori/writing.gif" alt="Mori writing notes" height="120" align="right">
 
-Mori is Mostalgia's optional note-taker: a small animated companion who sits in
-the corner of the window (drag her wherever you like) and writes along whenever
-someone speaks.
+Mori is Mostalgia's optional note-taker: a small animated companion who writes
+along whenever someone speaks. She lives in the corner of the app window — or,
+switched to **On the desktop**, floats above all your other windows (your call
+app included) and can be dragged anywhere across your monitors.
 
 - **Ask her live** — click her and ask about the meeting that's running right
   now (“What did we decide so far?”), or switch to *All meetings* to search
-  your library. Answers stream in and cite the moment they come from.
+  your library. Answers stream in with small numbered sources that jump to the
+  moment they come from. Every recording starts with a fresh chat; the
+  conversation is kept with the meeting as *Chat with Mori*.
 - **Live points** — every 90 seconds or so of new conversation she pins up
   what she noticed: decisions, action items with owners, open questions and
   numbers. Pin the ones you want and they're saved with the meeting as
   *Mori's notes*.
-- **Honest about what she's doing** — the bubble shows which connection and
-  model she uses (local or cloud). Without one she tells you to set it up, and
+- **Honest about what she's doing** — the bubble shows whether she uses a
+  local or a cloud model (hover for which one). Without one she tells you to set it up, and
   when a provider fails she says so (with a worried face), instead of
   pretending.
-- Off by default: *Settings → Appearance → Mori*, with size and live-point
-  interval. She idles, listens, writes, thinks, talks, dozes off when you
+- Off by default: *Settings → Appearance → Mori*, with placement (app window
+  or desktop), size and live-point interval. On GNOME Wayland the desktop Mori
+  runs as a small XWayland window — that's what lets her stay on top. She idles, listens, writes, thinks, talks, dozes off when you
   pause, and looks worried when something breaks:
 
 <p align="center"><img src="docs/screenshots/mori/poses.png" alt="Mori's poses on light and dark backgrounds" width="90%"></p>
@@ -115,7 +119,7 @@ someone speaks.
 | | |
 |---|---|
 | ![Mori writing along](docs/screenshots/mori-writing.png) **Writing along** while people talk | ![Live points](docs/screenshots/mori-points.png) **Live points** — pin what matters |
-| ![Ask Mori](docs/screenshots/mori-chat.png) **Ask her** about the meeting in progress | <p align="center"><img src="docs/screenshots/mori/mori.gif" alt="Mori's animations" height="320"></p> |
+| ![Ask Mori](docs/screenshots/mori-chat.png) **Ask her** about this meeting or all of them | <p align="center"><img src="docs/screenshots/mori/desktop.png" alt="Mori on the desktop with live points" height="320"> <img src="docs/screenshots/mori/mori.gif" alt="Mori's animations" height="320"></p> **On the desktop** — transparent, always on top |
 
 ## Gallery
 

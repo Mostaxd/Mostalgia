@@ -24,6 +24,10 @@ ksni = { version = "0.3.7", default-features = false, features = ["blocking", "a
 # Desktop notifications with an "Aufnahme starten" button (same zbus as ksni/keyring).
 zbus = { version = "5.19", default-features = false, features = ["blocking-api", "async-io"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Mori's desktop window (XWayland): always on top, placement, input shape.
+# Same x11rb / raw-window-handle as GPUI's Linux backend.
+x11rb = { version = "0.13.2", features = ["shape", "randr"] }
+raw-window-handle = "0.6"
 
 [features]
 default = []
