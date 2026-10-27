@@ -670,18 +670,25 @@ impl Render for SettingsView {
         };
         let theme = cx.theme().clone();
         // A setting row: label (+ hint) on the left, control on the right.
+        // A setting row: label (+ hint) and its control side by side; when the
+        // card is too narrow the control wraps below the label instead of
+        // squeezing it (the label never gets narrower than ~12 rem).
         let row = |label: &str, hint: Option<&str>, control: AnyElement| {
             h_flex()
+                .w_full()
+                .flex_wrap()
                 .justify_between()
-                .gap_4()
+                .items_center()
+                .gap_x_4()
+                .gap_y_2()
                 .child(
                     v_flex()
-                        .min_w_0()
                         .flex_1()
+                        .min_w(px(190.))
                         .child(div().text_sm().child(label.to_string()))
                         .when_some(hint, |el, h| el.child(div().text_xs().text_color(theme.muted_foreground).child(h.to_string()))),
                 )
-                .child(control)
+                .child(div().flex_none().max_w_full().child(control))
         };
         let switch = |id: &'static str, on: bool, cx: &mut Context<Self>, f: fn(&mut Config, bool)| {
             Switch::new(id)

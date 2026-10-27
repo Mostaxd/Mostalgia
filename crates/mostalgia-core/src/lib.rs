@@ -11,6 +11,7 @@ pub mod denoise;
 pub mod diarize;
 pub mod export;
 pub mod finalize;
+pub mod i18n;
 pub mod paths;
 pub mod playback;
 pub mod recorder;

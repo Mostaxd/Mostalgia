@@ -31,11 +31,19 @@ fn main() {
         gpui_kit::init(cx);
         load_fonts(cx);
     });
+    // UI_LANG=en|de picks the app language; WIDTH=<px> the window width.
+    mostalgia_core::i18n::set_lang(mostalgia_core::i18n::resolve(&std::env::var("UI_LANG").unwrap_or_else(|_| "de".into())));
+    let width: f32 = std::env::var("WIDTH").ok().and_then(|w| w.parse().ok()).unwrap_or(1240.);
+    // THEMES=hell,comic limits which themes are rendered.
+    let only: Option<Vec<String>> = std::env::var("THEMES").ok().map(|t| t.split(',').map(str::to_string).collect());
 
     // Every theme on the live-recording screen; the full tour in light and dark.
     let mut runs: Vec<(String, bool)> = vec![("hell".into(), true), ("dunkel".into(), true)];
     runs.extend(mostalgia_app::themes::all().into_iter().map(|t| (t.id, false)).filter(|(id, _)| id != "hell" && id != "dunkel"));
     for (theme, full) in runs {
+        if only.as_ref().is_some_and(|o| !o.contains(&theme)) {
+            continue;
+        }
         let spec = mostalgia_app::themes::resolve(&theme, false);
         cx.update(|cx| mostalgia_app::themes::apply(&spec, cx));
         let (handle, view) = cx
@@ -45,7 +53,7 @@ fn main() {
                     WindowOptions {
                         window_bounds: Some(WindowBounds::Windowed(Bounds {
                             origin: Default::default(),
-                            size: size(px(1240.), px(if std::env::var_os("TALL").is_some() { 2200. } else { 820. })),
+                            size: size(px(width), px(if std::env::var_os("TALL").is_some() { 2200. } else { 820. })),
                         })),
                         focus: false,
                         show: false,

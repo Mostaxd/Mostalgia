@@ -268,6 +268,7 @@ impl ModelArgs {
 }
 
 fn main() -> Result<()> {
+    mostalgia_core::i18n::set_lang(mostalgia_core::i18n::resolve(&mostalgia_core::config::Config::load().ui_language));
     let cli = Cli::parse();
     match cli.command {
         Command::Start {

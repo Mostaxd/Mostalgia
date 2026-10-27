@@ -7,6 +7,8 @@ actions!(mostalgia, [Quit]);
 fn main() {
     gpui_kit::application().with_assets(AppAssets).run(|cx: &mut App| {
         gpui_kit::init(cx);
+        let config = mostalgia_core::config::Config::load();
+        mostalgia_core::i18n::set_lang(mostalgia_core::i18n::resolve(&config.ui_language));
         load_fonts(cx);
 
         cx.bind_keys([

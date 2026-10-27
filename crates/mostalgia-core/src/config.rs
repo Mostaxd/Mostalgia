@@ -10,6 +10,8 @@ use crate::vad;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    /// App language: "system", "de" or "en".
+    pub ui_language: String,
     /// Pulse source for the mic (`None` = system default).
     pub mic_device: Option<String>,
     /// Pulse source for system audio (`None` = monitor of the default output).
@@ -64,6 +66,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            ui_language: "system".into(),
             mic_device: None,
             system_device: None,
             record_mic: true,
