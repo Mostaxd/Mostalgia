@@ -1,0 +1,10 @@
+[workspace]
+resolver = "3"
+members = ["crates/mostalgia-core", "crates/mostalgia-cli", "crates/mostalgia-app"]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2024"
+
+[profile.release]
+lto = "thin"

@@ -1,0 +1,124 @@
+//! Controlling the running app from outside: a Unix socket for
+//! `mostalgia toggle` (bind it to a GNOME keyboard shortcut — Wayland doesn't
+//! let apps grab global hotkeys) and a tray icon (StatusNotifierItem; GNOME
+//! shows it with the AppIndicator extension Ubuntu ships).
+
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::sync::mpsc::Sender;
+
+use mostalgia_core::paths;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Command {
+    /// Start recording, or stop if one is running.
+    Toggle,
+    Start,
+    Stop,
+    /// Bring the window to the front.
+    Show,
+    Quit,
+}
+
+impl Command {
+    fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim() {
+            "toggle" => Command::Toggle,
+            "start" => Command::Start,
+            "stop" => Command::Stop,
+            "show" => Command::Show,
+            "quit" => Command::Quit,
+            _ => return None,
+        })
+    }
+}
+
+/// Listens on the control socket on a background thread. Fails if another
+/// instance already owns it.
+pub fn listen(tx: Sender<Command>) -> std::io::Result<()> {
+    let path = paths::control_socket();
+    if path.exists() {
+        // A live socket means another instance runs; a dead one is stale.
+        if UnixStream::connect(&path).is_ok() {
+            return Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, "mostalgia is already running"));
+        }
+        std::fs::remove_file(&path)?;
+    }
+    let listener = UnixListener::bind(&path)?;
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(&stream);
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_ok() {
+                let reply = match Command::parse(&line) {
+                    Some(cmd) => {
+                        let _ = tx.send(cmd);
+                        "ok\n"
+                    }
+                    None => "unknown command\n",
+                };
+                let _ = (&stream).write_all(reply.as_bytes());
+            }
+        }
+    });
+    Ok(())
+}
+
+pub fn cleanup() {
+    let _ = std::fs::remove_file(paths::control_socket());
+}
+
+pub struct Tray {
+    pub tx: Sender<Command>,
+    pub recording: bool,
+}
+
+impl ksni::Tray for Tray {
+    fn id(&self) -> String {
+        "mostalgia".into()
+    }
+
+    fn title(&self) -> String {
+        "mostalgia".into()
+    }
+
+    fn icon_name(&self) -> String {
+        if self.recording { "media-record".into() } else { "audio-input-microphone".into() }
+    }
+
+    fn tool_tip(&self) -> ksni::ToolTip {
+        ksni::ToolTip {
+            title: if self.recording { "mostalgia — Aufnahme läuft".into() } else { "mostalgia".into() },
+            ..Default::default()
+        }
+    }
+
+    fn activate(&mut self, _x: i32, _y: i32) {
+        let _ = self.tx.send(Command::Show);
+    }
+
+    fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
+        use ksni::menu::StandardItem;
+        let item = |label: &str, icon: &str, cmd: Command| {
+            StandardItem {
+                label: label.into(),
+                icon_name: icon.into(),
+                activate: Box::new(move |t: &mut Self| {
+                    let _ = t.tx.send(cmd);
+                }),
+                ..Default::default()
+            }
+            .into()
+        };
+        vec![
+            if self.recording {
+                item("Aufnahme beenden", "media-playback-stop", Command::Stop)
+            } else {
+                item("Aufnahme starten", "media-record", Command::Start)
+            },
+            item("Fenster anzeigen", "window-new", Command::Show),
+            ksni::MenuItem::Separator,
+            item("Beenden", "application-exit", Command::Quit),
+        ]
+    }
+}

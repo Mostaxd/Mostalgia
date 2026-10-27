@@ -1,0 +1,34 @@
+[package]
+name = "mostalgia-core"
+description = "Capture, live + final transcription, storage and summaries for mostalgia"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+chrono = "0.4.45"
+crossbeam-channel = "0.5.17"
+dirs = "7.0.0"
+docx-rs = "0.4.22"
+hound = "3.5.1"
+keyring = "4.2.0"
+libpulse-binding = "2.30.1"
+libpulse-simple-binding = "2.29.0"
+nnnoiseless = { version = "0.5.2", default-features = false }
+reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "json", "rustls"] }
+rusqlite = { version = "0.41.0", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sherpa-rs = { version = "0.6.8", default-features = false, features = ["download-binaries"], optional = true }
+sherpa-rs-sys = { version = "0.6.8", default-features = false, features = ["download-binaries"], optional = true }
+whisper-rs = "0.16.0"
+whisper-rs-sys = "0.15.0"
+
+
+[features]
+default = ["diarization"]
+vulkan = ["whisper-rs/vulkan"]
+cuda = ["whisper-rs/cuda"]
+openblas = ["whisper-rs/openblas"]
+# Speaker diarization (sherpa-onnx; its shared libraries are copied next to the binary).
+diarization = ["dep:sherpa-rs", "dep:sherpa-rs-sys"]

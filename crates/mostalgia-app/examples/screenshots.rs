@@ -1,0 +1,155 @@
+//! Renders the app's screens offscreen to PNGs (light and dark), using the
+//! real library database. Run with:
+//!
+//!     cargo run -p mostalgia-app --example screenshots --features screenshots -- <out-dir> [meeting-id]
+
+use std::sync::Arc;
+
+use gpui_kit::component::Root;
+use gpui_kit::*;
+use mostalgia_app::{app::MostalgiaApp, load_fonts};
+use mostalgia_core::Source;
+
+fn main() {
+    let mut args = std::env::args().skip(1);
+    let out = std::path::PathBuf::from(args.next().unwrap_or_else(|| "screenshots".into()));
+    let meeting: Option<i64> = args.next().and_then(|s| s.parse().ok());
+    std::fs::create_dir_all(&out).unwrap();
+
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_platform::current_platform(true).text_system(),
+        Arc::new(mostalgia_app::AppAssets),
+        gpui_platform::current_headless_renderer,
+    );
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        load_fonts(cx);
+    });
+
+    // Every theme on the live-recording screen; the full tour in light and dark.
+    let mut runs: Vec<(String, bool)> = vec![("hell".into(), true), ("dunkel".into(), true)];
+    runs.extend(mostalgia_app::themes::all().into_iter().map(|t| (t.id, false)).filter(|(id, _)| id != "hell" && id != "dunkel"));
+    for (theme, full) in runs {
+        let spec = mostalgia_app::themes::resolve(&theme, false);
+        cx.update(|cx| mostalgia_app::themes::apply(&spec, cx));
+        let (handle, view) = cx
+            .update(|cx| {
+                let mut app = None;
+                let h = gpui_kit::open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Bounds {
+                            origin: Default::default(),
+                            size: size(px(1240.), px(if std::env::var_os("TALL").is_some() { 2200. } else { 820. })),
+                        })),
+                        focus: false,
+                        show: false,
+                        ..Default::default()
+                    },
+                    cx,
+                    |window, cx| {
+                        let view = cx.new(|cx| MostalgiaApp::new(window, cx));
+                        app = Some(view.clone());
+                        cx.new(|cx| Root::new(view, window, cx))
+                    },
+                )
+                .unwrap();
+                (h.0, app.unwrap())
+            });
+        let handle: AnyWindowHandle = handle;
+        // Opening a window syncs the theme to its (light) headless appearance.
+        cx.update(|cx| mostalgia_app::themes::apply(&spec, cx));
+
+        let shot = |name: &str, cx: &mut HeadlessAppContext| {
+            cx.run_until_parked();
+            cx.update_window(handle, |_, window, _| window.refresh()).unwrap();
+            cx.run_until_parked();
+            let img = cx.capture_screenshot(handle).expect("offscreen rendering");
+            let path = out.join(format!("{name}-{theme}.png"));
+            img.save(&path).unwrap();
+            println!("{}", path.display());
+        };
+
+        if full {
+            shot("1-new-recording", &mut cx);
+        }
+
+        cx.update_window(handle, |_, _, cx| {
+            let rec = view.read(cx).recording_view();
+            rec.update(cx, |r, cx| {
+                r.demo(
+                    187,
+                    &[
+                        (Source::System, 3.2, "Guten Morgen zusammen, schön, dass ihr alle da seid."),
+                        (Source::Mic, 8.9, "Morgen! Sollen wir direkt mit dem Budget für das nächste Quartal anfangen?"),
+                        (Source::System, 15.4, "Ja, gerne. Wir liegen aktuell etwa zehn Prozent unter Plan, vor allem wegen der Messe im Mai."),
+                        (Source::Mic, 27.0, "Okay. Dann schlage ich vor, dass wir die Marketingausgaben bis Ende Juni einfrieren."),
+                        (Source::System, 36.8, "Einverstanden. Anna, kannst du bis Freitag eine neue Prognose schicken?"),
+                        (Source::System, 44.1, "Klar, mache ich. Ich brauche nur noch die Zahlen aus dem Vertrieb."),
+                        (Source::Mic, 52.5, "Die schicke ich dir heute Nachmittag."),
+                    ],
+                    cx,
+                )
+            });
+        })
+        .unwrap();
+        // Let the line fade-ins finish.
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        shot("2-recording", &mut cx);
+        // The empty live transcript, where themes draw their scene.
+        cx.update_window(handle, |_, _, cx| {
+            let rec = view.read(cx).recording_view();
+            rec.update(cx, |r, cx| r.demo(4, &[], cx));
+        })
+        .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        shot("7-empty", &mut cx);
+        // Each settings category in Hell, Dunkel and one playful theme.
+        if full || theme == "comic" {
+            cx.update_window(handle, |_, window, cx| {
+                view.update(cx, |app, cx| app.open_settings(window, cx));
+            })
+            .unwrap();
+            for cat in mostalgia_app::settings::SettingsView::CATEGORY_IDS {
+                cx.update_window(handle, |_, _, cx| {
+                    if let Some(s) = view.read(cx).settings_view() {
+                        s.update(cx, |s, cx| s.show_category(cat, cx));
+                    }
+                })
+                .unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                shot(&format!("8-settings-{cat}"), &mut cx);
+            }
+        }
+        if !full {
+            continue;
+        }
+
+        if let Some(id) = meeting {
+            cx.update_window(handle, |_, window, cx| {
+                view.update(cx, |app, cx| app.open_meeting(id, window, cx));
+            })
+            .unwrap();
+            for (tab, name) in [(0, "3-summary"), (1, "4-transcript"), (2, "5-audio")] {
+                cx.update_window(handle, |_, _, cx| {
+                    if let Some(m) = view.read(cx).meeting_view() {
+                        m.update(cx, |m, cx| m.set_tab(tab, cx));
+                    }
+                })
+                .unwrap();
+                // The waveform loads in the background.
+                // Let the tab indicator settle; the waveform loads in the background.
+                cx.run_until_parked();
+                cx.update_window(handle, |_, window, _| window.refresh()).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(if tab == 2 { 800 } else { 400 }));
+                shot(name, &mut cx);
+            }
+        }
+
+        cx.update_window(handle, |_, window, cx| {
+            view.update(cx, |app, cx| app.open_settings(window, cx));
+        })
+        .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        shot("6-settings", &mut cx);
+    }
+}
