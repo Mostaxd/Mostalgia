@@ -174,81 +174,90 @@ impl AskView {
         }
     }
 
-    /// One answer line: words and citation chips in a wrapping flow
-    /// (right-to-left for Arabic).
     fn render_line(&self, line: &str, key: (usize, usize), cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme().clone();
-        let mut line = line.trim_end().replace("**", "");
-        let mut bullet = false;
-        if let Some(rest) = line.trim_start().strip_prefix("- ").or_else(|| line.trim_start().strip_prefix("* ")) {
-            line = rest.to_string();
-            bullet = true;
-        }
-        let heading = line.starts_with('#');
-        let line = line.trim_start_matches('#').trim().to_string();
-        let rtl = ui::is_rtl(&line);
-        let mut items: Vec<AnyElement> = Vec::new();
-        for (i, piece) in ask::parse_answer(&line).into_iter().enumerate() {
-            match piece {
-                Piece::Text(t) => {
-                    for w in t.split_whitespace() {
-                        items.push(div().flex_none().child(w.to_string()).into_any_element());
-                    }
-                }
-                Piece::Cite(c) => {
-                    let (id, secs) = (c.meeting_id, c.secs);
-                    // "Titel · dd.mm. · hh:mm:ss" with the title shortened.
-                    let parts: Vec<&str> = c.label.split(" · ").collect();
-                    let title = parts.first().copied().unwrap_or_default();
-                    let short = if title.chars().count() > 22 {
-                        format!("{}…", title.chars().take(21).collect::<String>().trim_end())
-                    } else {
-                        title.to_string()
-                    };
-                    let chip = std::iter::once(short).chain(parts.iter().skip(1).map(|p| p.to_string())).collect::<Vec<_>>().join(" · ");
-                    items.push(
-                        h_flex()
-                            .id(SharedString::from(format!("cite-{}-{}-{i}", key.0, key.1)))
-                            .flex_none()
-                            .gap_1()
-                            .px_1p5()
-                            .rounded(theme.radius)
-                            .bg(theme.primary.opacity(0.12))
-                            .text_color(theme.primary)
-                            .text_xs()
-                            .cursor_pointer()
-                            .hover(|s| s.bg(theme.primary.opacity(0.22)))
-                            .child(Icon::new(IconName::Play).xsmall())
-                            .child(chip)
-                            .tooltip({
-                                let full: SharedString = c.label.clone().into();
-                                move |window, cx| gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(window, cx)
-                            })
-                            .on_click(cx.listener(move |_, _, _, cx| cx.emit(AskViewEvent::OpenCitation { meeting_id: id, secs })))
-                            .into_any_element(),
-                    );
+        let weak = cx.entity().downgrade();
+        answer_line(line, &format!("{}-{}", key.0, key.1), cx, move |meeting_id, secs, _, cx| {
+            weak.update(cx, |_, cx| cx.emit(AskViewEvent::OpenCitation { meeting_id, secs })).ok();
+        })
+    }
+}
+
+/// One answer line: words and citation chips in a wrapping flow
+/// (right-to-left for Arabic). `key` makes the chip ids unique; clicking a
+/// chip calls `on_cite` with the meeting and second.
+pub fn answer_line(line: &str, key: &str, cx: &App, on_cite: impl Fn(i64, f64, &mut Window, &mut App) + Clone + 'static) -> AnyElement {
+    let theme = cx.theme().clone();
+    let mut line = line.trim_end().replace("**", "");
+    let mut bullet = false;
+    if let Some(rest) = line.trim_start().strip_prefix("- ").or_else(|| line.trim_start().strip_prefix("* ")) {
+        line = rest.to_string();
+        bullet = true;
+    }
+    let heading = line.starts_with('#');
+    let line = line.trim_start_matches('#').trim().to_string();
+    let rtl = ui::is_rtl(&line);
+    let mut items: Vec<AnyElement> = Vec::new();
+    for (i, piece) in ask::parse_answer(&line).into_iter().enumerate() {
+        match piece {
+            Piece::Text(t) => {
+                for w in t.split_whitespace() {
+                    items.push(div().flex_none().child(w.to_string()).into_any_element());
                 }
             }
+            Piece::Cite(c) => {
+                let (id, secs) = (c.meeting_id, c.secs);
+                // "Titel · dd.mm. · hh:mm:ss" with the title shortened.
+                let parts: Vec<&str> = c.label.split(" · ").collect();
+                let title = parts.first().copied().unwrap_or_default();
+                let short = if title.chars().count() > 22 {
+                    format!("{}…", title.chars().take(21).collect::<String>().trim_end())
+                } else {
+                    title.to_string()
+                };
+                let chip = std::iter::once(short).chain(parts.iter().skip(1).map(|p| p.to_string())).collect::<Vec<_>>().join(" · ");
+                let on_cite = on_cite.clone();
+                items.push(
+                    h_flex()
+                        .id(SharedString::from(format!("cite-{key}-{i}")))
+                        .flex_none()
+                        .gap_1()
+                        .px_1p5()
+                        .rounded(theme.radius)
+                        .bg(theme.primary.opacity(0.12))
+                        .text_color(theme.primary)
+                        .text_xs()
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme.primary.opacity(0.22)))
+                        .child(Icon::new(IconName::Play).xsmall())
+                        .child(chip)
+                        .tooltip({
+                            let full: SharedString = c.label.clone().into();
+                            move |window, cx| gpui_kit::component::tooltip::Tooltip::new(full.clone()).build(window, cx)
+                        })
+                        .on_click(move |_, window, cx| on_cite(id, secs, window, cx))
+                        .into_any_element(),
+                );
+            }
         }
-        h_flex()
-            .w_full()
-            .items_start()
-            .gap_2()
-            .when(rtl, |el| el.flex_row_reverse())
-            .when(bullet, |el| el.child(div().flex_none().mt(px(9.)).size(px(5.)).rounded_full().bg(theme.muted_foreground)))
-            .child(
-                h_flex()
-                    .flex_1()
-                    .flex_wrap()
-                    .items_center()
-                    .gap_x(px(4.))
-                    .gap_y(px(4.))
-                    .when(rtl, |el| el.flex_row_reverse())
-                    .when(heading, |el| el.font_semibold())
-                    .children(items),
-            )
-            .into_any_element()
     }
+    h_flex()
+        .w_full()
+        .items_start()
+        .gap_2()
+        .when(rtl, |el| el.flex_row_reverse())
+        .when(bullet, |el| el.child(div().flex_none().mt(px(9.)).size(px(5.)).rounded_full().bg(theme.muted_foreground)))
+        .child(
+            h_flex()
+                .flex_1()
+                .flex_wrap()
+                .items_center()
+                .gap_x(px(4.))
+                .gap_y(px(4.))
+                .when(rtl, |el| el.flex_row_reverse())
+                .when(heading, |el| el.font_semibold())
+                .children(items),
+        )
+        .into_any_element()
 }
 
 impl Render for AskView {

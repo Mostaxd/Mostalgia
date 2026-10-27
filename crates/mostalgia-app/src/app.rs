@@ -14,6 +14,7 @@ use mostalgia_core::i18n::{self, tr, trf};
 use mostalgia_core::paths;
 use mostalgia_core::store::{MeetingSummary, SearchHit, Store};
 
+use crate::companion::{Companion, MoriEvent};
 use crate::meeting::{MeetingEvent, MeetingView};
 use crate::recording::{RecordingEvent, RecordingView, SharedEngine};
 use crate::settings::{SettingsEvent, SettingsView};
@@ -55,6 +56,8 @@ pub struct MostalgiaApp {
     /// Meeting being renamed inline in the sidebar.
     rename: Option<(i64, Entity<InputState>)>,
     library_focus: FocusHandle,
+    /// Mori, drawn over the content when turned on.
+    companion: Entity<Companion>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -65,9 +68,12 @@ impl MostalgiaApp {
         let engine: SharedEngine = Arc::new(Mutex::new(None));
         let recording = cx.new(|cx| RecordingView::new(engine.clone(), cx));
         let search = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Transkripte durchsuchen")));
+        let companion = cx.new(|cx| Companion::new(recording.clone(), window, cx));
         let subs = vec![
             cx.subscribe_in(&recording, window, |this, _, event: &RecordingEvent, window, cx| match event {
                 RecordingEvent::Saved(id) => {
+                    // Pinned points go into the meeting before it opens.
+                    this.companion.update(cx, |c, cx| c.save_pinned(*id, cx));
                     this.reload(cx);
                     this.open_meeting(*id, window, cx);
                     if let Screen::Meeting(view) = &this.screen {
@@ -82,6 +88,21 @@ impl MostalgiaApp {
                 }
             }),
             cx.observe_window_appearance(window, |_, window, cx| ui::apply_theme(window, cx)),
+            cx.subscribe_in(&companion, window, |this, _, event: &MoriEvent, window, cx| match event {
+                MoriEvent::OpenCitation { meeting_id, secs } => {
+                    this.open_meeting(*meeting_id, window, cx);
+                    if let Some(m) = this.meeting_view() {
+                        let secs = *secs;
+                        m.update(cx, |m, cx| m.jump_to(secs, cx));
+                    }
+                }
+                MoriEvent::OpenSettings => {
+                    this.open_settings(window, cx);
+                    if let Some(s) = this.settings_view() {
+                        s.update(cx, |s, cx| s.show_category("ki", cx));
+                    }
+                }
+            }),
         ];
         let mut this = Self {
             engine,
@@ -102,6 +123,7 @@ impl MostalgiaApp {
             delete_audio: true,
             rename: None,
             library_focus: cx.focus_handle(),
+            companion,
             _subscriptions: subs,
         };
         this.reload(cx);
@@ -337,8 +359,10 @@ impl MostalgiaApp {
             .and_then(|e| e.as_ref().and_then(|e| e.gpu().map(str::to_string)));
         let view = cx.new(|cx| SettingsView::new(gpu, window, cx));
         let recording = self.recording.clone();
+        let companion = self.companion.clone();
         let sub = cx.subscribe(&view, move |_, _, _: &SettingsEvent, cx| {
             recording.update(cx, |r, cx| r.reload_config(cx));
+            companion.update(cx, |c, cx| c.reload_config(cx));
         });
         self._subscriptions.push(sub);
         self.screen = Screen::Settings(view);
@@ -348,6 +372,11 @@ impl MostalgiaApp {
     #[doc(hidden)]
     pub fn recording_view(&self) -> Entity<RecordingView> {
         self.recording.clone()
+    }
+
+    #[doc(hidden)]
+    pub fn companion_view(&self) -> Entity<Companion> {
+        self.companion.clone()
     }
 
     #[doc(hidden)]
@@ -813,6 +842,7 @@ impl Render for MostalgiaApp {
             )
             .children(call_prompt)
             .child(h_flex().flex_1().min_h_0().child(sidebar).child(div().flex_1().min_w_0().h_full().child(content)))
+            .child(self.companion.clone())
             .children(delete_dialog)
     }
 }

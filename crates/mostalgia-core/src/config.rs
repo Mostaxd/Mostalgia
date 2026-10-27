@@ -71,6 +71,15 @@ pub struct Config {
     pub live_engine: SttChoice,
     /// Speech-to-text for the final pass after a recording.
     pub final_engine: SttChoice,
+    /// Show Mori, the note-taking companion, in the window.
+    pub companion: bool,
+    /// Mori's size (1.0 ≈ 220 px tall).
+    pub companion_scale: f32,
+    /// Ask for new live points after this much new speech (0 = off).
+    pub companion_points_interval_secs: u32,
+    /// Where Mori stands: her top-left as a fraction (0–1) of the room the
+    /// window leaves her horizontally and vertically (`None` = top right).
+    pub companion_pos: Option<(f32, f32)>,
 }
 
 /// Which speech-to-text engine to use: local Whisper (`connection` empty)
@@ -147,6 +156,10 @@ impl Default for Config {
             ask_model: String::new(),
             live_engine: SttChoice::local(),
             final_engine: SttChoice::local(),
+            companion: false,
+            companion_scale: 1.0,
+            companion_points_interval_secs: 90,
+            companion_pos: None,
         }
     }
 }

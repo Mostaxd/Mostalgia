@@ -1,0 +1,573 @@
+//! Mori, the optional note-taking companion: an animated character that
+//! writes along while people speak, answers live questions and pops up
+//! points she noticed. She is drawn over the window's content, can be
+//! dragged anywhere inside it, and opens a chat bubble when clicked.
+
+pub mod art;
+mod bubble;
+mod points;
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use crossbeam_channel::Receiver;
+use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::{ActiveTheme, StyledExt, h_flex};
+use gpui_kit::prelude::*;
+use gpui_kit::*;
+use mostalgia_core::ask::AskEvent;
+use mostalgia_core::companion::{AnswerEvent, Point};
+use mostalgia_core::config::Config;
+use mostalgia_core::i18n::{self, tr};
+
+use crate::recording::{LiveState, RecordingView};
+use art::Pose;
+
+pub enum MoriEvent {
+    /// Open a meeting at this moment (a citation in an answer).
+    OpenCitation { meeting_id: i64, secs: f64 },
+    /// Open Settings → AI & transcription (no connection set up).
+    OpenSettings,
+}
+
+impl EventEmitter<MoriEvent> for Companion {}
+
+/// Her height at scale 1.
+const BASE_HEIGHT: f32 = 220.;
+/// Distance she keeps from the window edges.
+const MARGIN: f32 = 16.;
+/// Default distance from the window top: below the title bar and the
+/// recording header, so she doesn't cover its buttons.
+const DEFAULT_TOP: f32 = 132.;
+/// Mouse travel (px) after which a press is a drag, not a click.
+const DRAG_THRESHOLD: f32 = 4.;
+/// Upper bound for the animation timer, whatever the art asks for.
+const MAX_FPS: u32 = 24;
+/// Speech counts as ongoing this long after it was last heard.
+const SPEECH_HOLD: Duration = Duration::from_millis(1500);
+/// How long she looks up when someone starts speaking.
+const LISTEN_FOR: Duration = Duration::from_millis(900);
+/// Idle this long outside a recording, she dozes off.
+const DOZE_AFTER: Duration = Duration::from_secs(300);
+
+/// Which conversation a question goes to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Scope {
+    /// The live transcript of the recording in progress.
+    Meeting,
+    /// All saved meetings (the "Fragen" search pipeline).
+    Library,
+}
+
+pub(crate) struct Turn {
+    scope: Scope,
+    question: String,
+    /// Answer so far (library answers carry [[m:ID@SECS]] markers).
+    answer: String,
+    status: Option<String>,
+    error: Option<String>,
+    done: bool,
+}
+
+enum ChatRx {
+    Live(Receiver<AnswerEvent>),
+    Library(Receiver<AskEvent>),
+}
+
+/// Which connection answers, for the bubble's header.
+#[derive(Clone)]
+pub(crate) struct Setup {
+    name: String,
+    model: String,
+    /// The local label ("Local · nothing leaves this computer") for local
+    /// connections; `None` for cloud ones.
+    local: Option<&'static str>,
+    /// Why she can't answer yet (no connection or key).
+    problem: Option<String>,
+}
+
+pub(crate) struct LivePoint {
+    id: usize,
+    point: Point,
+    pinned: bool,
+    dismissed: bool,
+    shown_at: Instant,
+}
+
+/// The last failure, shown next to her with her Error pose.
+#[derive(Clone)]
+pub(crate) struct MoriError {
+    message: String,
+    /// From a live points request (they pause until dismissed or retried).
+    points: bool,
+}
+
+struct Drag {
+    mouse: Point2,
+    origin: Point2,
+    moved: bool,
+}
+
+#[derive(Clone, Copy)]
+struct Point2 {
+    x: f32,
+    y: f32,
+}
+
+pub struct Companion {
+    recording: Entity<RecordingView>,
+    enabled: bool,
+    scale: f32,
+    points_interval: u32,
+    /// Top-left as fractions of the free room (see `Config::companion_pos`).
+    pos: Option<(f32, f32)>,
+    reduce_motion: bool,
+    /// Rendered frames for the current pixel height.
+    frames: HashMap<(Pose, usize), Arc<Image>>,
+    frames_px: u32,
+    pose: Pose,
+    frame: usize,
+    pose_since: Instant,
+    ticking: bool,
+    /// Window content size at the last render.
+    viewport: (f32, f32),
+    drag: Option<Drag>,
+    was_recording: bool,
+    idle_since: Instant,
+    /// Show the answer/point pose a little longer after it arrived.
+    talking_until: Option<Instant>,
+    error: Option<MoriError>,
+    // Chat bubble
+    open: bool,
+    input: Entity<InputState>,
+    turns: Vec<Turn>,
+    chat_rx: Option<ChatRx>,
+    scope_choice: Option<Scope>,
+    chat_scroll: ScrollHandle,
+    setup: Option<Setup>,
+    lang_seen: Option<i18n::Lang>,
+    // Live points
+    points: Vec<LivePoint>,
+    next_point: usize,
+    points_rx: Option<Receiver<Result<Vec<Point>, String>>>,
+    /// Finalized speech (secs) at the last points request.
+    points_mark: f64,
+    /// Transcript time the next points request starts from.
+    points_from: f64,
+    expanded: bool,
+    visible_seen: usize,
+    /// Screenshots: a fixed pose.
+    demo_pose: Option<Pose>,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl Companion {
+    pub fn new(recording: Entity<RecordingView>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Frag Mori …")));
+        let sub = cx.subscribe_in(&input, window, |this, input, event: &InputEvent, window, cx| {
+            if let InputEvent::PressEnter { .. } = event {
+                let q = input.read(cx).value().to_string();
+                input.update(cx, |s, cx| s.set_value("", window, cx));
+                this.ask(q, cx);
+            }
+        });
+        let mut this = Self {
+            recording,
+            enabled: false,
+            scale: 1.,
+            points_interval: 0,
+            pos: None,
+            reduce_motion: false,
+            frames: HashMap::new(),
+            frames_px: 0,
+            pose: Pose::Idle,
+            frame: 0,
+            pose_since: Instant::now(),
+            ticking: false,
+            viewport: (1200., 800.),
+            drag: None,
+            was_recording: false,
+            idle_since: Instant::now(),
+            talking_until: None,
+            error: None,
+            open: false,
+            input,
+            turns: Vec::new(),
+            chat_rx: None,
+            scope_choice: None,
+            chat_scroll: ScrollHandle::new(),
+            setup: None,
+            lang_seen: None,
+            points: Vec::new(),
+            next_point: 0,
+            points_rx: None,
+            points_mark: 0.,
+            points_from: 0.,
+            expanded: false,
+            visible_seen: 0,
+            demo_pose: None,
+            _subscriptions: vec![sub],
+        };
+        this.reload_config(cx);
+        this
+    }
+
+    /// Re-reads her settings (after the settings screen changed them).
+    pub fn reload_config(&mut self, cx: &mut Context<Self>) {
+        let config = Config::load();
+        self.enabled = config.companion;
+        self.scale = config.companion_scale.clamp(0.5, 2.);
+        self.points_interval = config.companion_points_interval_secs;
+        self.pos = config.companion_pos;
+        self.reduce_motion = config.reduce_motion;
+        if !self.enabled {
+            self.open = false;
+            self.drag = None;
+        }
+        if self.setup.is_some() {
+            self.load_setup();
+        }
+        cx.notify();
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn size(&self) -> (f32, f32) {
+        let h = BASE_HEIGHT * self.scale;
+        (h * art::FRAME_W / art::FRAME_H, h)
+    }
+
+    /// Free room for her top-left corner inside the window.
+    fn room(&self) -> (f32, f32) {
+        let (w, h) = self.size();
+        ((self.viewport.0 - w - 2. * MARGIN).max(0.), (self.viewport.1 - h - 2. * MARGIN).max(0.))
+    }
+
+    /// Her top-left in window coordinates.
+    fn origin(&self) -> Point2 {
+        let (rx, ry) = self.room();
+        match self.pos {
+            Some((fx, fy)) => Point2 { x: MARGIN + fx.clamp(0., 1.) * rx, y: MARGIN + fy.clamp(0., 1.) * ry },
+            None => Point2 { x: MARGIN + rx, y: DEFAULT_TOP.min(MARGIN + ry) },
+        }
+    }
+
+    fn set_origin(&mut self, x: f32, y: f32) {
+        let (rx, ry) = self.room();
+        let fx = if rx > 0. { ((x - MARGIN) / rx).clamp(0., 1.) } else { 0. };
+        let fy = if ry > 0. { ((y - MARGIN) / ry).clamp(0., 1.) } else { 0. };
+        self.pos = Some((fx, fy));
+    }
+
+    fn save_pos(&self) {
+        let mut config = Config::load();
+        config.companion_pos = self.pos;
+        if let Err(e) = config.save() {
+            eprintln!("[mostalgia] saving Mori's position: {e:#}");
+        }
+    }
+
+    fn mouse_down(&mut self, ev: &MouseDownEvent, cx: &mut Context<Self>) {
+        let o = self.origin();
+        self.drag = Some(Drag {
+            mouse: Point2 { x: ev.position.x.into(), y: ev.position.y.into() },
+            origin: o,
+            moved: false,
+        });
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    fn mouse_move(&mut self, ev: &MouseMoveEvent, cx: &mut Context<Self>) {
+        let Some(drag) = &mut self.drag else { return };
+        let (x, y): (f32, f32) = (ev.position.x.into(), ev.position.y.into());
+        let (dx, dy) = (x - drag.mouse.x, y - drag.mouse.y);
+        if !drag.moved && dx.hypot(dy) < DRAG_THRESHOLD {
+            return;
+        }
+        drag.moved = true;
+        let (ox, oy) = (drag.origin.x + dx, drag.origin.y + dy);
+        self.set_origin(ox, oy);
+        cx.notify();
+    }
+
+    fn mouse_up(&mut self, cx: &mut Context<Self>) {
+        let Some(drag) = self.drag.take() else { return };
+        if drag.moved {
+            self.save_pos();
+        } else {
+            self.toggle_bubble(cx);
+        }
+        self.idle_since = Instant::now();
+        cx.notify();
+    }
+
+    /// The frame image for her current pose, rendered at the pixel size
+    /// she is drawn at (cached per pose and frame).
+    fn frame_image(&mut self, px_h: u32) -> Arc<Image> {
+        if px_h != self.frames_px {
+            self.frames.clear();
+            self.frames_px = px_h;
+        }
+        let (pose, frame) = (self.pose, self.frame % art::frame_count(self.pose).max(1));
+        self.frames
+            .entry((pose, frame))
+            .or_insert_with(|| Arc::new(Image::from_bytes(ImageFormat::Svg, scaled_svg(pose, frame, px_h).into_bytes())))
+            .clone()
+    }
+
+    fn thinking(&self) -> bool {
+        self.points_rx.is_some() || self.chat_rx.is_some() && self.turns.last().is_some_and(|t| t.answer.is_empty())
+    }
+
+    fn talking(&self) -> bool {
+        self.chat_rx.is_some() || self.talking_until.is_some_and(|t| Instant::now() < t)
+    }
+
+    fn wanted_pose(&self, live: Option<LiveState>) -> Pose {
+        if let Some(p) = self.demo_pose {
+            return p;
+        }
+        if self.error.is_some() {
+            return Pose::Error;
+        }
+        if self.thinking() {
+            return Pose::Thinking;
+        }
+        if self.talking() {
+            return Pose::Talking;
+        }
+        let now = Instant::now();
+        match live {
+            Some(l) if l.paused => Pose::Sleeping,
+            Some(l) => {
+                let speaking = l.speech_at.is_some_and(|t| now - t < SPEECH_HOLD);
+                if speaking && l.speech_since.is_some_and(|t| now - t < LISTEN_FOR) {
+                    Pose::Listening
+                } else if speaking {
+                    Pose::Writing
+                } else {
+                    Pose::Idle
+                }
+            }
+            None if self.idle_since.elapsed() > DOZE_AFTER => Pose::Sleeping,
+            None => Pose::Idle,
+        }
+    }
+
+    /// A new recording clears what's left of the last one; the bubble's
+    /// default conversation follows whether one is running.
+    fn track_recording(&mut self, recording: bool) {
+        if recording == self.was_recording {
+            return;
+        }
+        self.was_recording = recording;
+        self.scope_choice = None;
+        self.idle_since = Instant::now();
+        if recording {
+            self.points.clear();
+            self.points_mark = 0.;
+            self.points_from = 0.;
+            self.expanded = false;
+        }
+    }
+
+    fn start_ticking(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.ticking = true;
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                let delay = this.update_in(cx, |this, window, cx| this.tick(window, cx)).ok().flatten();
+                let Some(delay) = delay else { break };
+                cx.background_executor().timer(delay).await;
+            }
+        })
+        .detach();
+    }
+
+    /// One animation step plus the bookkeeping (poses, answers, points).
+    /// Returns when to run again, `None` to stop (she's turned off).
+    fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<Duration> {
+        if !self.enabled {
+            self.ticking = false;
+            return None;
+        }
+        let live = self.recording.read(cx).live_state();
+        self.track_recording(live.is_some());
+        let mut changed = self.poll_chat(cx);
+        changed |= self.poll_points();
+        if let Some(l) = live {
+            self.maybe_request_points(l, cx);
+        }
+        let visible = self.visible_points().len();
+        changed |= visible != self.visible_seen;
+        self.visible_seen = visible;
+
+        let pose = self.wanted_pose(live);
+        // With reduced motion she holds each pose a while (errors show at once).
+        let hold = self.reduce_motion && pose != Pose::Error && self.pose_since.elapsed() < Duration::from_secs(2);
+        if pose != self.pose && !hold {
+            self.pose = pose;
+            self.frame = 0;
+            self.pose_since = Instant::now();
+            changed = true;
+        }
+        let busy = self.chat_rx.is_some() || self.points_rx.is_some();
+        let animate = !self.reduce_motion && window.is_window_active() && self.demo_pose.is_none();
+        if animate && art::frame_count(self.pose) > 1 {
+            self.frame = (self.frame + 1) % art::frame_count(self.pose);
+            changed = true;
+        }
+        if changed {
+            cx.notify();
+        }
+        Some(if animate {
+            Duration::from_secs_f32(1. / art::FPS.clamp(1, MAX_FPS) as f32)
+        } else if busy {
+            Duration::from_millis(100)
+        } else {
+            Duration::from_millis(400)
+        })
+    }
+
+    /// Stores the pinned points with the meeting just saved, then clears them.
+    pub fn save_pinned(&mut self, meeting_id: i64, cx: &mut Context<Self>) {
+        let pinned: Vec<&LivePoint> = self.points.iter().filter(|p| p.pinned && !p.dismissed).collect();
+        if !pinned.is_empty() {
+            let result = mostalgia_core::store::Store::open(&mostalgia_core::paths::database()).and_then(|store| {
+                for p in &pinned {
+                    store.add_note(meeting_id, p.point.kind.as_str(), &p.point.text, p.point.at_secs)?;
+                }
+                Ok(())
+            });
+            if let Err(e) = result {
+                self.error = Some(MoriError {
+                    message: mostalgia_core::i18n::trf("Moris Notizen konnten nicht gespeichert werden: {}", &[&format!("{e:#}")]),
+                    points: false,
+                });
+            }
+        }
+        self.points.clear();
+        self.expanded = false;
+        cx.notify();
+    }
+
+    /// Back to normal after the screenshot demos.
+    #[doc(hidden)]
+    pub fn demo_reset(&mut self, cx: &mut Context<Self>) {
+        self.demo_pose = None;
+        self.open = false;
+        self.turns.clear();
+        self.points.clear();
+        self.scope_choice = None;
+        cx.notify();
+    }
+
+    /// Fixes her pose (screenshots).
+    #[doc(hidden)]
+    pub fn demo_pose(&mut self, pose: Option<Pose>, cx: &mut Context<Self>) {
+        self.demo_pose = pose;
+        if let Some(p) = pose {
+            self.pose = p;
+            self.frame = 0;
+        }
+        cx.notify();
+    }
+}
+
+/// `art::frame_svg` wrapped in an outer SVG of the size it is drawn at, so
+/// it is rasterized sharp instead of scaled from 200 × 320.
+fn scaled_svg(pose: Pose, frame: usize, px_h: u32) -> String {
+    let inner = art::frame_svg(pose, frame);
+    let inner = match inner.trim_start().strip_prefix("<?xml") {
+        Some(rest) => rest.split_once("?>").map_or("", |(_, r)| r).to_string(),
+        None => inner,
+    };
+    let h = px_h.max(1);
+    let w = ((h as f32) * art::FRAME_W / art::FRAME_H).round() as u32;
+    format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{w}" height="{h}" viewBox="0 0 {} {}">{inner}</svg>"#,
+        art::FRAME_W,
+        art::FRAME_H
+    )
+}
+
+impl Render for Companion {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.enabled {
+            return div().into_any_element();
+        }
+        if self.lang_seen != Some(i18n::lang()) {
+            self.lang_seen = Some(i18n::lang());
+            self.input.update(cx, |s, cx| s.set_placeholder(tr("Frag Mori …"), window, cx));
+        }
+        let vp = window.viewport_size();
+        self.viewport = (vp.width.into(), vp.height.into());
+        if !self.ticking {
+            self.start_ticking(window, cx);
+        }
+        let (w, h) = self.size();
+        let o = self.origin();
+        let image = self.frame_image((h * window.scale_factor()).round() as u32);
+        let dragging = self.drag.as_ref().is_some_and(|d| d.moved);
+
+        let character = div()
+            .id("mori")
+            .absolute()
+            .left(px(o.x))
+            .top(px(o.y))
+            .w(px(w))
+            .h(px(h))
+            .when(!dragging, |el| el.cursor_pointer())
+            .when(dragging, |el| el.cursor_grabbing())
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, ev: &MouseDownEvent, _, cx| this.mouse_down(ev, cx)))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _, cx| this.mouse_up(cx)))
+            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| this.mouse_move(ev, cx)))
+            .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Mori · klicken zum Fragen, ziehen zum Verschieben")).build(window, cx))
+            .child(img(image).size_full());
+
+        let bubble = self.render_bubble(o, (w, h), cx);
+        let stack = self.render_points(o, (w, h), cx);
+        let badge = self.render_badge(o, (w, h), cx);
+        let theme = cx.theme();
+        let name_tag = (self.pose == Pose::Error).then(|| {
+            h_flex()
+                .absolute()
+                .left(px(o.x))
+                .top(px(o.y + h - 6.))
+                .w(px(w))
+                .justify_center()
+                .child(div().px_2().rounded_full().bg(theme.danger).text_color(theme.danger_foreground).text_xs().font_semibold().child(tr("Fehler")))
+        });
+
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .children(stack)
+            .child(character)
+            .children(name_tag)
+            .children(badge)
+            .children(bubble)
+            // While dragging, a layer over everything keeps the mouse even
+            // when it outruns her.
+            .when(self.drag.is_some(), |el| {
+                el.child(
+                    div()
+                        .id("mori-drag")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .when(dragging, |el| el.cursor_grabbing())
+                        .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| this.mouse_move(ev, cx)))
+                        .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _, cx| this.mouse_up(cx)))
+                        .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _, cx| this.mouse_up(cx))),
+                )
+            })
+            .into_any_element()
+    }
+}

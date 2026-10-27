@@ -35,7 +35,22 @@ struct LiveLine {
     source: Source,
     speaker: Option<String>,
     start_secs: f64,
+    end_secs: f64,
     text: SharedString,
+}
+
+/// What Mori needs to know about a recording in progress (cheap to read).
+#[derive(Clone, Copy, Debug)]
+pub struct LiveState {
+    pub paused: bool,
+    /// When someone was last heard (speech level, provisional text or a line).
+    pub speech_at: Option<Instant>,
+    /// When the current stretch of speech began.
+    pub speech_since: Option<Instant>,
+    /// Seconds of finalized speech so far.
+    pub speech_secs: f64,
+    /// End of the newest finalized line, in recording seconds.
+    pub last_line_end: f64,
 }
 
 enum Phase {
@@ -69,14 +84,55 @@ struct Live {
     failed_chunks: usize,
     /// Recorder warnings (deduplicated) still shown.
     warnings: Vec<SharedString>,
+    /// Noise floor per source on the meter scale, for the speech gate.
+    floor: [f32; 2],
+    speech_at: Option<Instant>,
+    speech_since: Option<Instant>,
+    speech_secs: f64,
 }
 
 impl Live {
+    fn new(recorder: Option<Recorder>, rx: Receiver<Event>, choice: SttChoice) -> Self {
+        Self {
+            recorder,
+            rx,
+            started: Instant::now(),
+            paused_total: Duration::ZERO,
+            paused_since: None,
+            lines: Vec::new(),
+            interim: [None, None],
+            levels: [0.; 2],
+            bookmarks: Vec::new(),
+            last_latency_ms: None,
+            mic_quiet_since: None,
+            choice,
+            engine_error: None,
+            failed_chunks: 0,
+            warnings: Vec::new(),
+            floor: [1.; 2],
+            speech_at: None,
+            speech_since: None,
+            speech_secs: 0.,
+        }
+    }
+
     fn elapsed(&self) -> Duration {
         let paused_now = self.paused_since.map(|t| t.elapsed()).unwrap_or_default();
         self.started.elapsed().saturating_sub(self.paused_total + paused_now)
     }
+
+    /// Someone is speaking now.
+    fn heard(&mut self) {
+        let now = Instant::now();
+        if self.speech_at.is_none_or(|t| now - t > SPEECH_HOLD) {
+            self.speech_since = Some(now);
+        }
+        self.speech_at = Some(now);
+    }
 }
+
+/// How long speech counts as ongoing after it was last heard.
+const SPEECH_HOLD: Duration = Duration::from_millis(1500);
 
 pub struct RecordingView {
     config: Config,
@@ -132,34 +188,28 @@ impl RecordingView {
         let (tx, rx) = crossbeam_channel::unbounded();
         drop(tx);
         self.engine_label = Some(("Whisper large-v3-turbo · NVIDIA RTX PRO 3000 Blackwell Generation Laptop GPU".into(), false));
-        self.phase = Phase::Recording(Box::new(Live {
-            recorder: None,
-            rx,
-            started: Instant::now() - Duration::from_secs(secs),
-            paused_total: Duration::ZERO,
-            paused_since: None,
-            lines: lines
-                .iter()
-                .map(|(source, start_secs, text)| LiveLine {
-                    source: *source,
-                    speaker: None,
-                    start_secs: *start_secs,
-                    text: SharedString::from(text.to_string()),
-                })
-                .collect(),
-            interim: [None, Some((58.3, "And one more thing about the client meeting".into()))],
-            levels: [0.62, 0.48],
-            bookmarks: vec![Bookmark {
-                at_secs: 41.0,
-                label: trf("Markierung {}", &[&1]),
-            }],
-            last_latency_ms: Some(212),
-            mic_quiet_since: None,
-            choice: SttChoice::local(),
-            engine_error: None,
-            failed_chunks: 0,
-            warnings: Vec::new(),
-        }));
+        let mut live = Live::new(None, rx, SttChoice::local());
+        live.started = Instant::now() - Duration::from_secs(secs);
+        live.lines = lines
+            .iter()
+            .map(|(source, start_secs, text)| LiveLine {
+                source: *source,
+                speaker: None,
+                start_secs: *start_secs,
+                end_secs: start_secs + 4.,
+                text: SharedString::from(text.to_string()),
+            })
+            .collect();
+        live.speech_secs = live.lines.len() as f64 * 4.;
+        live.interim = [None, Some((58.3, "And one more thing about the client meeting".into()))];
+        live.levels = [0.62, 0.48];
+        live.bookmarks = vec![Bookmark {
+            at_secs: 41.0,
+            label: trf("Markierung {}", &[&1]),
+        }];
+        live.last_latency_ms = Some(212);
+        live.heard();
+        self.phase = Phase::Recording(Box::new(live));
         cx.notify();
     }
 
@@ -182,6 +232,44 @@ impl RecordingView {
         cx.notify();
     }
 
+    /// The recording in progress, for Mori.
+    pub fn live_state(&self) -> Option<LiveState> {
+        let Phase::Recording(live) = &self.phase else { return None };
+        Some(LiveState {
+            paused: live.paused_since.is_some(),
+            speech_at: live.speech_at,
+            speech_since: live.speech_since,
+            speech_secs: live.speech_secs,
+            last_line_end: live.lines.last().map_or(0., |l| l.end_secs),
+        })
+    }
+
+    /// The live transcript from `from_secs` on (finalized lines, then the
+    /// provisional text still being spoken), as Mori's model sees it.
+    pub fn transcript_lines(&self, from_secs: f64) -> Vec<mostalgia_core::companion::ContextLine> {
+        use mostalgia_core::companion::ContextLine;
+        use mostalgia_core::summary::llm_speaker;
+        let Phase::Recording(live) = &self.phase else { return Vec::new() };
+        let mut out: Vec<ContextLine> = live
+            .lines
+            .iter()
+            .filter(|l| l.end_secs >= from_secs)
+            .map(|l| ContextLine {
+                at_secs: l.start_secs,
+                speaker: llm_speaker(l.speaker.as_deref().unwrap_or(l.source.speaker_label())),
+                text: l.text.to_string(),
+                interim: false,
+            })
+            .collect();
+        for (i, slot) in live.interim.iter().enumerate() {
+            if let Some((start, text)) = slot {
+                let source = if i == 0 { Source::Mic } else { Source::System };
+                out.push(ContextLine { at_secs: *start, speaker: llm_speaker(source.speaker_label()), text: text.to_string(), interim: true });
+            }
+        }
+        out
+    }
+
     pub fn is_active(&self) -> bool {
         !matches!(self.phase, Phase::Setup)
     }
@@ -198,7 +286,13 @@ impl RecordingView {
         }
     }
 
-    fn save_config(&self) {
+    fn save_config(&mut self) {
+        // Mori's settings and position change elsewhere; keep them.
+        let disk = Config::load();
+        self.config.companion = disk.companion;
+        self.config.companion_scale = disk.companion_scale;
+        self.config.companion_points_interval_secs = disk.companion_points_interval_secs;
+        self.config.companion_pos = disk.companion_pos;
         if let Err(e) = self.config.save() {
             eprintln!("[mostalgia] saving settings: {e:#}");
         }
@@ -263,23 +357,7 @@ impl RecordingView {
         match Recorder::start(cfg, engine, tx) {
             Ok(recorder) => {
                 self.follow = true;
-                self.phase = Phase::Recording(Box::new(Live {
-                    recorder: Some(recorder),
-                    rx,
-                    started: Instant::now(),
-                    paused_total: Duration::ZERO,
-                    paused_since: None,
-                    lines: Vec::new(),
-                    interim: [None, None],
-                    levels: [0.; 2],
-                    bookmarks: Vec::new(),
-                    last_latency_ms: None,
-                    mic_quiet_since: None,
-                    choice: self.config.live_engine.clone(),
-                    engine_error: None,
-                    failed_chunks: 0,
-                    warnings: Vec::new(),
-                }));
+                self.phase = Phase::Recording(Box::new(Live::new(Some(recorder), rx, self.config.live_engine.clone())));
                 self.poll_loop(cx);
             }
             // Recorder::start consumed the engine; it reloads next time.
@@ -319,18 +397,25 @@ impl RecordingView {
         };
         let mut new_lines = false;
         let mut fresh = [0f32; 2];
-        for event in live.rx.try_iter() {
+        let events: Vec<Event> = live.rx.try_iter().collect();
+        for event in events {
             match event {
                 Event::Interim { source, start_secs, text } => {
+                    if !text.is_empty() {
+                        live.heard();
+                    }
                     live.interim[source as usize] = (!text.is_empty()).then(|| (start_secs, text.into()));
                     new_lines = true;
                 }
-                Event::Line { source, speaker, start_secs, text, .. } => {
+                Event::Line { source, speaker, start_secs, end_secs, text } => {
                     live.interim[source as usize] = None;
+                    live.speech_secs += (end_secs - start_secs).max(0.);
+                    live.heard();
                     live.lines.push(LiveLine {
                         source,
                         speaker,
                         start_secs,
+                        end_secs,
                         text: text.into(),
                     });
                     new_lines = true;
@@ -345,7 +430,16 @@ impl RecordingView {
                             live.mic_quiet_since = None;
                         }
                     }
-                    fresh[i] = fresh[i].max(ui::meter_level(rms));
+                    let level = ui::meter_level(rms);
+                    fresh[i] = fresh[i].max(level);
+                    // Adaptive speech gate: well above this source's noise
+                    // floor, which follows quiet stretches quickly and loud
+                    // ones only slowly.
+                    let floor = &mut live.floor[i];
+                    *floor = if level < *floor { level } else { *floor + (level - *floor) * 0.002 };
+                    if live.paused_since.is_none() && level > *floor + 0.2 && level > 0.3 {
+                        live.heard();
+                    }
                 }
                 Event::Chunk { millis, .. } => live.last_latency_ms = Some(millis),
                 Event::Warning(w) => {

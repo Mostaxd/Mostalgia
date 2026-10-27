@@ -3,6 +3,7 @@
 pub mod app;
 pub mod ask_view;
 pub mod autostart;
+pub mod companion;
 pub mod control;
 pub mod meeting;
 pub mod recording;

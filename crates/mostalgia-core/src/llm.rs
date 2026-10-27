@@ -1,5 +1,5 @@
 //! Talking to language models over a [`Connection`]: model lists, a
-//! connection test, and streamed single-turn completions (summaries).
+//! connection test, and streamed completions (summaries, Mori's answers).
 //! The tool-calling loop for "ask your meetings" lives in `ask::answer`.
 
 use std::io::{BufRead, BufReader};
@@ -183,6 +183,38 @@ pub struct Completion {
 /// `effort` is sent only where the model is known to support it; if the
 /// server still rejects it, that is an error (never a silent retry without).
 pub fn complete(conn: &Connection, model: &str, effort: Option<&str>, system: &str, user: &str) -> Result<Completion> {
+    chat(conn, model, effort, system, &[Message::user(user)], 64000, &mut |_| {})
+}
+
+/// One turn of a conversation for [`chat`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct Message {
+    /// "user" or "assistant".
+    pub role: &'static str,
+    pub content: String,
+}
+
+impl Message {
+    pub fn user(content: impl Into<String>) -> Self {
+        Self { role: "user", content: content.into() }
+    }
+
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self { role: "assistant", content: content.into() }
+    }
+}
+
+/// A conversation (ending with a user turn), streamed: `on_delta` gets the
+/// answer text as it arrives. Errors name the connection, like [`complete`].
+pub fn chat(
+    conn: &Connection,
+    model: &str,
+    effort: Option<&str>,
+    system: &str,
+    messages: &[Message],
+    max_tokens: u32,
+    on_delta: &mut dyn FnMut(&str),
+) -> Result<Completion> {
     let key = conn.require_key()?;
     let key = key.as_deref();
     let effort = match conn.api {
@@ -190,8 +222,8 @@ pub fn complete(conn: &Connection, model: &str, effort: Option<&str>, system: &s
         Api::OpenAi => effort.filter(|_| !openai_efforts(conn, model).is_empty()),
     };
     let result = match conn.api {
-        Api::Anthropic => claude(conn, key.unwrap_or_default(), model, effort, system, user),
-        Api::OpenAi => openai(conn, key, model, effort, system, user),
+        Api::Anthropic => claude(conn, key.unwrap_or_default(), model, effort, system, messages, max_tokens, on_delta),
+        Api::OpenAi => openai(conn, key, model, effort, system, messages, on_delta),
     };
     result.map_err(|e| effort_hint(e, effort.is_some()))
 }
@@ -205,13 +237,24 @@ pub(crate) fn effort_hint(e: anyhow::Error, effort_sent: bool) -> anyhow::Error 
     }
 }
 
-fn claude(conn: &Connection, key: &str, model: &str, effort: Option<&str>, system: &str, user: &str) -> Result<Completion> {
+#[allow(clippy::too_many_arguments)]
+fn claude(
+    conn: &Connection,
+    key: &str,
+    model: &str,
+    effort: Option<&str>,
+    system: &str,
+    messages: &[Message],
+    max_tokens: u32,
+    on_delta: &mut dyn FnMut(&str),
+) -> Result<Completion> {
+    let messages: Vec<Value> = messages.iter().map(|m| json!({ "role": m.role, "content": m.content })).collect();
     let mut body = json!({
         "model": model,
-        "max_tokens": 64000,
+        "max_tokens": max_tokens,
         "stream": true,
         "system": system,
-        "messages": [{ "role": "user", "content": user }],
+        "messages": messages,
     });
     // Thinking stays at the model's adaptive default; only the effort is set.
     if let Some(effort) = effort {
@@ -241,7 +284,9 @@ fn claude(conn: &Connection, key: &str, model: &str, effort: Option<&str>, syste
                 }
             }
             Some("content_block_delta") if event["delta"]["type"] == "text_delta" => {
-                text.push_str(event["delta"]["text"].as_str().unwrap_or_default());
+                let delta = event["delta"]["text"].as_str().unwrap_or_default();
+                on_delta(delta);
+                text.push_str(delta);
             }
             Some("message_delta") => {
                 if let Some(r) = event["delta"]["stop_reason"].as_str() {
@@ -260,14 +305,21 @@ fn claude(conn: &Connection, key: &str, model: &str, effort: Option<&str>, syste
     Ok(Completion { text, model: served, effort: effort.map(str::to_string) })
 }
 
-fn openai(conn: &Connection, key: Option<&str>, model: &str, effort: Option<&str>, system: &str, user: &str) -> Result<Completion> {
+fn openai(
+    conn: &Connection,
+    key: Option<&str>,
+    model: &str,
+    effort: Option<&str>,
+    system: &str,
+    messages: &[Message],
+    on_delta: &mut dyn FnMut(&str),
+) -> Result<Completion> {
+    let mut all = vec![json!({ "role": "system", "content": system })];
+    all.extend(messages.iter().map(|m| json!({ "role": m.role, "content": m.content })));
     let mut body = json!({
         "model": model,
         "stream": true,
-        "messages": [
-            { "role": "system", "content": system },
-            { "role": "user", "content": user },
-        ],
+        "messages": all,
     });
     if let Some(effort) = effort {
         body["reasoning_effort"] = json!(openai_effort(effort));
@@ -305,7 +357,11 @@ fn openai(conn: &Connection, key: Option<&str>, model: &str, effort: Option<&str
                 served = m.to_string();
             }
             let choice = &chunk["choices"][0];
-            text.push_str(choice["delta"]["content"].as_str().unwrap_or_default());
+            let delta = choice["delta"]["content"].as_str().unwrap_or_default();
+            if !delta.is_empty() {
+                on_delta(delta);
+            }
+            text.push_str(delta);
             if let Some(r) = choice["finish_reason"].as_str() {
                 finish = r.to_string();
             }
@@ -315,6 +371,7 @@ fn openai(conn: &Connection, key: Option<&str>, model: &str, effort: Option<&str
         let value: Value = resp.json().with_context(|| trf("{}: Antwort konnte nicht gelesen werden", &[&conn.name]))?;
         let choice = &value["choices"][0];
         text = choice["message"]["content"].as_str().unwrap_or_default().to_string();
+        on_delta(&text);
         finish = choice["finish_reason"].as_str().unwrap_or_default().to_string();
         served = value["model"].as_str().unwrap_or(model).to_string();
     }

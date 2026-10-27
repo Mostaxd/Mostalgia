@@ -27,6 +27,17 @@ pub struct Bookmark {
     pub label: String,
 }
 
+/// A point Mori noticed during the recording and the user pinned.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Note {
+    pub id: i64,
+    /// "decision", "action", "question" or "fact".
+    pub kind: String,
+    pub text: String,
+    pub at_secs: f64,
+    pub created_at: DateTime<Local>,
+}
+
 pub struct Meeting {
     pub id: i64,
     pub title: String,
@@ -36,6 +47,8 @@ pub struct Meeting {
     pub dir: PathBuf,
     pub segments: Vec<StoredSegment>,
     pub bookmarks: Vec<Bookmark>,
+    /// Mori's pinned notes, by time.
+    pub notes: Vec<Note>,
     pub summary: Option<Summary>,
     /// The engine that wrote the transcript ("Whisper … (lokal)", "OpenAI · whisper-1").
     pub transcript_engine: Option<String>,
@@ -98,7 +111,7 @@ pub struct NewMeeting<'a> {
     pub dir: &'a Path,
 }
 
-const SCHEMA_VERSION: i32 = 5;
+const SCHEMA_VERSION: i32 = 6;
 
 const SCHEMA: &str = "
 CREATE TABLE meetings (
@@ -183,6 +196,16 @@ const MIGRATIONS: &[&str] = &[
     // incomplete if that engine failed
     "ALTER TABLE meetings ADD COLUMN transcript_engine TEXT;
      ALTER TABLE meetings ADD COLUMN transcript_error TEXT;",
+    // 6: Mori's pinned notes
+    "CREATE TABLE notes (
+        id         INTEGER PRIMARY KEY,
+        meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        kind       TEXT NOT NULL,
+        text       TEXT NOT NULL,
+        at_secs    REAL NOT NULL,
+        created_at INTEGER NOT NULL
+    );
+    CREATE INDEX notes_meeting ON notes(meeting_id, at_secs);",
 ];
 
 fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
@@ -372,6 +395,7 @@ impl Store {
                 })
             })?
             .collect::<rusqlite::Result<_>>()?;
+        let notes = self.notes(id)?;
         Ok(Some(Meeting {
             id,
             title,
@@ -381,6 +405,7 @@ impl Store {
             dir: PathBuf::from(dir),
             segments,
             bookmarks,
+            notes,
             summary,
             transcript_engine,
             transcript_error,
@@ -454,6 +479,36 @@ impl Store {
         Ok(())
     }
 
+    /// Saves one of Mori's notes; returns its id.
+    pub fn add_note(&self, meeting_id: i64, kind: &str, text: &str, at_secs: f64) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO notes (meeting_id, kind, text, at_secs, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![meeting_id, kind, text, at_secs, Local::now().timestamp()],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// A meeting's notes, by time.
+    pub fn notes(&self, meeting_id: i64) -> Result<Vec<Note>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, kind, text, at_secs, created_at FROM notes WHERE meeting_id = ?1 ORDER BY at_secs, id")?;
+        let rows = stmt.query_map([meeting_id], |r| {
+            Ok(Note {
+                id: r.get(0)?,
+                kind: r.get(1)?,
+                text: r.get(2)?,
+                at_secs: r.get(3)?,
+                created_at: local(r.get(4)?),
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn delete_note(&self, note_id: i64) -> Result<bool> {
+        Ok(self.conn.execute("DELETE FROM notes WHERE id = ?1", [note_id])? > 0)
+    }
+
     /// Names a speaker: every line currently shown as `current` (an
     /// explicit name, or "Ich"/"Andere" for a source) gets `name`.
     pub fn rename_speaker(&self, meeting_id: i64, current: &str, name: &str) -> Result<usize> {
@@ -481,8 +536,8 @@ impl Store {
     }
 
     /// Removes a meeting and everything derived from it in one transaction:
-    /// transcript (and its search index rows), summary, bookmarks, speaker
-    /// names, "ask" passages and their index. With `delete_audio`, the
+    /// transcript (and its search index rows), summary, bookmarks, Mori's notes,
+    /// speaker names, "ask" passages and their index. With `delete_audio`, the
     /// session's WAV tracks go too (and the folder, if then empty).
     pub fn delete_meeting(&self, meeting_id: i64, delete_audio: bool) -> Result<bool> {
         let dir: Option<String> = self
@@ -493,7 +548,7 @@ impl Store {
         let tx = self.conn.unchecked_transaction()?;
         // Explicit deletes (not only ON DELETE CASCADE), so the FTS delete
         // triggers run for every row whatever the connection's settings.
-        for table in ["passages", "index_state", "segments", "summaries", "bookmarks"] {
+        for table in ["passages", "index_state", "segments", "summaries", "bookmarks", "notes"] {
             if table_exists(&tx, table)? {
                 tx.execute(&format!("DELETE FROM {table} WHERE meeting_id = ?1"), [meeting_id])?;
             }
@@ -576,6 +631,34 @@ mod tests {
     }
 
     #[test]
+    fn notes_roundtrip_and_cascade() -> Result<()> {
+        let path = std::env::temp_dir().join(format!("mostalgia-notes-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut store = Store::open(&path)?;
+        let new = |dir: &'static str| NewMeeting { title: "N", started_at: Local::now(), duration_secs: 60.0, language: "en", dir: Path::new(dir) };
+        let a = store.insert_meeting(&new("/tmp/notes-a"), &[seg(Source::Mic, 1.0, "Hello")])?;
+        let b = store.insert_meeting(&new("/tmp/notes-b"), &[])?;
+        store.add_note(a, "action", "Anna: forecast by Friday", 36.8)?;
+        let first = store.add_note(a, "decision", "Freeze marketing spend", 27.0)?;
+        store.add_note(b, "fact", "Other meeting", 3.0)?;
+        let m = store.get(a)?.unwrap();
+        assert_eq!(m.notes.iter().map(|n| n.text.as_str()).collect::<Vec<_>>(), ["Freeze marketing spend", "Anna: forecast by Friday"]);
+        assert_eq!(m.notes[0].kind, "decision");
+        assert!(store.delete_note(first)?);
+        assert_eq!(store.notes(a)?.len(), 1);
+        assert!(store.delete_meeting(a, false)?);
+        let left: i64 = store.conn.query_row("SELECT COUNT(*) FROM notes WHERE meeting_id = ?1", [a], |r| r.get(0))?;
+        assert_eq!(left, 0);
+        assert_eq!(store.notes(b)?.len(), 1);
+        // Plain cascade (a meeting replaced from the same directory).
+        store.insert_meeting(&new("/tmp/notes-b"), &[])?;
+        let all: i64 = store.conn.query_row("SELECT COUNT(*) FROM notes", [], |r| r.get(0))?;
+        assert_eq!(all, 0);
+        std::fs::remove_file(&path)?;
+        Ok(())
+    }
+
+    #[test]
     fn delete_removes_everything_searchable() -> Result<()> {
         let path = std::env::temp_dir().join(format!("mostalgia-del-{}.db", std::process::id()));
         let dir = std::env::temp_dir().join(format!("mostalgia-del-session-{}", std::process::id()));
@@ -593,6 +676,7 @@ mod tests {
         )?;
         store.save_summary(gone, "claude", "m", None, "# Weg\n\nZebra")?;
         store.add_bookmarks(gone, &[Bookmark { at_secs: 1.0, label: "x".into() }])?;
+        store.add_note(gone, "fact", "Zebra", 1.0)?;
         crate::ask::index::index_meeting(&mut store, gone)?;
         crate::ask::index::index_meeting(&mut store, keep)?;
         let filter = crate::ask::search::Filter::default();
@@ -614,7 +698,7 @@ mod tests {
             "INSERT INTO segments_fts(segments_fts) VALUES('integrity-check');
              INSERT INTO passages_fts(passages_fts) VALUES('integrity-check');",
         )?;
-        for table in ["segments", "summaries", "bookmarks", "passages", "index_state"] {
+        for table in ["segments", "summaries", "bookmarks", "passages", "index_state", "notes"] {
             let n: i64 = store.conn.query_row(&format!("SELECT COUNT(*) FROM {table} WHERE meeting_id = ?1"), [gone], |r| r.get(0))?;
             assert_eq!(n, 0, "{table}");
         }

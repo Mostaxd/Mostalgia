@@ -6,6 +6,7 @@ pub mod ask;
 pub mod audio;
 pub mod callwatch;
 pub mod chunker;
+pub mod companion;
 pub mod cloud_stt;
 pub mod config;
 pub mod connections;

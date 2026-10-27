@@ -128,6 +128,47 @@ fn main() {
         // Let the line fade-ins finish.
         std::thread::sleep(std::time::Duration::from_millis(600));
         shot("2-recording", &mut cx);
+        // Mori on the recording screen: writing, with live points, with an
+        // answer in her bubble (no network). Needs `companion: true` in the config.
+        if full && cx.update(|cx| view.read(cx).companion_view().read(cx).is_enabled()) {
+            use mostalgia_app::companion::art::Pose;
+            use mostalgia_core::companion::PointKind;
+            let mori = |cx: &mut HeadlessAppContext, f: &dyn Fn(&mut mostalgia_app::companion::Companion, &mut Context<mostalgia_app::companion::Companion>)| {
+                cx.update_window(handle, |_, _, cx| {
+                    let c = view.read(cx).companion_view();
+                    c.update(cx, |c, cx| f(c, cx));
+                })
+                .unwrap();
+            };
+            mori(&mut cx, &|c, cx| c.demo_pose(Some(Pose::Writing), cx));
+            shot("12-mori-writing", &mut cx);
+            mori(&mut cx, &|c, cx| {
+                c.demo_pose(Some(Pose::Talking), cx);
+                c.demo_points(
+                    &[
+                        (PointKind::Fact, "Budget is about 10% under plan, mostly because of the trade show in May.", 15.4),
+                        (PointKind::Decision, "Marketing spend is frozen until the end of June.", 27.0),
+                        (PointKind::Action, "Anna: send a new forecast by Friday (needs the sales numbers).", 36.8),
+                    ],
+                    &[1],
+                    cx,
+                );
+            });
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            shot("13-mori-points", &mut cx);
+            mori(&mut cx, &|c, cx| {
+                c.demo_pose(Some(Pose::Talking), cx);
+                c.demo_chat(
+                    true,
+                    "What did we decide so far?",
+                    "- Marketing spend is frozen until the end of June [00:00:27].\n- Anna sends a new forecast by Friday; you send her the sales numbers this afternoon [00:00:36].",
+                    cx,
+                );
+            });
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            shot("14-mori-chat", &mut cx);
+            mori(&mut cx, &|c, cx| c.demo_reset(cx));
+        }
         if full {
             cx.update_window(handle, |_, _, cx| {
                 let rec = view.read(cx).recording_view();

@@ -82,11 +82,29 @@ fn summary_body(m: &Meeting) -> Option<&str> {
     })
 }
 
+/// "[02:03] Decision: Freeze marketing spend" for each of Mori's notes.
+fn note_lines(m: &Meeting) -> Vec<String> {
+    m.notes
+        .iter()
+        .map(|n| {
+            let kind = crate::companion::PointKind::parse(&n.kind).map_or(n.kind.as_str(), |k| k.label());
+            format!("[{}] {kind}: {}", format_ts(n.at_secs), n.text)
+        })
+        .collect()
+}
+
 pub fn markdown(m: &Meeting) -> String {
     let mut out = format!("# {}\n\n_{}_\n\n", m.title, header(m));
     if let Some(body) = summary_body(m) {
         out.push_str(body.trim_end());
         out.push_str("\n\n");
+    }
+    if !m.notes.is_empty() {
+        out.push_str(&format!("## {}\n\n", tr("Notizen von Mori")));
+        for line in note_lines(m) {
+            out.push_str(&format!("- {line}\n"));
+        }
+        out.push('\n');
     }
     out.push_str(&format!("## {}\n\n", tr("Transkript")));
     for s in &m.segments {
@@ -102,6 +120,13 @@ pub fn text(m: &Meeting) -> String {
             let line = line.trim_start_matches('#').trim().replace("**", "");
             out.push_str(&line);
             out.push('\n');
+        }
+        out.push('\n');
+    }
+    if !m.notes.is_empty() {
+        out.push_str(&format!("{}\n", tr("Notizen von Mori")));
+        for line in note_lines(m) {
+            out.push_str(&format!("- {line}\n"));
         }
         out.push('\n');
     }
@@ -156,6 +181,12 @@ pub fn docx(m: &Meeting, path: &Path) -> Result<()> {
             } else {
                 para(runs(line, 22))
             });
+        }
+    }
+    if !m.notes.is_empty() {
+        doc = doc.add_paragraph(Paragraph::new().add_run(Run::new().add_text(tr("Notizen von Mori")).bold().size(28)));
+        for line in note_lines(m) {
+            doc = doc.add_paragraph(para(vec![Run::new().add_text("• ").size(22), Run::new().add_text(line).size(22)]));
         }
     }
     doc = doc.add_paragraph(Paragraph::new().add_run(Run::new().add_text(tr("Transkript")).bold().size(28)));

@@ -754,6 +754,86 @@ impl MeetingView {
     }
 
     fn render_summary(&mut self, m: &Meeting, cx: &mut Context<Self>) -> AnyElement {
+        let summary = self.render_summary_body(m, cx);
+        if m.notes.is_empty() {
+            return summary;
+        }
+        v_flex().gap_6().child(summary).child(self.render_notes(m, cx)).into_any_element()
+    }
+
+    /// Mori's pinned points; a click plays the meeting from there.
+    fn render_notes(&mut self, m: &Meeting, cx: &mut Context<Self>) -> AnyElement {
+        use mostalgia_core::companion::PointKind;
+        let theme = cx.theme().clone();
+        let rows = m.notes.iter().map(|n| {
+            let (id, at) = (n.id, n.at_secs);
+            let kind = PointKind::parse(&n.kind);
+            let color = match kind {
+                Some(PointKind::Decision) => theme.success,
+                Some(PointKind::Action) => theme.primary,
+                Some(PointKind::Question) => theme.warning,
+                _ => theme.info,
+            };
+            h_flex()
+                .id(("mori-note", id as usize))
+                .gap_3()
+                .items_start()
+                .px_2()
+                .py_1p5()
+                .rounded(theme.radius)
+                .cursor_pointer()
+                .hover(|s| s.bg(theme.muted))
+                .child(
+                    div()
+                        .w(px(52.))
+                        .flex_none()
+                        .pt_0p5()
+                        .text_xs()
+                        .text_color(theme.primary)
+                        .font_family(theme.mono_font_family.clone())
+                        .child(ui::hms(at)),
+                )
+                .child(
+                    h_flex()
+                        .flex_none()
+                        .w(px(120.))
+                        .pt_0p5()
+                        .gap_1p5()
+                        .text_xs()
+                        .font_semibold()
+                        .text_color(color)
+                        .child(div().size(px(6.)).rounded_full().bg(color))
+                        .child(kind.map_or(n.kind.clone(), |k| k.label().to_string())),
+                )
+                .child(ui::bidi_text(n.text.clone(), true).flex_1().min_w_0().text_sm())
+                .child(
+                    Button::new(("mori-note-delete", id as usize))
+                        .xsmall()
+                        .ghost()
+                        .icon(IconName::X)
+                        .tooltip(tr("Notiz entfernen"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            match Store::open(&paths::database()).and_then(|s| s.delete_note(id)) {
+                                Ok(_) => this.reload(cx),
+                                Err(e) => {
+                                    this.error = Some(format!("{e:#}").into());
+                                    cx.notify();
+                                }
+                            }
+                        })),
+                )
+                .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Ab hier abspielen")).build(window, cx))
+                .on_click(cx.listener(move |this, _, _, cx| this.jump_to(at, cx)))
+        });
+        v_flex()
+            .gap_1()
+            .child(ui::section_title(tr("NOTIZEN VON MORI"), cx).pb_1())
+            .children(rows)
+            .into_any_element()
+    }
+
+    fn render_summary_body(&mut self, m: &Meeting, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         if self.summarizing {
             return v_flex()

@@ -389,6 +389,7 @@ impl SettingsView {
     fn set_category(&mut self, category: Category, cx: &mut Context<Self>) {
         self.category = category;
         self.config.settings_category = category.id().into();
+        self.config.companion_pos = Config::load().companion_pos;
         if let Err(e) = self.config.save() {
             eprintln!("[mostalgia] saving settings: {e:#}");
         }
@@ -421,6 +422,8 @@ impl SettingsView {
     }
 
     fn save(&mut self, cx: &mut Context<Self>) {
+        // Dragging Mori stores her position while this screen is open.
+        self.config.companion_pos = Config::load().companion_pos;
         if let Err(e) = self.config.save() {
             eprintln!("[mostalgia] saving settings: {e:#}");
         }
@@ -718,6 +721,149 @@ impl SettingsView {
                 "Eigene Designs: JSON-Dateien in {} (Format wie assets/themes.json).",
                 &[&mostalgia_core::config::Config::path().with_file_name("themes").display()],
             )))
+    }
+}
+
+// ── Darstellung: Mori ──
+impl SettingsView {
+    fn render_mori(&mut self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
+        let row = |label: &str, hint: Option<&str>, control: AnyElement| settings_row(label, hint, control, &theme);
+        let on = self.config.companion;
+        let scale = self.config.companion_scale;
+        let size_button = |id: &'static str, label: &'static str, value: f32, cx: &mut Context<Self>| {
+            let selected = (scale - value).abs() < 0.01;
+            Button::new(id)
+                .small()
+                .label(tr(label))
+                .when(selected, |b| b.primary())
+                .when(!selected, |b| b.ghost())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.config.companion_scale = value;
+                    this.save(cx);
+                }))
+                .into_any_element()
+        };
+        let interval = self.config.companion_points_interval_secs;
+        let interval_button = |secs: u32, cx: &mut Context<Self>| {
+            let label = if secs == 0 { tr("Aus").to_string() } else { format!("{secs} s") };
+            Button::new(SharedString::from(format!("mori-interval-{secs}")))
+                .small()
+                .label(label)
+                .when(interval == secs, |b| b.primary())
+                .when(interval != secs, |b| b.ghost())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.config.companion_points_interval_secs = secs;
+                    this.save(cx);
+                }))
+                .into_any_element()
+        };
+
+        // Which connection she talks to: the one for "Fragen".
+        let connection = match self.config.ask_request() {
+            Ok(req) => {
+                let conn = &req.connection;
+                let ready = self.keys.is_none() || self.configured(conn);
+                let (color, badge) = if conn.is_local() {
+                    (theme.success, connections::local_label(conn.base()).to_string())
+                } else {
+                    (theme.warning, tr("Cloud").to_string())
+                };
+                v_flex()
+                    .gap_1p5()
+                    .child(
+                        h_flex()
+                            .flex_wrap()
+                            .gap_2()
+                            .text_sm()
+                            .child(Icon::new(if conn.is_local() { IconName::HardDrive } else { IconName::Globe }).small().text_color(theme.muted_foreground))
+                            .child(div().child(trf("Nutzt {} · {}", &[&conn.name, &req.model])))
+                            .child(chip(badge, color, &theme)),
+                    )
+                    .when(!ready, |el| {
+                        el.child(div().text_xs().text_color(theme.warning).child(trf("{} ist nicht eingerichtet — in Einstellungen → KI hinterlegen.", &[&conn.name])))
+                    })
+                    .when(!conn.is_local() && interval > 0, |el| {
+                        el.child(div().text_xs().text_color(theme.muted_foreground).child(trf(
+                            "Live-Punkte senden etwa alle {} s das neue Transkript an {}; jede Frage sendet das Live-Transkript. Das kostet Tokens bei {}.",
+                            &[&interval, &conn.name, &conn.name],
+                        )))
+                    })
+                    .when(!conn.is_local() && interval == 0, |el| {
+                        el.child(div().text_xs().text_color(theme.muted_foreground).child(trf("Jede Frage sendet das Live-Transkript an {}.", &[&conn.name])))
+                    })
+                    .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Ändern unter KI & Transkription → Zusammenfassungen & Fragen.")))
+                    .into_any_element()
+            }
+            Err(e) => div().text_xs().text_color(theme.danger).child(format!("{e:#}")).into_any_element(),
+        };
+
+        ui::card(cx)
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(Icon::new(IconName::Sparkles).small().text_color(theme.primary))
+                    .child(div().flex_1().font_semibold().child(tr("Mori – Notiz-Begleiterin")))
+                    .child(
+                        Switch::new("set-mori")
+                            .checked(on)
+                            .on_change(cx.listener(|this, v: &bool, _, cx| {
+                                this.config.companion = *v;
+                                this.save(cx);
+                            })),
+                    ),
+            )
+            .child(div().text_sm().text_color(theme.muted_foreground).child(tr(
+                "Eine kleine Figur im Fenster, die mitschreibt, solange gesprochen wird. Klick sie an, um Fragen zur laufenden Besprechung zu stellen; während der Aufnahme zeigt sie Entscheidungen, Aufgaben und offene Fragen, die du anheften kannst.",
+            )))
+            .when(on, |el| {
+                el.child(row(
+                    tr("Größe"),
+                    None,
+                    h_flex()
+                        .gap_1()
+                        .child(size_button("mori-size-s", "Klein", 0.75, cx))
+                        .child(size_button("mori-size-m", "Mittel", 1.0, cx))
+                        .child(size_button("mori-size-l", "Groß", 1.3, cx))
+                        .into_any_element(),
+                ))
+                .child(row(
+                    tr("Live-Punkte"),
+                    Some(tr("Fragt nach so vielen Sekunden neuer Sprache nach neuen Punkten.")),
+                    h_flex().flex_wrap().gap_1().children([0, 60, 90, 120, 180].map(|s| interval_button(s, cx))).into_any_element(),
+                ))
+                .child(row(
+                    tr("Position"),
+                    Some(tr("Zieh Mori mit der Maus an eine andere Stelle.")),
+                    Button::new("mori-reset-pos")
+                        .small()
+                        .outline()
+                        .icon(IconName::RefreshCw)
+                        .label(tr("Position zurücksetzen"))
+                        .disabled(self.config.companion_pos.is_none() && Config::load().companion_pos.is_none())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            let mut disk = Config::load();
+                            disk.companion_pos = None;
+                            if let Err(e) = disk.save() {
+                                eprintln!("[mostalgia] saving settings: {e:#}");
+                            }
+                            this.save(cx);
+                        }))
+                        .into_any_element(),
+                ))
+                .child(connection)
+            })
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_start()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(Icon::new(IconName::Info).xsmall().mt(px(2.)).flex_none())
+                    .child(div().flex_1().min_w_0().child(tr(
+                        "Mori lebt im Mostalgia-Fenster. Unter GNOME Wayland können Apps kein Fenster dauerhaft im Vordergrund halten oder an eine feste Stelle setzen, deshalb gibt es kein eigenes Mori-Fenster.",
+                    ))),
+            )
     }
 }
 
@@ -2096,6 +2242,13 @@ impl Render for SettingsView {
             keywords: "sprache app oberfläche deutsch english englisch language interface ui",
             wide: false,
             element: app_language.into_any_element(),
+        });
+        cards.push(Card {
+            category: Category::Darstellung,
+            title: "Mori",
+            keywords: "mori companion assistant anime character notes avatar begleiterin figur notizen live punkte points",
+            wide: false,
+            element: self.render_mori(cx).into_any_element(),
         });
         cards.push(Card {
             category: Category::Darstellung,

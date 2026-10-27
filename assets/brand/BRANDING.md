@@ -71,6 +71,47 @@ Regenerate everything with `python3 generate.py` (needs fontTools), then
 export PNGs with [`resvg`](https://github.com/linebender/resvg):
 `resvg -w 512 icon.svg icon-512.png`.
 
+## Mori
+
+**Mori** is Mostalgia's note-taking companion: a young woman who stands
+beside the transcript and writes along while people talk. She listens, jots,
+thinks while the summary is brewing, and dozes off when the recording is
+paused. Her name comes from *memory* (and, with a wink, *memento mori*:
+nothing lasts — except your notes). She is a colleague with a notepad, not a
+mascot that begs for attention.
+
+**Look:** soft plum bob with a fringe and one stubborn upright lock, big
+warm eyes (plum to terracotta), an amber hair clip shaped like a tiny
+cassette with a little spark, a cream cardigan over a sage dress with a
+terracotta hem stripe, a terracotta ribbon at the collar, Ember Mary Janes,
+an amber spiral notepad and a plum pen.
+
+| Part | Colour |
+|------|--------|
+| Outlines | Night Plum `#2B1730` |
+| Hair | Plum `#5B2A4E` (lighter crown, darker back) |
+| Cardigan / socks | Cream `#FBF3E4`, ribbing in Cream Deep `#F0DFC2` |
+| Dress | Soft Sage `#9DB8A0` |
+| Ribbon, hem stripe, iris | Terracotta `#D9653B`, Ember `#B8472A` |
+| Notepad, clip, buttons | Sunset Amber `#F2A541`, Amber Light `#F7C26B` |
+
+**Poses** (all loop at 12 fps): Idle (breathing, blinking), Listening (head
+tilted, eyes wide, pen ready), Writing (pen scribbling, page flips),
+Thinking (pen to chin, thought bubble with three dots), Talking (mouth
+moving, free hand gesturing), Sleeping (eyes closed, nodding, floating
+z's), Error (worried face, sweat drop, notepad held up, small shake).
+
+The frames are generated as SVG by code
+(`crates/mostalgia-app/src/companion/art.rs`); preview them with
+`cargo run -p mostalgia-app --example companion_preview -- <out-dir>`.
+
+- **Do** keep her original: her own shapes, palette and props.
+- **Do** keep her calm and small next to the content; she supports the
+  transcript, never covers it.
+- **Don't** copy, trace or "reference" existing anime, game or mascot
+  characters, and don't give her another character's signature traits.
+- **Don't** recolour her outside the palette or add text to her frames.
+
 ## Voice & tone
 
 Warm, witty, never cheesy. A good colleague with a great memory — not a
