@@ -65,7 +65,7 @@ pub fn invalidate_cache() {
     *cache().lock().unwrap() = None;
 }
 
-const STOPWORDS: &[&str] = &[
+const STOPWORDS: &[&str] = &[ // i18n: not UI
     "der", "die", "das", "und", "oder", "ein", "eine", "einen", "ist", "sind", "war", "wir", "ich", "du", "sie", "er", "es",
     "was", "wie", "wer", "wann", "wo", "warum", "welche", "welcher", "haben", "hat", "hatte", "zu", "im", "in", "am", "an",
     "auf", "mit", "von", "für", "über", "den", "dem", "des", "nicht", "noch", "auch", "so", "dass", "letzte", "letzten",

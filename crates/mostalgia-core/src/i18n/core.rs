@@ -86,4 +86,8 @@ pub const EN: &[(&str, &str)] = &[
     ("Das Modell unterstützt die gewählte Denktiefe nicht — in den Einstellungen ändern", "The model doesn't support the chosen thinking level — change it in Settings"),
     ("Sprachfilter-Modell {} fehlt — erkenne Sprache nur an der Lautstärke (scripts/download-model.sh)", "Speech filter model {} missing — detecting speech by loudness only (scripts/download-model.sh)"),
     ("Sprechertrennung aus: {}", "Speaker separation off: {}"),
+    ("Besprechungen auflisten", "Listing meetings"),
+    ("Werkzeugfehler: {}", "Tool error: {}"),
+    ("Modelle für die Sprechertrennung fehlen — scripts/download-model.sh ausführen", "Speaker separation models are missing — run scripts/download-model.sh"),
+    ("ohne Sprechertrennung gebaut (Feature `diarization`)", "built without speaker separation (`diarization` feature)"),
 ];

@@ -35,7 +35,7 @@ fn fingerprint(m: &Meeting) -> String {
 }
 
 fn header(m: &Meeting) -> String {
-    format!("Besprechung: {} · {}", m.title, m.started_at.format("%d.%m.%Y %H:%M"))
+    format!("Meeting: {} · {}", m.title, m.started_at.format("%d.%m.%Y %H:%M"))
 }
 
 pub fn build_passages(m: &Meeting) -> Vec<NewPassage> {
@@ -49,7 +49,7 @@ pub fn build_passages(m: &Meeting) -> Vec<NewPassage> {
         let mut lines = Vec::new();
         while j < segs.len() && (j == i || segs[j].start_secs - start < WINDOW_SECS) {
             let s = &segs[j];
-            lines.push(format!("[{}] {}: {}", format_ts(s.start_secs), s.speaker_label(), s.text));
+            lines.push(format!("[{}] {}: {}", format_ts(s.start_secs), crate::summary::llm_speaker(s.speaker_label()), s.text));
             j += 1;
         }
         let end = segs[j - 1].end_secs;
@@ -86,7 +86,7 @@ pub fn build_passages(m: &Meeting) -> Vec<NewPassage> {
                 kind,
                 start_secs: 0.0,
                 end_secs: 0.0,
-                text: format!("{head}\nZusammenfassung – {heading}\n{}", body.trim()),
+                text: format!("{head}\nSummary – {heading}\n{}", body.trim()),
             });
         };
         for line in summary.markdown.lines() {

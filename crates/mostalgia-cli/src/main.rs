@@ -29,11 +29,12 @@ struct ModelArgs {
     /// Silero VAD model used to find speech [default: next to the Whisper model]
     #[arg(long)]
     vad_model: Option<PathBuf>,
-    /// Language to transcribe ("de", "en", or "auto")
-    #[arg(long, default_value = "de")]
-    language: String,
-    /// Tell several speakers on the system-audio side apart ("Sprecher 1",
-    /// "Sprecher 2", …). Also on when enabled in the app's settings.
+    /// Language to transcribe: a Whisper language code ("en", "de", "fr", …)
+    /// or "auto" [default: from the app's settings]
+    #[arg(long)]
+    language: Option<String>,
+    /// Tell several speakers on the system-audio side apart ("Speaker 1",
+    /// "Speaker 2", …). Also on when enabled in the app's settings.
     #[arg(long)]
     diarize: bool,
     /// Suppress steady background noise (fans, hum) on the mic before
@@ -300,6 +301,10 @@ enum SourceChoice {
 }
 
 impl ModelArgs {
+    fn language(&self) -> String {
+        self.language.clone().unwrap_or_else(|| Config::load().language)
+    }
+
     fn diarize(&self) -> bool {
         self.diarize || mostalgia_core::config::Config::load().diarize
     }
@@ -355,7 +360,7 @@ impl ModelArgs {
         }
         let config = Config::load();
         let conn = connection(&config, &choice.connection)?;
-        let engine = Engine::cloud(&conn, &choice.model, &self.language)?;
+        let engine = Engine::cloud(&conn, &choice.model, &self.language())?;
         let privacy = tr("Audio wird zur Transkription an diesen Anbieter gesendet");
         eprintln!("[mostalgia] {}", trf("Transkription: {} — {}", &[&engine.label(), &privacy]));
         Ok(engine)
@@ -369,7 +374,7 @@ impl ModelArgs {
             trf("Modell nicht gefunden: {} — zuerst scripts/download-model.sh ausführen oder --model angeben", &[&model.display()])
         );
         eprintln!("[mostalgia] {}", trf("Lade Modell {} …", &[&model.display()]));
-        let engine = Engine::load(&model, &self.language)?;
+        let engine = Engine::load(&model, &self.language())?;
         match engine.gpu() {
             Some(gpu) => eprintln!("[mostalgia] {}", trf("Nutze GPU: {}", &[&gpu])),
             None => eprintln!("[mostalgia] {}", tr("Keine eigene Grafikkarte gefunden — nutze das Standardgerät")),
@@ -551,7 +556,7 @@ fn finish(engine: &mut Engine, models: &ModelArgs, sum: &SummaryArgs, rec: &Reco
         trf("Letzter Durchgang über {} s Audio mit {} …", &[&format!("{:.0}", rec.duration_secs), &engine.label()])
     );
     let t = std::time::Instant::now();
-    let saved = finalize::save_recording(rec, engine, &models.final_pass_options(), &models.language, &[])?;
+    let saved = finalize::save_recording(rec, engine, &models.final_pass_options(), &models.language(), &[])?;
     let id = saved.meeting_id;
     let store = open_store()?;
     let meeting = store.get(id)?.with_context(|| trf("Keine Besprechung #{}", &[&id]))?;

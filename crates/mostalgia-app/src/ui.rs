@@ -141,7 +141,7 @@ pub fn speaker_color(label: &str, cx: &App) -> Hsla {
     match label {
         "Ich" => pick(0),
         "Andere" => pick(1),
-        other => match other.strip_prefix("Sprecher ").and_then(|n| n.parse::<usize>().ok()) {
+        other => match other.strip_prefix("Sprecher ").and_then(|n| n.parse::<usize>().ok()) { // i18n: not UI
             Some(n) => pick(n + 1),
             None => {
                 let h = other.bytes().fold(7usize, |h, b| h.wrapping_mul(31).wrapping_add(b as usize));

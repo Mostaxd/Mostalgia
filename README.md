@@ -4,16 +4,15 @@
 
 <p align="center">
   <b>Nostalgia, but for meetings you can actually recall in full.</b><br>
-  A local-first meeting recorder for Linux: live transcription on your GPU, summaries that know who promised what,<br>
+  A local-first meeting recorder for Linux: live transcription in any language, summaries that know who promised what,<br>
   and a search box that answers “wait, what did we decide?” — with a link to the exact second it was said.
 </p>
 
 <p align="center">
   <img alt="Rust" src="https://img.shields.io/badge/built_with-Rust-B8472A">
-  <img alt="Whisper large-v3-turbo" src="https://img.shields.io/badge/transcription-Whisper_large--v3--turbo-5B2A4E">
-  <img alt="Local first" src="https://img.shields.io/badge/audio-never_leaves_your_laptop-3E7A52">
+  <img alt="Local, hybrid or cloud" src="https://img.shields.io/badge/runs-local_·_hybrid_·_cloud-5B2A4E">
+  <img alt="Bring your own AI" src="https://img.shields.io/badge/AI-bring_your_own-3E7A52">
   <img alt="Linux" src="https://img.shields.io/badge/platform-Linux_·_PipeWire-F2A541">
-  <img alt="Languages" src="https://img.shields.io/badge/UI-Deutsch_·_English-2B1730">
 </p>
 
 <p align="center">
@@ -30,8 +29,9 @@ your call, writes everything down as it happens, and turns it into something you
 can actually use: a summary with decisions and owners, a transcript you can click
 to hear, and an assistant that answers questions across all your meetings.
 
-The audio is transcribed **on your own GPU** and stays on your disk. Only the text
-goes to the language model you pick — and you can pick a fully local one too.
+By default the audio is transcribed **on your own GPU** and stays on your disk;
+summaries and answers come from the AI provider *you* pick — a cloud API or a
+model running on your own machine. You always see which one is doing the work.
 
 ## Features
 
@@ -47,21 +47,21 @@ goes to the language model you pick — and you can pick a fully local one too.
 </td><td width="50%" valign="top">
 
 ### ✍️ Live transcription
-- **Whisper large-v3-turbo** via whisper.cpp on Vulkan — ~30× faster than real time on an RTX laptop GPU.
+- **Whisper** via whisper.cpp on Vulkan — multilingual, and ~30× faster than real time on a laptop GPU.
 - **Provisional text after ~1 s** while someone is still talking, replaced by the clean line when they pause.
-- **Silero VAD** decides what's speech, so silence never turns into “Vielen Dank.” hallucinations.
+- **Silero VAD** decides what's speech, so silence never turns into “Thanks for watching!” hallucinations.
 - After you stop, a **final pass** re-transcribes the full tracks for the archive.
-- **Local, Hybrid or Cloud**: Whisper on your GPU, or cloud speech-to-text (OpenAI, Groq, a self-hosted Whisper server) for machines without one — chosen separately for live text and the final pass, with the cost per hour shown.
+- **Local, Hybrid or Cloud**: Whisper on your GPU, or a cloud / self-hosted speech-to-text service for machines without one — chosen separately for live text and the final pass, with the cost per hour shown.
 - **No silent fallbacks**: if a provider fails you see which one and why, the audio stays on disk, and *Transcribe again* lets you pick another engine.
-- German, English or auto-detect; optional noise suppression (RNNoise).
+- Auto-detects the language (or pin one); optional noise suppression (RNNoise).
 
 </td></tr>
 <tr><td valign="top">
 
 ### ✨ Summaries
 - A title, short overview, key points, **decisions**, **action items with owners and deadlines**, and open questions — in the meeting's own language.
-- **Bring your own model**: Claude, OpenAI, DeepSeek, or any OpenAI-compatible endpoint — **Ollama, LiteLLM, LM Studio, vLLM, OpenRouter, Groq, Together** or your own URL. Each connection shows whether it's connected, not set up, or failing (and why).
-- Pick the model and **thinking level** where the model supports it; streams, so even “Maximum” thinking doesn't time out.
+- **Bring your own AI**: any of the [supported providers](#supported-providers) or any OpenAI-compatible URL. Each connection shows whether it's connected, not set up, or failing — and why.
+- Pick the model and, where it supports one, the **thinking level**; responses stream, so long thinking doesn't time out.
 
 </td><td valign="top">
 
@@ -82,8 +82,8 @@ goes to the language model you pick — and you can pick a fully local one too.
 </td><td valign="top">
 
 ### 🎨 Themes, languages & polish
-- **20 themes** from warm *Mostalgia* to *Blockwelt* pixels, *Synthwave*, *Terminal* and a high-contrast mode; little animated scenes (respecting “reduce motion”).
-- **UI in German and English**, switched live; proper **Arabic/RTL** rendering.
+- **20 themes** from warm *Mostalgia* to *Blockworld* pixels, *Synthwave*, *Terminal* and a high-contrast mode; little animated scenes (respecting “reduce motion”).
+- English UI (German available, switched live); right-to-left text in transcripts renders properly.
 - Settings grouped into categories with search; right-click a meeting to rename, export (Markdown, text, SRT, Word) or delete it — completely, including its search index.
 
 </td></tr>
@@ -96,9 +96,8 @@ goes to the language model you pick — and you can pick a fully local one too.
 | ![Ask your meetings](docs/screenshots/ask-night.png) **Ask** — answers with source chips | ![Summary](docs/screenshots/summary.png) **Summary** — decisions and owners |
 | ![Transcript](docs/screenshots/transcript-night.png) **Transcript** — click a time to play, click a chip to rename | ![Audio](docs/screenshots/audio.png) **Audio** — waveform per track, click to jump |
 | ![New recording](docs/screenshots/new-recording.png) **New recording** | ![Settings](docs/screenshots/settings-recording.png) **Settings** — tidy categories |
-| ![Arabic summary](docs/screenshots/arabic-summary.png) **Arabic / RTL** done right | ![Delete](docs/screenshots/delete.png) **Forget a meeting** — all of it |
 | ![AI & transcription settings](docs/screenshots/settings-ai.png) **Connections & modes** — local, hybrid or cloud, at a glance | ![Transcribe again](docs/screenshots/retranscribe.png) **Transcribe again** — you pick the engine, nothing switches by itself |
-| ![Provider error](docs/screenshots/engine-error.png) **Clear errors** — which provider failed and why; the recording keeps going | |
+| ![Provider error](docs/screenshots/engine-error.png) **Clear errors** — which provider failed and why; the recording keeps going | ![Delete](docs/screenshots/delete.png) **Forget a meeting** — all of it |
 
 **Twenty themes**, each with its own palette, corners, fonts and speaker colours:
 
@@ -116,7 +115,7 @@ sudo apt install build-essential cmake clang pkg-config libpulse-dev pulseaudio-
   libvulkan-dev glslc libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev \
   libxcb1-dev libfontconfig-dev libfreetype-dev libasound2-dev libzstd-dev
 
-# 2. Models: Whisper large-v3-turbo (~1.6 GB), Silero VAD, speaker + search models
+# 2. Models: Whisper (~1.6 GB), Silero VAD, speaker + search models
 ./scripts/download-model.sh
 
 # 3. Build (Vulkan works on NVIDIA/AMD/Intel without extra toolkits)
@@ -126,16 +125,42 @@ cargo build --release --features vulkan
 ./scripts/install-desktop.sh
 ./scripts/install-gnome-shortcut.sh
 
-# 5. For summaries and Ask: an API key (stored in the GNOME keyring) …
-mostalgia set-api-key                       # Anthropic (Claude)
-mostalgia set-api-key --provider openai     # or deepseek, groq, …
-# … or keep it all local with Ollama
-mostalgia connections add ollama
+# 5. Connect an AI provider for summaries and Ask — in the app under
+#    Settings → AI & transcription, or from the terminal:
+mostalgia connections add ollama            # a local model, no key needed
+mostalgia set-api-key --provider openai     # or claude, deepseek, groq, … (GNOME keyring)
 ```
 
 Then launch **Mostalgia** from the app grid, or `mostalgia-app`. The tray icon
 needs GNOME's AppIndicator extension:
 `gnome-extensions enable ubuntu-appindicators@ubuntu.com` (log out and in once).
+
+## Supported providers
+
+Add as many connections as you like and choose, separately, which one writes
+summaries, which one answers *Ask*, and which engine transcribes live and in
+the final pass.
+
+**Summaries & Ask**
+
+| Provider | Runs | What it receives |
+|---|---|---|
+| Ollama, LM Studio, vLLM, LiteLLM | on your machine or network | meeting text — it never leaves your hardware |
+| Any OpenAI-compatible URL | wherever you host it | meeting text |
+| Anthropic (Claude), OpenAI, DeepSeek | cloud | meeting text for summaries; for *Ask*, only the passages it looks up |
+| OpenRouter, Groq, Together | cloud | the same, routed to the model you pick |
+
+Models are listed live from each provider (`/models`), and you can always type
+a model id by hand. Models without tool calling still work with *Ask*: the app
+searches first and hands them the results — and says so.
+
+**Transcription**
+
+| Engine | Runs | What it receives |
+|---|---|---|
+| Whisper via whisper.cpp (Vulkan, CUDA or CPU) | on your machine | nothing leaves it |
+| Self-hosted Whisper server (OpenAI-compatible `/audio/transcriptions`, e.g. via LiteLLM or vLLM) | your network | audio |
+| OpenAI, Groq | cloud | audio, billed per minute (the app shows the estimate) |
 
 ## Privacy — what goes where
 
@@ -144,9 +169,13 @@ Mostalgia always shows where your data goes: every connection carries a
 
 | Mode | Transcription | Summaries & *Ask* | Leaves your laptop |
 |---|---|---|---|
-| **Local** | Whisper on your GPU | a local model (Ollama, LM Studio, vLLM …) | nothing |
-| **Hybrid** *(default)* | Whisper on your GPU | Claude, OpenAI, DeepSeek … | meeting **text** for summaries; only the **few passages** *Ask* looks up |
-| **Cloud** | OpenAI, Groq or your Whisper server | any | **audio** to the transcription provider, text as above |
+| **Local** | Whisper on your GPU | a local model | nothing |
+| **Hybrid** *(default)* | Whisper on your GPU | a cloud provider | meeting **text** for summaries; only the **few passages** *Ask* looks up |
+| **Cloud** | a cloud speech-to-text service | any | **audio** to the transcription provider, text as above |
+
+Nothing ever switches provider behind your back: if one fails you get an error
+naming it, the recording stays on disk, and *Transcribe again* lets you choose
+another engine.
 
 | | Where it lives |
 |---|---|
@@ -164,11 +193,11 @@ flowchart LR
   end
   MIC --> VAD1["Silero VAD + chunker"]
   SYS --> VAD2["Silero VAD + chunker"]
-  VAD1 & VAD2 --> W["Whisper large-v3-turbo<br/>(whisper.cpp · Vulkan)"]
+  VAD1 & VAD2 --> W["Speech-to-text<br/>(local Whisper or a provider)"]
   W -->|"provisional + final lines"| UI["Desktop app (GPUI)"]
   CM & CS -->|"after stop"| FP["Final pass<br/>VAD regions → Whisper<br/>+ optional diarization"]
   FP --> DB[("SQLite<br/>FTS5 · passages · vectors")]
-  DB --> SUM["Summary<br/>(Claude · OpenAI · Ollama · …)"]
+  DB --> SUM["Summary<br/>(your AI provider)"]
   DB --> ASK["Ask<br/>BM25 + e5 → RRF → LLM with tools"]
   SUM & ASK --> UI
 ```
@@ -190,30 +219,31 @@ A few numbers from an RTX PRO 3000 laptop:
 | Final pass | a second or two per minute of audio |
 | Speaker diarization (optional) | ~5 min of CPU per hour of audio |
 | *Ask* search over the whole library | 23–30 ms |
-| *Ask* answer (Claude Opus 5.5, medium thinking) | ~5 s |
+| *Ask* answer with a cloud model | ~5 s |
 
 ## CLI
 
 ```text
-mostalgia start [--source mic|system|both] [--speakers] [--diarize] [--denoise] [--language de|en|auto]
+mostalgia start [--source mic|system|both] [--speakers] [--diarize] [--denoise] [--language auto|<code>]
                 [--engine local|<connection>/<model>] [--final-engine …]
 mostalgia list | show <id> | search <words> | ask "<question>"
 mostalgia summarize <id> [--provider <connection>] [--summary-model …] [--effort low…max]
 mostalgia export <id> --format md|txt|srt|docx [-o file]
 mostalgia delete <id> [--keep-audio]
 mostalgia import <session-folder> | transcribe <file.wav> | reindex [--all]
-mostalgia retranscribe <id> --engine local|openai/gpt-4o-transcribe|groq/whisper-large-v3-turbo
+mostalgia retranscribe <id> --engine local|<connection>/<model>
 mostalgia connections [list | add <preset> [--url …] | test <id> | remove <id>]
 mostalgia toggle | open           # control the running app (shortcut-friendly)
 mostalgia devices | models [--provider <connection>] | set-api-key [--provider <connection>]
 ```
 
-The CLI speaks German or English, following the app's language setting.
+The CLI follows the app's language setting (English by default).
 
 ## FAQ
 
 **Does it work without a GPU?** Yes — build without `--features vulkan` and
-Whisper runs on the CPU. It's slower; a smaller model (`--model`) helps.
+Whisper runs on the CPU. It's slower; a smaller model (`--model`) helps — or
+switch transcription to a provider in *Cloud* mode.
 
 **Which call apps are detected?** Zoom, Teams, Discord, Slack, Signal, Element,
 Jitsi, Skype, Webex, Telegram, WhatsApp, and any call in Chrome, Chromium,
@@ -238,13 +268,12 @@ from the library, the search index and — if you tick the box — the disk.
 
 ## Credits
 
-- [whisper.cpp](https://github.com/ggml-org/whisper.cpp) / [whisper-rs](https://github.com/tazz4843/whisper-rs) and OpenAI's Whisper large-v3-turbo model (MIT)
+- [whisper.cpp](https://github.com/ggml-org/whisper.cpp) / [whisper-rs](https://github.com/tazz4843/whisper-rs) and OpenAI's Whisper models (MIT)
 - [Silero VAD](https://github.com/snakers4/silero-vad) (MIT)
 - [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) with pyannote segmentation 3.0 and WeSpeaker ResNet34 for diarization
 - [multilingual-e5-small](https://huggingface.co/intfloat/multilingual-e5-small) (MIT) via [candle](https://github.com/huggingface/candle) for *Ask*
 - [nnnoiseless](https://github.com/jneem/nnnoiseless) (RNNoise)
 - [GPUI](https://github.com/zed-industries/zed) and gpui-component / gpui-kit for the UI; [Lucide](https://lucide.dev) icons
 - Fonts (SIL OFL): Inter, JetBrains Mono, IBM Plex Sans, Atkinson Hyperlegible, Noto Sans Arabic, Pixelify Sans, VT323
-- Summaries by [Claude](https://www.anthropic.com/claude), OpenAI, DeepSeek or a local model via Ollama, LiteLLM & co. — your choice
 
 Brand, icon and palette: see [`assets/brand/BRANDING.md`](assets/brand/BRANDING.md).

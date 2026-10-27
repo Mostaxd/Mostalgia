@@ -1,5 +1,6 @@
 //! Renders the app's screens offscreen to PNGs (light and dark), using the
-//! real library database. Run with:
+//! library database in $MOSTALGIA_DATA_DIR (point it at a demo library).
+//! Run with:
 //!
 //!     cargo run -p mostalgia-app --example screenshots --features screenshots -- <out-dir> [meeting-id]
 
@@ -32,7 +33,7 @@ fn main() {
         load_fonts(cx);
     });
     // UI_LANG=en|de picks the app language; WIDTH=<px> the window width.
-    mostalgia_core::i18n::set_lang(mostalgia_core::i18n::resolve(&std::env::var("UI_LANG").unwrap_or_else(|_| "de".into())));
+    mostalgia_core::i18n::set_lang(mostalgia_core::i18n::resolve(&std::env::var("UI_LANG").unwrap_or_else(|_| "en".into())));
     let width: f32 = std::env::var("WIDTH").ok().and_then(|w| w.parse().ok()).unwrap_or(1240.);
     // THEMES=hell,comic limits which themes are rendered.
     let only: Option<Vec<String>> = std::env::var("THEMES").ok().map(|t| t.split(',').map(str::to_string).collect());
@@ -111,13 +112,13 @@ fn main() {
                 r.demo(
                     187,
                     &[
-                        (Source::System, 3.2, "Guten Morgen zusammen, schön, dass ihr alle da seid."),
-                        (Source::Mic, 8.9, "Morgen! Sollen wir direkt mit dem Budget für das nächste Quartal anfangen?"),
-                        (Source::System, 15.4, "Ja, gerne. Wir liegen aktuell etwa zehn Prozent unter Plan, vor allem wegen der Messe im Mai."),
-                        (Source::Mic, 27.0, "Okay. Dann schlage ich vor, dass wir die Marketingausgaben bis Ende Juni einfrieren."),
-                        (Source::System, 36.8, "Einverstanden. Anna, kannst du bis Freitag eine neue Prognose schicken?"),
-                        (Source::System, 44.1, "Klar, mache ich. Ich brauche nur noch die Zahlen aus dem Vertrieb."),
-                        (Source::Mic, 52.5, "Die schicke ich dir heute Nachmittag."),
+                        (Source::System, 3.2, "Morning, everyone, good to see you all."),
+                        (Source::Mic, 8.9, "Morning! Shall we start with next quarter's budget?"),
+                        (Source::System, 15.4, "Sure. We're about ten percent under plan right now, mostly because of the trade show in May."),
+                        (Source::Mic, 27.0, "Okay. Then I'd suggest we freeze marketing spend until the end of June."),
+                        (Source::System, 36.8, "Agreed. Anna, could you send a new forecast by Friday?"),
+                        (Source::System, 44.1, "Sure, will do. I just need the numbers from sales."),
+                        (Source::Mic, 52.5, "I'll send them over this afternoon."),
                     ],
                     cx,
                 )
@@ -130,7 +131,12 @@ fn main() {
         if full {
             cx.update_window(handle, |_, _, cx| {
                 let rec = view.read(cx).recording_view();
-                rec.update(cx, |r, cx| r.demo_engine_error("OpenAI · gpt-4o-transcribe", "OpenAI: nicht erreichbar unter https://api.openai.com/v1 — läuft der Server?", 3, cx));
+                rec.update(cx, |r, cx| r.demo_engine_error(
+                    "OpenAI · gpt-4o-transcribe",
+                    &mostalgia_core::i18n::trf("{}: nicht erreichbar unter {} — läuft der Server?", &[&"OpenAI", &"https://api.openai.com/v1"]),
+                    3,
+                    cx,
+                ));
             })
             .unwrap();
             shot("2b-recording-engine-error", &mut cx);
@@ -215,8 +221,8 @@ fn main() {
             if let Some(a) = view.read(cx).ask_view() {
                 a.update(cx, |a, cx| {
                     a.demo(
-                        "Was wurde über die Marketingausgaben entschieden?",
-                        "Die Marketingausgaben werden bis Ende Juni eingefroren [[m:1@13]]. Grund: Das Budget liegt etwa zehn Prozent unter Plan, vor allem wegen der Messe [[m:1@6]].\n- Vorschlag kam von Sprecher 1, Sprecher 2 stimmte zu [[m:1@19]].\n- Eine neue Prognose wird an alle verschickt; die Frist ist im Transkript unklar [[m:1@19]].",
+                        "What did we decide about marketing spend?",
+                        "Marketing spend is frozen until the end of June [[m:1@14]]. The reason: the budget is about ten percent under plan, mostly because of the trade show [[m:1@6]].\n- Speaker 1 proposed it and Speaker 2 agreed [[m:1@19]].\n- Anna sends a new forecast to everyone by Friday [[m:1@19]].",
                         cx,
                     )
                 });

@@ -45,7 +45,7 @@ pub fn available() -> bool {
 /// lines are left unlabelled.
 #[cfg(feature = "diarization")]
 pub fn label_track(samples: &[f32], segments: &mut [&mut FinalSegment]) -> Result<usize> {
-    let (seg_model, emb_model) = models().ok_or_else(|| anyhow!("diarization models not found"))?;
+    let (seg_model, emb_model) = models().ok_or_else(|| anyhow!(crate::i18n::tr("Modelle für die Sprechertrennung fehlen — scripts/download-model.sh ausführen")))?;
     if segments.is_empty() {
         return Ok(0);
     }
@@ -157,7 +157,7 @@ fn run_diarization(seg_model: &std::path::Path, emb_model: &std::path::Path, thr
 
 #[cfg(not(feature = "diarization"))]
 pub fn label_track(_: &[f32], _: &mut [&mut FinalSegment]) -> Result<usize> {
-    Err(anyhow!("built without the `diarization` feature"))
+    Err(anyhow!(crate::i18n::tr("ohne Sprechertrennung gebaut (Feature `diarization`)")))
 }
 
 /// Live speaker matching for one source.
@@ -172,7 +172,7 @@ impl LiveSpeakers {
     pub fn new() -> Result<Self> {
         #[cfg(feature = "diarization")]
         {
-            let (_, emb_model) = models().ok_or_else(|| anyhow!("diarization models not found"))?;
+            let (_, emb_model) = models().ok_or_else(|| anyhow!(crate::i18n::tr("Modelle für die Sprechertrennung fehlen — scripts/download-model.sh ausführen")))?;
             let extractor = sherpa_rs::speaker_id::EmbeddingExtractor::new(sherpa_rs::speaker_id::ExtractorConfig {
                 model: emb_model.to_string_lossy().into_owned(),
                 num_threads: Some(2),
@@ -185,7 +185,7 @@ impl LiveSpeakers {
             })
         }
         #[cfg(not(feature = "diarization"))]
-        Err(anyhow!("built without the `diarization` feature"))
+        Err(anyhow!(crate::i18n::tr("ohne Sprechertrennung gebaut (Feature `diarization`)")))
     }
 
     /// The speaker of a chunk ("Sprecher N"), or `None` when it's too short

@@ -19,34 +19,46 @@ You summarize meeting transcripts for the person who recorded them.
 
 The transcript comes from automatic speech recognition, so expect some \
 misheard words; silently correct obvious ones from context. Lines are \
-labelled by speaker: \"Ich\" is the person who recorded the meeting \
-(their microphone), \"Andere\" is everyone else on the call (possibly \
+labelled by speaker: \"Me\" is the person who recorded the meeting \
+(their microphone), \"Others\" is everyone else on the call (possibly \
 several people). Other labels are named speakers. When people are named \
 in the conversation, use their names.
 
-Write the summary in the language of the transcript (German unless the \
-transcript is clearly in another language), as Markdown in exactly this \
-shape, translating the headings if the transcript isn't German:
+Write the summary in the language the meeting was held in, as Markdown in \
+exactly this shape, with the headings translated into that language:
 
 # <a short, specific title for the meeting, at most 8 words>
 
-## Kurzfassung
+## Summary
 <2-4 sentences: what the meeting was about and its outcome>
 
-## Kernpunkte
+## Key points
 - <the important points discussed, one per bullet>
 
-## Entscheidungen
-- <decisions that were made; write \"Keine\" if none>
+## Decisions
+- <decisions that were made; write \"None\" if there were none>
 
-## Aufgaben
-- [ ] <task> — **Verantwortlich:** <owner, or \"offen\" if nobody took it> — **Frist:** <deadline, only if one was mentioned>
+## Action items
+- [ ] <task> — **Owner:** <owner, or \"open\" if nobody took it> — **Due:** <deadline, only if one was mentioned>
 
-## Offene Fragen
+## Open questions
 - <open questions; omit this section if there are none>
 
 Only include what the transcript supports. Never invent owners, deadlines \
 or decisions. Output only the Markdown.";
+
+/// A speaker label as the language model sees it: stored labels ("Ich",
+/// "Andere", "Sprecher 2") in English, names unchanged.
+pub fn llm_speaker(label: &str) -> String {
+    match label {
+        "Ich" => "Me".into(),
+        "Andere" => "Others".into(),
+        other => match other.strip_prefix("Sprecher ") { // i18n: not UI
+            Some(n) if n.parse::<usize>().is_ok() => format!("Speaker {n}"),
+            _ => other.to_string(),
+        },
+    }
+}
 
 /// What to summarize with.
 #[derive(Clone, Debug)]
@@ -80,7 +92,7 @@ pub fn provider_display(stored: &str) -> String {
 pub fn transcript_text(meeting: &Meeting) -> String {
     let mut out = String::new();
     for s in &meeting.segments {
-        out.push_str(&format!("[{}] {}: {}\n", format_ts(s.start_secs), s.speaker_label(), s.text));
+        out.push_str(&format!("[{}] {}: {}\n", format_ts(s.start_secs), llm_speaker(s.speaker_label()), s.text));
     }
     out
 }

@@ -57,4 +57,5 @@ pub const EN: &[(&str, &str)] = &[
     ("Desktop", "Desktop"),
     ("< 1 min", "< 1 min"),
     ("{} min", "{} min"),
+    ("{} ist nicht eingerichtet — in Einstellungen → KI hinterlegen.", "{} isn't set up — add it in Settings → AI & transcription."),
 ];

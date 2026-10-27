@@ -202,7 +202,7 @@ impl Chunker {
 
 /// Phrases Whisper is known to invent for near-silent audio (lowercase,
 /// punctuation stripped).
-const FILLER_PHRASES: &[&str] = &[
+const FILLER_PHRASES: &[&str] = &[ // i18n: not UI (what Whisper invents on silence)
     "danke",
     "vielen dank",
     "danke schön",

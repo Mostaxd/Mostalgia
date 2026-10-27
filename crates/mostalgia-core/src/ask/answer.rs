@@ -53,17 +53,16 @@ pub enum Piece {
 
 fn system_prompt() -> String {
     format!(
-        "Du beantwortest Fragen zu den aufgezeichneten Besprechungen des Nutzers. \
-Heute ist {today}.\n\n\
-Nutze die Werkzeuge, um die Antwort in den Transkripten und Zusammenfassungen zu finden: \
-search_meetings für Inhalte (mehrere Suchbegriffe/Umschreibungen probieren, bei Zeitangaben \
-wie \"letzte Woche\" from_date/to_date setzen), list_meetings für Zeiträume, read_transcript für \
-mehr Kontext um einen Treffer. Schreibe vor Werkzeugaufrufen keinen Text.\n\n\
-Antworte ausschließlich auf Grundlage der Werkzeugergebnisse, knapp und konkret, in der Sprache \
-der Frage. Belege jede Aussage direkt dahinter mit einem Marker [[m:<meeting_id>@<sekunden>]] \
-(Sekunden = start_secs der passenden Stelle; für Zusammenfassungen 0). Wenn die Transkripte die \
-Antwort nicht enthalten, sag das klar und rate nicht. Sprecher heißen \"Ich\" (der Nutzer), \
-\"Andere\" oder haben Namen.",
+        "You answer questions about the user's recorded meetings. Today is {today}.\n\n\
+Use the tools to find the answer in the transcripts and summaries: search_meetings for content \
+(try several search terms and paraphrases, in the meetings' language; for time references like \
+\"last week\" set from_date/to_date), list_meetings for time ranges, read_transcript for more \
+context around a hit. Don't write text before tool calls.\n\n\
+Answer only from the tool results, briefly and concretely, in the language of the question. \
+Back every statement right after it with a marker [[m:<meeting_id>@<seconds>]] (seconds = \
+start_secs of the matching passage; 0 for summaries). If the transcripts don't contain the \
+answer, say so plainly and don't guess. Speakers are \"Me\" (the user), \"Others\", \
+\"Speaker N\" or have names.",
         today = Local::now().format("%A, %d.%m.%Y")
     )
 }
@@ -72,20 +71,20 @@ fn tools_claude() -> Value {
     json!([
         {
             "name": "search_meetings",
-            "description": "Hybrid-Suche (Stichwörter + Bedeutung) über alle Transkript-Abschnitte und Zusammenfassungen. Liefert die besten Treffer mit meeting_id, Titel, Datum, start_secs und Text.",
+            "description": "Hybrid search (keywords + meaning) over all transcript passages and summaries. Returns the best hits with meeting_id, title, date, start_secs and text.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Suchanfrage, gern als Umschreibung des Gesuchten"},
-                    "from_date": {"type": "string", "description": "Frühestes Datum YYYY-MM-DD (optional)"},
-                    "to_date": {"type": "string", "description": "Spätestes Datum YYYY-MM-DD (optional)"}
+                    "query": {"type": "string", "description": "Search query, ideally a paraphrase of what you are looking for"},
+                    "from_date": {"type": "string", "description": "Earliest date YYYY-MM-DD (optional)"},
+                    "to_date": {"type": "string", "description": "Latest date YYYY-MM-DD (optional)"}
                 },
                 "required": ["query"]
             }
         },
         {
             "name": "list_meetings",
-            "description": "Listet Besprechungen (id, Titel, Datum, Dauer, ob Zusammenfassung vorhanden), optional im Zeitraum.",
+            "description": "Lists meetings (id, title, date, duration, whether a summary exists), optionally within a date range.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -96,7 +95,7 @@ fn tools_claude() -> Value {
         },
         {
             "name": "read_transcript",
-            "description": "Liest das Transkript einer Besprechung (Zeilen mit Sekunden, Zeit und Sprecher), optional nur einen Zeitbereich.",
+            "description": "Reads a meeting's transcript (lines with seconds, time and speaker), optionally only a time range.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -168,18 +167,18 @@ fn run_tool(name: &str, input: &Value) -> (String, String) {
                         })
                     })
                     .collect();
-                Ok((serde_json::to_string(&out)?, "Besprechungen auflisten".into()))
+                Ok((serde_json::to_string(&out)?, tr("Besprechungen auflisten").to_string()))
             }
             "read_transcript" => {
-                let id = input["meeting_id"].as_i64().context("meeting_id fehlt")?;
+                let id = input["meeting_id"].as_i64().context("meeting_id missing")?;
                 let from = input["from_secs"].as_f64().unwrap_or(0.0);
                 let to = input["to_secs"].as_f64().unwrap_or(f64::MAX);
                 let m = store.get(id)?.context(tr("Besprechung nicht gefunden"))?;
                 let mut out = format!("{} · {}\n", m.title, m.started_at.format("%Y-%m-%d %H:%M"));
                 for s in m.segments.iter().filter(|s| s.end_secs >= from && s.start_secs <= to) {
-                    out.push_str(&format!("[{:.0}s {}] {}: {}\n", s.start_secs, format_ts(s.start_secs), s.speaker_label(), s.text));
+                    out.push_str(&format!("[{:.0}s {}] {}: {}\n", s.start_secs, format_ts(s.start_secs), crate::summary::llm_speaker(s.speaker_label()), s.text));
                     if out.len() > 40_000 {
-                        out.push_str("… (gekürzt; kleineren Zeitbereich lesen)\n");
+                        out.push_str("… (truncated; read a smaller time range)\n");
                         break;
                     }
                 }
@@ -190,7 +189,7 @@ fn run_tool(name: &str, input: &Value) -> (String, String) {
     })();
     match result {
         Ok(r) => r,
-        Err(e) => (format!("Fehler: {e:#}"), format!("Werkzeugfehler: {e:#}")),
+        Err(e) => (format!("Error: {e:#}"), trf("Werkzeugfehler: {}", &[&format!("{e:#}")])),
     }
 }
 
@@ -317,7 +316,7 @@ fn ask_claude(question: &str, history: &[(String, String)], req: &SummaryRequest
                 messages.push(json!({"role": "assistant", "content": blocks}));
                 messages.push(json!({"role": "user", "content": results}));
                 if round + 2 == MAX_ROUNDS {
-                    messages.push(json!({"role": "user", "content": "Bitte antworte jetzt mit dem, was du gefunden hast."}));
+                    messages.push(json!({"role": "user", "content": "Please answer now with what you have found."}));
                 }
             }
             "refusal" => bail!("{}", trf("{} hat die Frage abgelehnt", &[&conn.name])),
@@ -411,7 +410,7 @@ fn ask_openai(question: &str, history: &[(String, String)], req: &SummaryRequest
         }
         round += 1;
         if round + 1 == MAX_ROUNDS {
-            messages.push(json!({"role": "user", "content": "Bitte antworte jetzt mit dem, was du gefunden hast."}));
+            messages.push(json!({"role": "user", "content": "Please answer now with what you have found."}));
         }
     }
     bail!("{}", trf("keine Antwort nach {} Suchschritten", &[&MAX_ROUNDS]))
@@ -425,13 +424,13 @@ fn retrieve_then_answer(question: &str, history: &[(String, String)], req: &Summ
     let _ = events.send(AskEvent::Status(status));
     let mut user = String::new();
     for (q, a) in history {
-        user.push_str(&format!("Frühere Frage: {q}\nFrühere Antwort: {a}\n\n"));
+        user.push_str(&format!("Earlier question: {q}\nEarlier answer: {a}\n\n"));
     }
     user.push_str(&format!(
-        "Suchergebnisse aus den Besprechungen (JSON):\n{hits}\n\nFrage: {question}\n\n\
-Antworte nur auf Grundlage dieser Ergebnisse und belege jede Aussage mit [[m:<meeting_id>@<start_secs>]]."
+        "Search results from the meetings (JSON):\n{hits}\n\nQuestion: {question}\n\n\
+Answer only from these results and back every statement with [[m:<meeting_id>@<start_secs>]]."
     ));
-    let system = system_prompt().replace("Nutze die Werkzeuge", "Die Suchergebnisse stehen in der Nachricht; nutze sie");
+    let system = system_prompt().replace("Use the tools to find", "The search results are in the message; use them to find");
     let done = crate::llm::complete(&req.connection, &req.model, req.effort.as_deref(), &system, &user)?;
     let answer = done.text.trim().to_string();
     let _ = events.send(AskEvent::TextDelta(answer.clone()));

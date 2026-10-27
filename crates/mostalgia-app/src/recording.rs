@@ -147,7 +147,7 @@ impl RecordingView {
                     text: SharedString::from(text.to_string()),
                 })
                 .collect(),
-            interim: [None, Some((58.3, "Und noch eine Sache zum Termin mit dem Kunden".into()))],
+            interim: [None, Some((58.3, "And one more thing about the client meeting".into()))],
             levels: [0.62, 0.48],
             bookmarks: vec![Bookmark {
                 at_secs: 41.0,
@@ -170,7 +170,7 @@ impl RecordingView {
         if let Phase::Recording(live) = &mut self.phase {
             live.engine_error = Some((engine.to_string().into(), message.to_string().into()));
             live.failed_chunks = failed;
-            live.warnings.push(trf("Sprechertrennung aus: {}", &[&"pyannote-segmentation-3.0.onnx fehlt"]).into());
+            live.warnings.push(trf("Sprechertrennung aus: {}", &[&tr("Modelle für die Sprechertrennung fehlen — scripts/download-model.sh ausführen")]).into());
             cx.notify();
         }
     }
