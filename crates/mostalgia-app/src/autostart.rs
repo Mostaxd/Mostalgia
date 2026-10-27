@@ -2,6 +2,7 @@
 //! `mostalgia_core::callwatch` into prompts, desktop notifications and
 //! start/stop actions, following the "Anrufe erkennen" settings.
 
+use mostalgia_core::i18n::{tr, trf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -86,13 +87,13 @@ impl AutoStart {
                     }
                     if config.call_autostart == "automatisch" {
                         self.started_for = Some(app.clone());
-                        notify("Aufnahme gestartet", &format!("Anruf in {app} erkannt – mostalgia nimmt auf."), None);
+                        notify(tr("Aufnahme gestartet"), &trf("Anruf in {} erkannt – mostalgia nimmt auf.", &[&app]), None);
                         actions.push(Action::Start(app));
                     } else {
                         self.prompt = Some(app.clone());
                         notify(
-                            &format!("Anruf in {app}"),
-                            "Soll mostalgia diese Besprechung aufnehmen?",
+                            &trf("Anruf in {}", &[&app]),
+                            tr("Soll mostalgia diese Besprechung aufnehmen?"),
                             Some((app, self.clicked_tx.clone())),
                         );
                     }
@@ -104,7 +105,7 @@ impl AutoStart {
                     if self.started_for.as_deref() == Some(app.as_str()) {
                         self.started_for = None;
                         if config.call_stop_auto && active {
-                            notify("Aufnahme beendet", &format!("Der Anruf in {app} ist vorbei."), None);
+                            notify(tr("Aufnahme beendet"), &trf("Der Anruf in {} ist vorbei.", &[&app]), None);
                             actions.push(Action::Stop);
                         }
                     }
@@ -158,7 +159,7 @@ fn send_notification(summary: &str, body: &str, action: Option<(String, crossbea
     )?;
     // Subscribe before showing it, so a quick click isn't missed.
     let signals = action.as_ref().map(|_| proxy.receive_all_signals()).transpose()?;
-    let actions: Vec<&str> = if action.is_some() { vec!["start", "Aufnahme starten"] } else { Vec::new() };
+    let actions: Vec<&str> = if action.is_some() { vec!["start", tr("Aufnahme starten")] } else { Vec::new() };
     let hints: HashMap<&str, zbus::zvariant::Value> = HashMap::new();
     let id: u32 = proxy.call(
         "Notify",

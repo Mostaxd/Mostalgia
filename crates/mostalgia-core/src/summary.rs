@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::chunker::format_ts;
+use crate::i18n::{tr, trf};
 use crate::store::Meeting;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,11 +146,11 @@ pub fn api_key(provider: Provider) -> Result<Option<String>> {
             return Ok(Some(key.trim().to_string()));
         }
     }
-    let entry = keyring::Entry::new(KEYRING_SERVICE, provider.keyring_user()).context("opening the system keyring")?;
+    let entry = keyring::Entry::new(KEYRING_SERVICE, provider.keyring_user()).context(tr("Schlüsselbund nicht erreichbar"))?;
     match entry.get_password() {
         Ok(key) => Ok(Some(key)),
         Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(e).context("reading the API key from the system keyring"),
+        Err(e) => Err(e).context(tr("API-Schlüssel konnte nicht aus dem Schlüsselbund gelesen werden")),
     }
 }
 
@@ -162,7 +163,7 @@ pub fn key_from_env(provider: Provider) -> bool {
 pub fn save_api_key(provider: Provider, key: &str) -> Result<()> {
     keyring::Entry::new(KEYRING_SERVICE, provider.keyring_user())
         .and_then(|e| e.set_password(key.trim()))
-        .context("saving the API key to the system keyring")
+        .context(tr("API-Schlüssel konnte nicht im Schlüsselbund gespeichert werden"))
 }
 
 /// Built-in model list, used until (or if) the live list can't be fetched.
@@ -229,7 +230,7 @@ pub fn list_models(provider: Provider, key: &str) -> Result<Vec<ModelInfo>> {
             })
         })
         .collect::<Vec<_>>();
-    anyhow::ensure!(!models.is_empty(), "the provider returned no models");
+    anyhow::ensure!(!models.is_empty(), "{}", tr("Der Anbieter hat keine Modelle geliefert"));
     Ok(models)
 }
 
@@ -244,7 +245,7 @@ pub fn transcript_text(meeting: &Meeting) -> String {
 
 fn user_message(meeting: &Meeting) -> Result<String> {
     let transcript = transcript_text(meeting);
-    anyhow::ensure!(!transcript.is_empty(), "the meeting has no transcript to summarize");
+    anyhow::ensure!(!transcript.is_empty(), "{}", tr("Die Besprechung hat kein Transkript zum Zusammenfassen"));
     Ok(format!(
         "Meeting on {}, {} min.\n\n<transcript>\n{}</transcript>",
         meeting.started_at.format("%d.%m.%Y %H:%M"),
@@ -260,7 +261,7 @@ pub fn summarize(req: &SummaryRequest, key: &str, meeting: &Meeting) -> Result<G
         Provider::DeepSeek => deepseek(req, key, &user)?,
     };
     let markdown = markdown.trim().to_string();
-    anyhow::ensure!(!markdown.is_empty(), "the model returned an empty summary");
+    anyhow::ensure!(!markdown.is_empty(), "{}", tr("Das Modell hat eine leere Zusammenfassung geliefert"));
     let title = markdown
         .lines()
         .find_map(|l| l.strip_prefix("# "))
@@ -310,19 +311,19 @@ fn claude_once(req: &SummaryRequest, key: &str, user: &str) -> Result<(String, S
         body["fallbacks"] = json!("default");
         request = request.header("anthropic-beta", "server-side-fallback-2026-07-01");
     }
-    let resp = request.json(&body).send().context("calling the Claude API")?;
+    let resp = request.json(&body).send().context(tr("Claude-API nicht erreichbar"))?;
     if !resp.status().is_success() {
         let status = resp.status();
         let value: Value = resp.json().unwrap_or_default();
-        let msg = value["error"]["message"].as_str().unwrap_or("unknown error");
-        bail!("Claude API error ({status}): {msg}");
+        let msg = value["error"]["message"].as_str().unwrap_or(tr("unbekannt"));
+        bail!("{}", trf("Claude-API-Fehler ({}): {}", &[&status, &msg]));
     }
 
     let mut text = String::new();
     let mut model = req.model.clone();
     let mut stop_reason = String::new();
     for line in BufReader::new(resp).lines() {
-        let line = line.context("reading the Claude API stream")?;
+        let line = line.context(tr("Antwort der Claude-API konnte nicht gelesen werden"))?;
         let Some(data) = line.strip_prefix("data: ") else { continue };
         let Ok(event) = serde_json::from_str::<Value>(data) else { continue };
         match event["type"].as_str() {
@@ -340,15 +341,15 @@ fn claude_once(req: &SummaryRequest, key: &str, user: &str) -> Result<(String, S
                 }
             }
             Some("error") => bail!(
-                "Claude API error: {}",
-                event["error"]["message"].as_str().unwrap_or("unknown error")
+                "{}",
+                trf("Claude-API-Fehler: {}", &[&event["error"]["message"].as_str().unwrap_or(tr("unbekannt"))])
             ),
             _ => {}
         }
     }
     match stop_reason.as_str() {
-        "refusal" => bail!("Claude hat die Zusammenfassung abgelehnt (refusal); nichts gespeichert"),
-        "max_tokens" => bail!("the summary was cut off (max_tokens)"),
+        "refusal" => bail!("{}", tr("Claude hat die Zusammenfassung abgelehnt (refusal); nichts gespeichert")),
+        "max_tokens" => bail!("{}", tr("Die Zusammenfassung wurde abgeschnitten (max_tokens)")),
         _ => {}
     }
     Ok((text, model, req.effort.clone()))
@@ -369,17 +370,17 @@ fn deepseek(req: &SummaryRequest, key: &str, user: &str) -> Result<(String, Stri
         .bearer_auth(key)
         .json(&body)
         .send()
-        .context("calling the DeepSeek API")?;
+        .context(tr("DeepSeek-API nicht erreichbar"))?;
     let status = resp.status();
-    let value: Value = resp.json().context("reading the DeepSeek API response")?;
+    let value: Value = resp.json().context(tr("Antwort der DeepSeek-API konnte nicht gelesen werden"))?;
     if !status.is_success() {
-        let msg = value["error"]["message"].as_str().unwrap_or("unknown error");
-        bail!("DeepSeek API error ({status}): {msg}");
+        let msg = value["error"]["message"].as_str().unwrap_or(tr("unbekannt"));
+        bail!("{}", trf("DeepSeek-API-Fehler ({}): {}", &[&status, &msg]));
     }
     let choice = &value["choices"][0];
     match choice["finish_reason"].as_str() {
-        Some("length") => bail!("the summary was cut off (length)"),
-        Some("content_filter") => bail!("DeepSeek hat die Zusammenfassung abgelehnt; nichts gespeichert"),
+        Some("length") => bail!("{}", tr("Die Zusammenfassung wurde abgeschnitten (length)")),
+        Some("content_filter") => bail!("{}", tr("DeepSeek hat die Zusammenfassung abgelehnt; nichts gespeichert")),
         _ => {}
     }
     let text = choice["message"]["content"].as_str().unwrap_or_default().to_string();

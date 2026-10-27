@@ -14,6 +14,8 @@ use mostalgia_core::audio::{self, SourceInfo};
 use mostalgia_core::config::Config;
 use mostalgia_core::{paths, summary};
 
+use mostalgia_core::i18n::{tr, trf};
+
 use crate::{themes, ui};
 
 /// Pick a summary model (from the model dropdown).
@@ -90,25 +92,25 @@ impl Category {
     }
 
     fn title(self) -> &'static str {
-        match self {
+        tr(match self {
             Category::Aufnahme => "Aufnahme",
             Category::Sprecher => "Sprecher",
             Category::Ki => "KI & Zusammenfassung",
             Category::Darstellung => "Darstellung",
             Category::Speicher => "Speicher & Export",
             Category::System => "Tastenkürzel & System",
-        }
+        })
     }
 
     fn subtitle(self) -> &'static str {
-        match self {
+        tr(match self {
             Category::Aufnahme => "Geräte, Sprache und Spracherkennung",
             Category::Sprecher => "Wer hat was gesagt",
             Category::Ki => "Anbieter, Modell und Denktiefe für Zusammenfassungen",
             Category::Darstellung => "Design, Schrift und Animationen",
             Category::Speicher => "Wo Aufnahmen liegen und wie exportiert wird",
             Category::System => "Tastenkürzel, Tray-Symbol und Systeminfo",
-        }
+        })
     }
 
     fn icon(self) -> IconName {
@@ -160,7 +162,7 @@ fn read_shortcut() -> Option<String> {
 /// Binds Super+Shift+R to `mostalgia toggle` (the CLI next to this app).
 fn install_shortcut() -> anyhow::Result<String> {
     let cli = std::env::current_exe()?.with_file_name("mostalgia");
-    anyhow::ensure!(cli.exists(), "mostalgia (CLI) nicht neben der App gefunden: {}", cli.display());
+    anyhow::ensure!(cli.exists(), "{}", trf("mostalgia (CLI) nicht neben der App gefunden: {}", &[&cli.display()]));
     let list = gsettings(&["get", MEDIA_KEYS, "custom-keybindings"]).unwrap_or_default();
     if !list.contains(SHORTCUT_PATH) {
         let new = if list.is_empty() || list == "@as []" || list == "[]" {
@@ -168,16 +170,16 @@ fn install_shortcut() -> anyhow::Result<String> {
         } else {
             format!("{}, '{SHORTCUT_PATH}']", list.trim_end_matches(']'))
         };
-        gsettings(&["set", MEDIA_KEYS, "custom-keybindings", &new]).ok_or_else(|| anyhow::anyhow!("gsettings fehlgeschlagen"))?;
+        gsettings(&["set", MEDIA_KEYS, "custom-keybindings", &new]).ok_or_else(|| anyhow::anyhow!(tr("gsettings fehlgeschlagen")))?;
     }
     let schema = format!("{MEDIA_KEYS}.custom-keybinding:{SHORTCUT_PATH}");
     let binding = "<Super><Shift>r";
     for (key, value) in [
-        ("name", "mostalgia: Aufnahme starten/stoppen".to_string()),
+        ("name", tr("mostalgia: Aufnahme starten/stoppen").to_string()),
         ("command", format!("{} toggle", cli.display())),
         ("binding", binding.to_string()),
     ] {
-        gsettings(&["set", &schema, key, &value]).ok_or_else(|| anyhow::anyhow!("gsettings fehlgeschlagen"))?;
+        gsettings(&["set", &schema, key, &value]).ok_or_else(|| anyhow::anyhow!(tr("gsettings fehlgeschlagen")))?;
     }
     Ok(binding.into())
 }
@@ -211,7 +213,7 @@ fn pretty_binding(b: &str) -> String {
 impl SettingsView {
     pub fn new(gpu: Option<String>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let api_key = cx.new(|cx| InputState::new(window, cx).masked(true).placeholder("sk-ant-…"));
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Einstellungen durchsuchen"));
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Einstellungen durchsuchen")));
         let sub = cx.subscribe_in(&search, window, |this, input, event: &gpui_kit::component::input::InputEvent, _, cx| {
             if let gpui_kit::component::input::InputEvent::Change = event {
                 this.query = input.read(cx).value().to_string();
@@ -278,13 +280,23 @@ impl SettingsView {
         cx.notify();
     }
 
+    /// Switches the app's UI language live ("system", "de", "en").
+    fn set_ui_language(&mut self, value: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+        self.config.ui_language = value.into();
+        mostalgia_core::i18n::set_lang(mostalgia_core::i18n::resolve(value));
+        self.search.update(cx, |s, cx| s.set_placeholder(tr("Einstellungen durchsuchen"), window, cx));
+        self.refresh_key_status();
+        self.save(cx);
+        cx.refresh_windows();
+    }
+
     fn refresh_key_status(&mut self) {
         let provider = self.config.summary_provider;
         self.key_status = match summary::api_key(provider) {
-            Ok(Some(_)) if summary::key_from_env(provider) => "Aus der Umgebungsvariable".into(),
-            Ok(Some(_)) => "Im GNOME-Schlüsselbund gespeichert".into(),
-            Ok(None) => format!("Kein {}-Schlüssel hinterlegt — Zusammenfassungen sind aus", provider.name()).into(),
-            Err(e) => format!("Schlüsselbund nicht erreichbar: {e:#}").into(),
+            Ok(Some(_)) if summary::key_from_env(provider) => tr("Aus der Umgebungsvariable").into(),
+            Ok(Some(_)) => tr("Im GNOME-Schlüsselbund gespeichert").into(),
+            Ok(None) => trf("Kein {}-Schlüssel hinterlegt — Zusammenfassungen sind aus", &[&provider.name()]).into(),
+            Err(e) => trf("Schlüsselbund nicht erreichbar: {}", &[&format!("{e:#}")]).into(),
         };
     }
 
@@ -390,16 +402,23 @@ impl SettingsView {
                 self.refresh_key_status();
                 self.load_models(cx);
             }
-            Err(e) => self.key_status = format!("Speichern fehlgeschlagen: {e:#}").into(),
+            Err(e) => self.key_status = trf("Speichern fehlgeschlagen: {}", &[&format!("{e:#}")]).into(),
         }
         cx.notify();
     }
 
     fn render_devices(&mut self, kind: Kind, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme().clone();
-        let (title, current, default_label) = match kind {
-            Kind::Mic => ("Mikrofon", self.config.mic_device.clone(), "Systemstandard"),
-            Kind::System => ("Desktop-Audio", self.config.system_device.clone(), "Standardausgabe (alles, was abgespielt wird)"),
+        // `id` keeps element ids stable across languages.
+        let (id, title, current, default_label, default_tip) = match kind {
+            Kind::Mic => ("mic", tr("Mikrofon"), self.config.mic_device.clone(), tr("Systemstandard"), tr("Das Standard-Mikrofon des Systems")),
+            Kind::System => (
+                "system",
+                tr("Desktop-Audio"),
+                self.config.system_device.clone(),
+                tr("Standardausgabe"),
+                tr("Alles, was gerade über die Standardausgabe abgespielt wird"),
+            ),
         };
         let mut rows: Vec<AnyElement> = Vec::new();
         let row = |id: SharedString, name: Option<String>, label: String, detail: Option<String>, selected: bool, cx: &mut Context<Self>| {
@@ -440,9 +459,13 @@ impl SettingsView {
                     this.save(cx);
                 }))
         };
-        rows.push(row(format!("{title}-default").into(), None, default_label.into(), None, current.is_none(), cx).into_any_element());
+        rows.push(
+            row(format!("{id}-default").into(), None, default_label.into(), None, current.is_none(), cx)
+                .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(default_tip).build(window, cx))
+                .into_any_element(),
+        );
         match &self.sources {
-            None => rows.push(div().p_2().text_sm().text_color(theme.muted_foreground).child("Geräte werden gesucht …").into_any_element()),
+            None => rows.push(div().p_2().text_sm().text_color(theme.muted_foreground).child(tr("Geräte werden gesucht …")).into_any_element()),
             Some(Err(e)) => rows.push(div().p_2().text_sm().text_color(theme.danger).child(e.clone()).into_any_element()),
             Some(Ok(sources)) => {
                 let show_all = self.show_all_devices;
@@ -458,21 +481,21 @@ impl SettingsView {
                     if !s.available && !selected && !show_all {
                         continue;
                     }
-                    let label = if s.available { s.label.clone() } else { format!("{} (nicht angeschlossen)", s.label) };
+                    let label = if s.available { s.label.clone() } else { trf("{} (nicht angeschlossen)", &[&s.label]) };
                     rows.push(
-                        row(format!("{title}-{i}").into(), Some(s.name.clone()), label, Some(s.description.clone()), selected, cx)
+                        row(format!("{id}-{i}").into(), Some(s.name.clone()), label, Some(s.description.clone()), selected, cx)
                             .into_any_element(),
                     );
                 }
                 if hidden > 0 {
                     rows.push(
-                        Button::new(SharedString::from(format!("{title}-show-all")))
+                        Button::new(SharedString::from(format!("{id}-show-all")))
                             .xsmall()
                             .ghost()
                             .label(if show_all {
-                                "Nicht angeschlossene ausblenden".to_string()
+                                tr("Nicht angeschlossene ausblenden").to_string()
                             } else {
-                                format!("Alle Geräte anzeigen ({hidden} nicht angeschlossen)")
+                                trf("Alle Geräte anzeigen ({} nicht angeschlossen)", &[&hidden])
                             })
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.show_all_devices = !this.show_all_devices;
@@ -490,14 +513,16 @@ impl SettingsView {
         ui::card(cx)
             .child(
                 h_flex()
+                    .flex_wrap()
+                    .gap_2()
                     .justify_between()
                     .child(div().font_semibold().child(title))
                     .child(
-                        Button::new(SharedString::from(format!("test-{title}")))
+                        Button::new(SharedString::from(format!("test-{id}")))
                             .small()
                             .outline()
                             .icon(IconName::AudioLines)
-                            .label(if testing { "Höre 3 s zu …" } else { "Testen" })
+                            .label(if testing { tr("Höre 3 s zu …") } else { tr("Testen") })
                             .loading(testing)
                             .on_click(cx.listener(move |this, _, _, cx| this.test_device(kind, cx))),
                     ),
@@ -506,15 +531,17 @@ impl SettingsView {
                 el.child(match r {
                     Ok(rms) => {
                         let level = ui::meter_level(rms);
-                        let text = if level < 0.15 {
+                        let text = tr(if level < 0.15 {
                             "Kaum Signal — ist das richtige Gerät gewählt?"
                         } else if level > 0.95 {
                             "Sehr laut — eventuell übersteuert"
                         } else {
                             "Signal ist da"
-                        };
+                        });
                         h_flex()
-                            .gap_3()
+                            .flex_wrap()
+                            .gap_x_3()
+                            .gap_y_1()
                             .text_sm()
                             .child(div().w(px(160.)).child(ui::level_meter(level, true, cx)))
                             .child(div().text_color(theme.muted_foreground).child(format!("{:.0} dB · {text}", 20.0 * rms.max(1e-6).log10())))
@@ -580,7 +607,7 @@ impl SettingsView {
         let mut tiles: Vec<AnyElement> = vec![
             tile(
                 themes::SYSTEM.into(),
-                "System (GNOME)".into(),
+                tr("System (GNOME)").into(),
                 [
                     themes::hex(&light.background),
                     themes::hex(&dark.sidebar),
@@ -602,7 +629,7 @@ impl SettingsView {
                 themes::hex(&t.primary),
                 themes::hex(&t.border),
             ];
-            tiles.push(tile(t.id.clone(), t.name.clone(), preview, t.font.clone().into(), t.radius, cx).into_any_element());
+            tiles.push(tile(t.id.clone(), theme_name(&t.id, &t.name), preview, t.font.clone().into(), t.radius, cx).into_any_element());
         }
         let current_font = self.config.font.clone();
         let mut font_buttons: Vec<AnyElement> = Vec::new();
@@ -623,32 +650,29 @@ impl SettingsView {
                     .into_any_element(),
             );
         }
+        let row = |label: &str, hint: Option<&str>, control: AnyElement| settings_row(label, hint, control, &theme);
         ui::card(cx)
-            .child(div().font_semibold().child("Design"))
+            .child(div().font_semibold().child(tr("Design")))
             .child(h_flex().flex_wrap().gap_4().children(tiles))
-            .child(
-                h_flex()
-                    .justify_between()
-                    .gap_4()
-                    .child(
-                        v_flex()
-                            .child(div().text_sm().child("Schriftart"))
-                            .child(div().text_xs().text_color(theme.muted_foreground).child("Arabische Schrift nutzt immer Noto Sans Arabic.")),
-                    )
-                    .child(h_flex().flex_wrap().gap_1().children(font_buttons)),
-            )
-            .child(
-                h_flex()
-                    .justify_between()
-                    .child(div().text_sm().child("Animationen reduzieren"))
-                    .child(Switch::new("set-reduce-motion").checked(self.config.reduce_motion).on_change(cx.listener(|this, v: &bool, _, cx| {
+            .child(row(
+                tr("Schriftart"),
+                Some(tr("Arabische Schrift nutzt immer Noto Sans Arabic.")),
+                h_flex().flex_wrap().gap_1().children(font_buttons).into_any_element(),
+            ))
+            .child(row(
+                tr("Animationen reduzieren"),
+                None,
+                Switch::new("set-reduce-motion")
+                    .checked(self.config.reduce_motion)
+                    .on_change(cx.listener(|this, v: &bool, _, cx| {
                         this.config.reduce_motion = *v;
                         this.save(cx);
-                    }))),
-            )
-            .child(div().text_xs().text_color(theme.muted_foreground).child(format!(
+                    }))
+                    .into_any_element(),
+            ))
+            .child(div().text_xs().text_color(theme.muted_foreground).child(trf(
                 "Eigene Designs: JSON-Dateien in {} (Format wie assets/themes.json).",
-                mostalgia_core::config::Config::path().with_file_name("themes").display()
+                &[&mostalgia_core::config::Config::path().with_file_name("themes").display()],
             )))
     }
 }
@@ -660,7 +684,7 @@ impl Render for SettingsView {
         let choice = |id: &'static str, label: &'static str, on: bool, cx: &mut Context<Self>, f: fn(&mut Config)| {
             Button::new(id)
                 .small()
-                .label(label)
+                .label(tr(label))
                 .when(on, |b| b.primary())
                 .when(!on, |b| b.ghost())
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -669,27 +693,7 @@ impl Render for SettingsView {
                 }))
         };
         let theme = cx.theme().clone();
-        // A setting row: label (+ hint) on the left, control on the right.
-        // A setting row: label (+ hint) and its control side by side; when the
-        // card is too narrow the control wraps below the label instead of
-        // squeezing it (the label never gets narrower than ~12 rem).
-        let row = |label: &str, hint: Option<&str>, control: AnyElement| {
-            h_flex()
-                .w_full()
-                .flex_wrap()
-                .justify_between()
-                .items_center()
-                .gap_x_4()
-                .gap_y_2()
-                .child(
-                    v_flex()
-                        .flex_1()
-                        .min_w(px(190.))
-                        .child(div().text_sm().child(label.to_string()))
-                        .when_some(hint, |el, h| el.child(div().text_xs().text_color(theme.muted_foreground).child(h.to_string()))),
-                )
-                .child(div().flex_none().max_w_full().child(control))
-        };
+        let row = |label: &str, hint: Option<&str>, control: AnyElement| settings_row(label, hint, control, &theme);
         let switch = |id: &'static str, on: bool, cx: &mut Context<Self>, f: fn(&mut Config, bool)| {
             Switch::new(id)
                 .checked(on)
@@ -699,28 +703,28 @@ impl Render for SettingsView {
                 }))
                 .into_any_element()
         };
-        let title = |t: &str| div().font_semibold().child(t.to_string());
+        let title = |t: &'static str| div().font_semibold().child(tr(t));
         let mut cards: Vec<Card> = Vec::new();
 
         // ── Aufnahme ──
         cards.push(Card {
             category: Category::Aufnahme,
             title: "Mikrofon",
-            keywords: "mikrofon gerät eingang test pegel yeti",
+            keywords: "mikrofon gerät eingang test pegel yeti microphone mic device input level",
             wide: false,
             element: self.render_devices(Kind::Mic, cx).into_any_element(),
         });
         cards.push(Card {
             category: Category::Aufnahme,
             title: "Desktop-Audio",
-            keywords: "desktop systemaudio ausgabe monitor gerät test pegel",
+            keywords: "desktop systemaudio ausgabe monitor gerät test pegel system audio output speaker device level",
             wide: false,
             element: self.render_devices(Kind::System, cx).into_any_element(),
         });
         let recognition = ui::card(cx)
             .child(title("Sprache & Erkennung"))
             .child(row(
-                "Sprache",
+                tr("Sprache"),
                 None,
                 h_flex()
                     .gap_1()
@@ -730,8 +734,8 @@ impl Render for SettingsView {
                     .into_any_element(),
             ))
             .child(row(
-                "Spracherkennung (VAD)",
-                Some("Empfindlicher erkennt leise Stimmen, aber auch mehr Geräusche."),
+                tr("Spracherkennung (VAD)"),
+                Some(tr("Empfindlicher erkennt leise Stimmen, aber auch mehr Geräusche.")),
                 h_flex()
                     .gap_1()
                     .child(choice("vad-low", "Zurückhaltend", threshold > 0.55, cx, |c| c.vad_threshold = 0.65))
@@ -740,19 +744,19 @@ impl Render for SettingsView {
                     .into_any_element(),
             ))
             .child(row(
-                "Vorläufigen Text anzeigen",
-                Some("Grauer Text schon während des Sprechens, ersetzt beim Satzende."),
+                tr("Vorläufigen Text anzeigen"),
+                Some(tr("Grauer Text schon während des Sprechens, ersetzt beim Satzende.")),
                 switch("set-interim", self.config.interim_text, cx, |c, v| c.interim_text = v),
             ))
             .child(row(
-                "Rauschunterdrückung (Mikrofon)",
-                Some("Filtert Lüfter und Brummen vor der Erkennung; die Aufnahme bleibt roh."),
+                tr("Rauschunterdrückung (Mikrofon)"),
+                Some(tr("Filtert Lüfter und Brummen vor der Erkennung; die Aufnahme bleibt roh.")),
                 switch("set-denoise", self.config.denoise, cx, |c, v| c.denoise = v),
             ));
         cards.push(Card {
             category: Category::Aufnahme,
             title: "Sprache & Erkennung",
-            keywords: "sprache deutsch english automatisch vad spracherkennung empfindlich vorläufig interim rauschunterdrückung lüfter",
+            keywords: "sprache deutsch english automatisch vad spracherkennung empfindlich vorläufig interim rauschunterdrückung lüfter language german speech detection sensitivity provisional text noise suppression fan",
             wide: false,
             element: recognition.into_any_element(),
         });
@@ -762,7 +766,7 @@ impl Render for SettingsView {
         let mode_button = |id: &'static str, label: &'static str, value: &'static str, cx: &mut Context<Self>| {
             Button::new(id)
                 .small()
-                .label(label)
+                .label(tr(label))
                 .when(mode == value, |b| b.primary())
                 .when(mode != value, |b| b.ghost())
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -791,11 +795,11 @@ impl Render for SettingsView {
         }
         let calls = ui::card(cx)
             .child(title("Anrufe erkennen"))
-            .child(div().text_sm().text_color(theme.muted_foreground).child(
+            .child(div().text_sm().text_color(theme.muted_foreground).child(tr(
                 "Bemerkt, wenn Zoom, Teams, Meet im Browser, Discord & Co. das Mikrofon benutzen.",
-            ))
+            )))
             .child(row(
-                "Bei einem Anruf",
+                tr("Bei einem Anruf"),
                 None,
                 h_flex()
                     .gap_1()
@@ -805,27 +809,27 @@ impl Render for SettingsView {
                     .into_any_element(),
             ))
             .child(row(
-                "Automatisch beenden, wenn der Anruf endet",
-                Some("Nur für Aufnahmen, die durch einen Anruf gestartet wurden."),
+                tr("Automatisch beenden, wenn der Anruf endet"),
+                Some(tr("Nur für Aufnahmen, die durch einen Anruf gestartet wurden.")),
                 switch("call-stop", self.config.call_stop_auto, cx, |c, v| c.call_stop_auto = v),
             ))
             .child(if app_rows.is_empty() {
                 div()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child("Erkannte Apps erscheinen hier nach dem ersten Anruf – einzeln abschaltbar.")
+                    .child(tr("Erkannte Apps erscheinen hier nach dem ersten Anruf – einzeln abschaltbar."))
                     .into_any_element()
             } else {
                 v_flex()
                     .gap_2()
-                    .child(div().text_xs().font_semibold().text_color(theme.muted_foreground).child("ERKANNTE APPS"))
+                    .child(div().text_xs().font_semibold().text_color(theme.muted_foreground).child(tr("ERKANNTE APPS")))
                     .children(app_rows)
                     .into_any_element()
             });
         cards.push(Card {
             category: Category::Aufnahme,
             title: "Anrufe erkennen",
-            keywords: "anruf anrufe call zoom teams meet discord slack auto start automatisch aufnahme starten erkennen",
+            keywords: "anruf anrufe call calls zoom teams meet discord slack auto start automatisch aufnahme starten erkennen detect automatic recording",
             wide: false,
             element: calls.into_any_element(),
         });
@@ -836,17 +840,17 @@ impl Render for SettingsView {
         let speakers = ui::card(cx)
             .child(title("Sprecher"))
             .child(row(
-                "Sprecher bei Live-Text anzeigen",
-                Some("„Ich“ (Mikrofon) und „Andere“ (Desktop) an jeder Zeile."),
+                tr("Sprecher bei Live-Text anzeigen"),
+                Some(tr("„Ich“ (Mikrofon) und „Andere“ (Desktop) an jeder Zeile.")),
                 switch("set-labels", self.config.speaker_labels, cx, |c, v| c.speaker_labels = v),
             ))
             .child(row(
-                "Mehrere Sprecher unterscheiden",
-                Some(if diarize_ok {
+                tr("Mehrere Sprecher unterscheiden"),
+                Some(tr(if diarize_ok {
                     "Teilt „Andere“ in Sprecher 1, 2, … auf. Live ungefähr, im fertigen Transkript genau."
                 } else {
                     "Modelle fehlen — scripts/download-model.sh ausführen."
-                }),
+                })),
                 Switch::new("set-diarize")
                     .checked(self.config.diarize && diarize_ok)
                     .disabled(!diarize_ok)
@@ -858,8 +862,8 @@ impl Render for SettingsView {
             ))
             .when(self.config.diarize && diarize_ok, |el| {
                 el.child(row(
-                    "Trennschärfe",
-                    Some("Werden zwei Personen zusammengelegt: „Mehr Sprecher“. Wird eine Person geteilt: „Weniger“."),
+                    tr("Trennschärfe"),
+                    Some(tr("Werden zwei Personen zusammengelegt: „Mehr Sprecher“. Wird eine Person geteilt: „Weniger“.")),
                     h_flex()
                         .gap_1()
                         .child(choice("dia-less", "Weniger", dt > 0.55, cx, |c| c.diarize_threshold = 0.6))
@@ -868,13 +872,13 @@ impl Render for SettingsView {
                         .into_any_element(),
                 ))
             })
-            .child(div().text_xs().text_color(theme.muted_foreground).child(
+            .child(div().text_xs().text_color(theme.muted_foreground).child(tr(
                 "Namen vergeben: im Transkript auf einen Sprecher-Chip klicken — alle Zeilen werden umbenannt.",
-            ));
+            )));
         cards.push(Card {
             category: Category::Sprecher,
             title: "Sprecher",
-            keywords: "sprecher ich andere label diarisierung trennen mehrere personen umbenennen",
+            keywords: "sprecher ich andere label diarisierung trennen mehrere personen umbenennen speaker speakers me others diarization separate people rename",
             wide: false,
             element: speakers.into_any_element(),
         });
@@ -885,14 +889,14 @@ impl Render for SettingsView {
         let model_label = current.as_ref().map_or(self.config.summary_model.clone(), |m| m.display_name.clone());
         let efforts: Vec<String> = current.as_ref().map(|m| m.efforts.clone()).unwrap_or_default();
         let models = self.models.clone();
-        let effort_label = |e: &str| match e {
+        let effort_label = |e: &str| tr(match e {
             "low" => "Niedrig",
             "medium" => "Mittel",
             "high" => "Hoch",
             "xhigh" => "Sehr hoch",
             "max" => "Maximum",
-            other => other,
-        }
+            _ => "Unbekannt",
+        })
         .to_string();
         let mut effort_buttons: Vec<AnyElement> = Vec::new();
         for e in &efforts {
@@ -922,7 +926,7 @@ impl Render for SettingsView {
         let model_card = ui::card(cx)
             .child(title("Modell"))
             .child(row(
-                "Anbieter",
+                tr("Anbieter"),
                 None,
                 h_flex()
                     .gap_1()
@@ -931,8 +935,8 @@ impl Render for SettingsView {
                     .into_any_element(),
             ))
             .child(row(
-                "Modell",
-                Some(if self.models_live { "Liste vom Anbieter" } else { "Eingebaute Liste (Schlüssel fehlt oder offline)" }),
+                tr("Modell"),
+                Some(tr(if self.models_live { "Liste vom Anbieter" } else { "Eingebaute Liste (Schlüssel fehlt oder offline)" })),
                 Button::new("summary-model")
                     .small()
                     .outline()
@@ -953,8 +957,8 @@ impl Render for SettingsView {
                         .gap_2()
                         .child(
                             v_flex()
-                                .child(div().text_sm().child("Denktiefe"))
-                                .child(div().text_xs().text_color(theme.muted_foreground).child("Mehr Denken = gründlicher, aber langsamer (bis zu Minuten).")),
+                                .child(div().text_sm().child(tr("Denktiefe")))
+                                .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Mehr Denken = gründlicher, aber langsamer (bis zu Minuten)."))),
                         )
                         .child(h_flex().flex_wrap().gap_1().children(effort_buttons)),
                 )
@@ -962,38 +966,69 @@ impl Render for SettingsView {
         cards.push(Card {
             category: Category::Ki,
             title: "Modell",
-            keywords: "ki claude deepseek anbieter modell opus sonnet haiku denktiefe thinking effort zusammenfassung",
+            keywords: "ki claude deepseek anbieter modell opus sonnet haiku denktiefe thinking effort zusammenfassung ai provider model summary",
             wide: false,
             element: model_card.into_any_element(),
         });
         let key_card = ui::card(cx)
-            .child(title(&format!("{}-API-Schlüssel", provider.name())))
-            .child(div().text_sm().text_color(theme.muted_foreground).child("Gesendet wird nur der Text der Besprechung, nie Audio."))
+            .child(div().font_semibold().child(trf("{}-API-Schlüssel", &[&provider.name()])))
+            .child(div().text_sm().text_color(theme.muted_foreground).child(tr("Gesendet wird nur der Text der Besprechung, nie Audio.")))
             .child(
                 h_flex()
+                    .flex_wrap()
                     .gap_2()
-                    .child(Input::new(&self.api_key).flex_1())
-                    .child(Button::new("save-key").primary().label("Speichern").on_click(cx.listener(|this, _, window, cx| this.save_key(window, cx)))),
+                    .child(div().flex_1().min_w(px(180.)).child(Input::new(&self.api_key)))
+                    .child(Button::new("save-key").primary().label(tr("Speichern")).on_click(cx.listener(|this, _, window, cx| this.save_key(window, cx)))),
             )
             .child(div().text_xs().text_color(theme.muted_foreground).child(self.key_status.clone()))
             .child(row(
-                "Automatisch nach jeder Aufnahme",
+                tr("Automatisch nach jeder Aufnahme"),
                 None,
                 switch("set-auto-sum", self.config.auto_summary, cx, |c, v| c.auto_summary = v),
             ));
         cards.push(Card {
             category: Category::Ki,
             title: "API-Schlüssel",
-            keywords: "api schlüssel key anthropic deepseek automatisch zusammenfassung",
+            keywords: "api schlüssel key anthropic deepseek automatisch zusammenfassung automatic summary",
             wide: false,
             element: key_card.into_any_element(),
         });
 
         // ── Darstellung ──
+        let ui_lang = self.config.ui_language.clone();
+        let lang_button = |id: &'static str, label: &'static str, value: &'static str, cx: &mut Context<Self>| {
+            Button::new(id)
+                .small()
+                .label(label)
+                .when(ui_lang == value, |b| b.primary())
+                .when(ui_lang != value, |b| b.ghost())
+                .on_click(cx.listener(move |this, _, window, cx| this.set_ui_language(value, window, cx)))
+        };
+        let app_language = ui::card(cx)
+            .child(title("Sprache der App"))
+            .child(row(
+                tr("App-Sprache"),
+                Some(tr("Zusammenfassungen und Transkripte bleiben in der Sprache der Besprechung.")),
+                h_flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .child(lang_button("ui-lang-system", tr("System"), "system", cx))
+                    // Language names in their own language.
+                    .child(lang_button("ui-lang-de", "Deutsch", "de", cx))
+                    .child(lang_button("ui-lang-en", "English", "en", cx))
+                    .into_any_element(),
+            ));
+        cards.push(Card {
+            category: Category::Darstellung,
+            title: "Sprache der App",
+            keywords: "sprache app oberfläche deutsch english englisch language interface ui",
+            wide: false,
+            element: app_language.into_any_element(),
+        });
         cards.push(Card {
             category: Category::Darstellung,
             title: "Design",
-            keywords: "design theme farbe hell dunkel blockwelt schrift schriftart animationen reduzieren",
+            keywords: "design theme farbe hell dunkel blockwelt schrift schriftart animationen reduzieren color light dark font animations reduce motion sprache app language",
             wide: true,
             element: self.render_themes(cx).into_any_element(),
         });
@@ -1006,33 +1041,33 @@ impl Render for SettingsView {
                 h_flex()
                     .gap_3()
                     .child(div().flex_1().min_w_0().text_sm().font_family(theme.mono_font_family.clone()).truncate().child(data_dir.display().to_string()))
-                    .child(Button::new("open-data").small().outline().icon(IconName::FolderOpen).label("Öffnen").on_click(move |_, _, cx| {
+                    .child(Button::new("open-data").small().outline().icon(IconName::FolderOpen).label(tr("Öffnen")).on_click(move |_, _, cx| {
                         cx.open_with_system(&data_dir);
                     })),
             )
-            .child(div().text_xs().text_color(theme.muted_foreground).child("Datenbank, Aufnahmen (WAV) und Modelle liegen hier."));
+            .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Datenbank, Aufnahmen (WAV) und Modelle liegen hier.")));
         cards.push(Card {
             category: Category::Speicher,
             title: "Speicherort",
-            keywords: "speicher ordner daten datenbank aufnahmen wav modelle",
+            keywords: "speicher ordner daten datenbank aufnahmen wav modelle storage folder data database recordings models",
             wide: false,
             element: storage.into_any_element(),
         });
         let export = ui::card(cx)
             .child(title("Export"))
-            .child(div().text_sm().child("In jeder Besprechung über „Exportieren“: Zusammenfassung und Transkript als"))
+            .child(div().text_sm().child(tr("In jeder Besprechung über „Exportieren“: Zusammenfassung und Transkript als")))
             .child(
                 v_flex()
                     .gap_1()
                     .text_sm()
                     .text_color(theme.muted_foreground)
-                    .children(mostalgia_core::export::Format::ALL.map(|f| h_flex().gap_2().child(Icon::new(IconName::FileText).xsmall()).child(f.label()))),
+                    .children(mostalgia_core::export::Format::ALL.map(|f| h_flex().gap_2().child(Icon::new(IconName::FileText).xsmall()).child(tr(f.label())))),
             )
-            .child(div().text_xs().text_color(theme.muted_foreground).child("Im Terminal: mostalgia export <id> --format md|txt|srt|docx"));
+            .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Im Terminal: mostalgia export <id> --format md|txt|srt|docx")));
         cards.push(Card {
             category: Category::Speicher,
             title: "Export",
-            keywords: "export markdown text srt untertitel word docx",
+            keywords: "export markdown text srt untertitel word docx subtitles",
             wide: false,
             element: export.into_any_element(),
         });
@@ -1040,18 +1075,20 @@ impl Render for SettingsView {
         // ── Tastenkürzel & System ──
         let shortcut = ui::card(cx)
             .child(title("Tastenkürzel"))
-            .child(div().text_sm().text_color(theme.muted_foreground).child("Startet oder stoppt eine Aufnahme von überall – auch wenn die App geschlossen ist."))
+            .child(div().text_sm().text_color(theme.muted_foreground).child(tr("Startet oder stoppt eine Aufnahme von überall – auch wenn die App geschlossen ist.")))
             .child(match &self.shortcut {
                 Some(b) => h_flex()
+                    .flex_wrap()
                     .gap_2()
                     .child(Icon::new(IconName::Check).small().text_color(theme.success))
-                    .child(div().text_sm().child("Eingerichtet:"))
+                    .child(div().text_sm().child(tr("Eingerichtet:")))
                     .child(div().px_2().py_0p5().rounded(theme.radius).border_1().border_color(theme.border).text_sm().font_family(theme.mono_font_family.clone()).child(pretty_binding(b)))
                     .into_any_element(),
                 None => h_flex()
+                    .flex_wrap()
                     .gap_2()
-                    .child(div().text_sm().child("Noch nicht eingerichtet."))
-                    .child(Button::new("install-shortcut").small().primary().icon(IconName::Keyboard).label("Super + Shift + R einrichten").on_click(cx.listener(|this, _, _, cx| {
+                    .child(div().text_sm().child(tr("Noch nicht eingerichtet.")))
+                    .child(Button::new("install-shortcut").small().primary().icon(IconName::Keyboard).label(tr("Super + Shift + R einrichten")).on_click(cx.listener(|this, _, _, cx| {
                         match install_shortcut() {
                             Ok(b) => this.shortcut = Some(b),
                             Err(e) => this.key_status = format!("{e:#}").into(),
@@ -1060,30 +1097,30 @@ impl Render for SettingsView {
                     })))
                     .into_any_element(),
             })
-            .child(div().text_xs().text_color(theme.muted_foreground).child("Ändern oder entfernen: GNOME-Einstellungen → Tastatur → Eigene Tastenkürzel."));
+            .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Ändern oder entfernen: GNOME-Einstellungen → Tastatur → Eigene Tastenkürzel.")));
         cards.push(Card {
             category: Category::System,
             title: "Tastenkürzel",
-            keywords: "tastenkürzel shortcut taste super toggle starten stoppen",
+            keywords: "tastenkürzel shortcut taste super toggle starten stoppen keyboard key start stop",
             wide: false,
             element: shortcut.into_any_element(),
         });
         let tray = ui::card(cx)
             .child(title("Tray-Symbol"))
             .child(match self.tray_available {
-                Some(true) => h_flex().gap_2().child(Icon::new(IconName::Check).small().text_color(theme.success)).child(div().text_sm().child("Aktiv – oben in der Leiste.")).into_any_element(),
+                Some(true) => h_flex().gap_2().child(Icon::new(IconName::Check).small().text_color(theme.success)).child(div().text_sm().child(tr("Aktiv – oben in der Leiste."))).into_any_element(),
                 Some(false) => v_flex()
                     .gap_1()
-                    .child(h_flex().gap_2().child(Icon::new(IconName::TriangleAlert).small().text_color(theme.warning)).child(div().text_sm().child("GNOME zeigt gerade keine Tray-Symbole an.")))
-                    .child(div().text_xs().text_color(theme.muted_foreground).child("Erweiterung einschalten und einmal ab- und wieder anmelden:"))
+                    .child(h_flex().gap_2().child(Icon::new(IconName::TriangleAlert).small().text_color(theme.warning)).child(div().text_sm().child(tr("GNOME zeigt gerade keine Tray-Symbole an."))))
+                    .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Erweiterung einschalten und einmal ab- und wieder anmelden:")))
                     .child(div().text_xs().font_family(theme.mono_font_family.clone()).child("gnome-extensions enable ubuntu-appindicators@ubuntu.com"))
                     .into_any_element(),
-                None => div().text_sm().text_color(theme.muted_foreground).child("Wird geprüft …").into_any_element(),
+                None => div().text_sm().text_color(theme.muted_foreground).child(tr("Wird geprüft …")).into_any_element(),
             });
         cards.push(Card {
             category: Category::System,
             title: "Tray-Symbol",
-            keywords: "tray symbol leiste appindicator gnome",
+            keywords: "tray symbol leiste appindicator gnome icon panel",
             wide: false,
             element: tray.into_any_element(),
         });
@@ -1100,19 +1137,19 @@ impl Render for SettingsView {
             .child(div().text_sm().child(format!("mostalgia {}", env!("CARGO_PKG_VERSION"))))
             .child(status_row(model.exists(), format!("Whisper: {}", model.display())))
             .child(status_row(self.config.vad_model_path().exists(), "Silero VAD".into()))
-            .child(status_row(diarize_ok, "Sprechertrennung (sherpa-onnx)".into()))
+            .child(status_row(diarize_ok, tr("Sprechertrennung (sherpa-onnx)").into()))
             .child(
                 h_flex()
                     .gap_2()
                     .text_xs()
                     .text_color(theme.muted_foreground)
                     .child(Icon::new(IconName::Cpu).xsmall())
-                    .child(self.gpu.clone().unwrap_or_else(|| "GPU wird bei der ersten Aufnahme erkannt".into())),
+                    .child(self.gpu.clone().unwrap_or_else(|| tr("GPU wird bei der ersten Aufnahme erkannt").into())),
             );
         cards.push(Card {
             category: Category::System,
             title: "Info",
-            keywords: "info version modell whisper gpu vad sherpa status",
+            keywords: "info version modell whisper gpu vad sherpa status model about",
             wide: false,
             element: info.into_any_element(),
         });
@@ -1124,7 +1161,10 @@ impl Render for SettingsView {
             .into_iter()
             .filter(|c| {
                 if searching {
-                    c.title.to_lowercase().contains(&query) || c.keywords.contains(&query) || c.category.title().to_lowercase().contains(&query)
+                    c.title.to_lowercase().contains(&query)
+                        || tr(c.title).to_lowercase().contains(&query)
+                        || c.keywords.contains(&query)
+                        || c.category.title().to_lowercase().contains(&query)
                 } else {
                     c.category == self.category
                 }
@@ -1150,7 +1190,7 @@ impl Render for SettingsView {
             .gap_1()
             .border_r_1()
             .border_color(theme.border)
-            .child(div().px_2().pb_2().text_lg().font_semibold().child("Einstellungen"))
+            .child(div().px_2().pb_2().text_lg().font_semibold().child(tr("Einstellungen")))
             .child(div().pb_2().child(Input::new(&self.search).small().prefix(Icon::new(IconName::Search).small().text_color(theme.muted_foreground)).cleanable(true)))
             .children(Category::ALL.map(|cat| {
                 let active = !searching && cat == self.category;
@@ -1174,7 +1214,7 @@ impl Render for SettingsView {
             }));
 
         let header = if searching {
-            v_flex().child(div().text_2xl().font_semibold().child(format!("Suche: „{}“", self.query.trim())))
+            v_flex().child(div().text_2xl().font_semibold().child(trf("Suche: „{}“", &[&self.query.trim()])))
         } else {
             v_flex()
                 .child(div().text_2xl().font_semibold().child(self.category.title()))
@@ -1201,9 +1241,50 @@ impl Render for SettingsView {
                                 .gap_5()
                                 .child(header)
                                 .child(grid)
-                                .when(empty, |el| el.child(div().text_color(theme.muted_foreground).child("Keine passende Einstellung gefunden."))),
+                                .when(empty, |el| el.child(div().text_color(theme.muted_foreground).child(tr("Keine passende Einstellung gefunden.")))),
                         ),
                 ),
             )
     }
+}
+
+/// A setting row: label (+ hint) and its control side by side; when the card
+/// is too narrow the control wraps below the label instead of squeezing it.
+/// The label never gets narrower than ~190 px and wraps by word.
+fn settings_row(label: &str, hint: Option<&str>, control: AnyElement, theme: &gpui_kit::component::Theme) -> Div {
+    h_flex()
+        .w_full()
+        .flex_wrap()
+        .justify_between()
+        .items_center()
+        .gap_x_4()
+        .gap_y_2()
+        .child(
+            v_flex()
+                .flex_1()
+                .min_w(px(190.))
+                .child(div().text_sm().child(label.to_string()))
+                .when_some(hint, |el, h| el.child(div().text_xs().text_color(theme.muted_foreground).child(h.to_string()))),
+        )
+        .child(div().flex_none().max_w_full().child(control))
+}
+
+/// Display name of a built-in theme in the UI language (user themes keep
+/// their own name).
+fn theme_name(id: &str, name: &str) -> String {
+    let de = match id {
+        "hell" => "Hell",
+        "dunkel" => "Dunkel",
+        "papier" => "Papier",
+        "kontrast" => "Hoher Kontrast",
+        "ozean" => "Ozean",
+        "wald" => "Wald",
+        "nachtschatten" => "Nachtschatten",
+        "kaffee" => "Kaffee",
+        "retro90" => "Retro 90er",
+        "weltraum" => "Weltraum",
+        "blockwelt" => "Blockwelt",
+        _ => return name.to_string(),
+    };
+    tr(de).to_string()
 }

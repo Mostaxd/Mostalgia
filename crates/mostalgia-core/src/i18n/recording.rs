@@ -1,4 +1,46 @@
-//! English for the recording strings (German original → English).
+//! English for the recording screen and call auto-start (German original → English).
 
 pub const EN: &[(&str, &str)] = &[
+    ("Dein Mikrofon ist seit über 20 s stumm oder sehr leise – prüfe das Gerät, oder ob die Anruf-App das Mikrofon stummgeschaltet bzw. leiser gestellt hat.", "Your microphone has been silent or very quiet for over 20 s – check the device, or whether the call app muted it or turned it down."),
+    ("Aus – deine Stimme wird nicht aufgenommen (bei erkannten Anrufen immer an)", "Off – your voice is not recorded (always on for detected calls)"),
+    // Setup
+    ("Neue Aufnahme", "New recording"),
+    ("Nimmt dein Mikrofon und den Ton deines Rechners auf und schreibt live mit.", "Records your microphone and your computer's sound and transcribes live."),
+    ("Mikrofon", "Microphone"),
+    ("Desktop-Audio", "Desktop audio"),
+    ("Standard-Mikrofon", "Default microphone"),
+    ("Alles, was gerade abgespielt wird", "Everything that's playing"),
+    ("Sprache", "Language"),
+    ("Automatisch", "Automatic"),
+    ("Sprecher", "Speakers"),
+    ("Aufnahme starten", "Start recording"),
+    ("Mikrofon oder Desktop-Audio einschalten.", "Turn on the microphone or desktop audio."),
+    ("Whisper-Modell nicht gefunden: {} — scripts/download-model.sh ausführen", "Whisper model not found: {} — run scripts/download-model.sh"),
+    ("Modell nicht geladen", "Model not loaded"),
+    // Busy
+    ("Modell wird geladen …", "Loading the model …"),
+    ("Transkript wird fertiggestellt …", "Finishing the transcript …"),
+    // Live
+    ("Aufnahme läuft", "Recording"),
+    ("Pausiert", "Paused"),
+    ("Markieren", "Mark"),
+    ("Moment markieren", "Mark this moment"),
+    ("Fortsetzen", "Resume"),
+    ("Pause", "Pause"),
+    ("Beenden", "Stop"),
+    ("Markierung {}", "Bookmark {}"),
+    ("{} Zeilen", "{} lines"),
+    ("Latenz {} ms", "Latency {} ms"),
+    ("Zum Ende", "Jump to end"),
+    ("Sobald jemand spricht, erscheint hier der Text.", "As soon as someone speaks, the text appears here."),
+    ("Besprechung {}", "Meeting {}"),
+    // Call auto-start
+    ("Aufnahme gestartet", "Recording started"),
+    ("Anruf in {} erkannt – mostalgia nimmt auf.", "Call in {} detected – mostalgia is recording."),
+    ("Anruf in {}", "Call in {}"),
+    ("Soll mostalgia diese Besprechung aufnehmen?", "Should mostalgia record this meeting?"),
+    ("Aufnahme beendet", "Recording stopped"),
+    ("Der Anruf in {} ist vorbei.", "The call in {} has ended."),
+    ("Anruf in {} erkannt – aufnehmen?", "Call in {} detected – record it?"),
+    ("Ignorieren", "Ignore"),
 ];

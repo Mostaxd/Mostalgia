@@ -9,6 +9,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Icon, Selectable, Sizable, StyledExt, TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
+use mostalgia_core::i18n::{self, tr, trf};
 use mostalgia_core::paths;
 use mostalgia_core::store::{MeetingSummary, SearchHit, Store};
 
@@ -40,6 +41,8 @@ pub struct MostalgiaApp {
     ask_view: Option<Entity<crate::ask_view::AskView>>,
     /// Notices calls and offers / starts recordings for them.
     autostart: crate::autostart::AutoStart,
+    /// Language the input placeholders were last set in.
+    lang_seen: Option<i18n::Lang>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -47,7 +50,7 @@ impl MostalgiaApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let engine: SharedEngine = Arc::new(Mutex::new(None));
         let recording = cx.new(|cx| RecordingView::new(engine.clone(), cx));
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Transkripte durchsuchen"));
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Transkripte durchsuchen")));
         let subs = vec![
             cx.subscribe_in(&recording, window, |this, _, event: &RecordingEvent, window, cx| match event {
                 RecordingEvent::Saved(id) => {
@@ -78,6 +81,7 @@ impl MostalgiaApp {
             tray: None,
             ask_view: None,
             autostart: crate::autostart::AutoStart::new(),
+            lang_seen: None,
             _subscriptions: subs,
         };
         this.reload(cx);
@@ -204,7 +208,11 @@ impl MostalgiaApp {
 
     fn apply_autostart(&mut self, action: crate::autostart::Action, cx: &mut Context<Self>) {
         match action {
-            crate::autostart::Action::Start(_) if !self.recording.read(cx).is_active() => self.start_recording(cx),
+            crate::autostart::Action::Start(_) if !self.recording.read(cx).is_active() => {
+                self.screen = Screen::Recording;
+                self.recording.update(cx, |r, cx| r.start_call(cx));
+                cx.notify();
+            }
             crate::autostart::Action::Stop if self.recording.read(cx).is_recording() => {
                 self.recording.update(cx, |r, cx| r.stop(cx))
             }
@@ -225,12 +233,12 @@ impl MostalgiaApp {
                 .border_b_1()
                 .border_color(theme.border)
                 .child(Icon::new(IconName::Mic).small().text_color(theme.primary))
-                .child(div().flex_1().text_sm().child(format!("Anruf in {app} erkannt – aufnehmen?")))
+                .child(div().flex_1().text_sm().child(trf("Anruf in {} erkannt – aufnehmen?", &[&app])))
                 .child(
                     Button::new("call-record")
                         .small()
                         .primary()
-                        .label("Aufnahme starten")
+                        .label(tr("Aufnahme starten"))
                         .on_click(cx.listener(|this, _, _, cx| {
                             if let Some(action) = this.autostart.accept() {
                                 this.apply_autostart(action, cx);
@@ -238,7 +246,7 @@ impl MostalgiaApp {
                             cx.notify();
                         })),
                 )
-                .child(Button::new("call-ignore").small().ghost().label("Ignorieren").on_click(cx.listener(|this, _, _, cx| {
+                .child(Button::new("call-ignore").small().ghost().label(tr("Ignorieren")).on_click(cx.listener(|this, _, _, cx| {
                     this.autostart.dismiss();
                     cx.notify();
                 })))
@@ -353,11 +361,11 @@ impl MostalgiaApp {
 
         let record_button = Button::new("new-recording")
             .w_full()
-            .when(is_recording, |b| b.danger().icon(IconName::Radio).label("Aufnahme läuft"))
+            .when(is_recording, |b| b.danger().icon(IconName::Radio).label(tr("Aufnahme läuft")))
             .when(!is_recording, |b| {
                 b.primary()
                     .icon(IconName::Plus)
-                    .label(if recording_active { "Aufnahme" } else { "Neue Aufnahme" })
+                    .label(if recording_active { tr("Aufnahme") } else { tr("Neue Aufnahme") })
             })
             .on_click(cx.listener(|this, _, _, cx| {
                 this.screen = Screen::Recording;
@@ -372,15 +380,15 @@ impl MostalgiaApp {
                 let date = m.started_at.date_naive();
                 let days = (today - date).num_days();
                 let g = if days == 0 {
-                    "HEUTE"
+                    tr("HEUTE")
                 } else if days == 1 {
-                    "GESTERN"
+                    tr("GESTERN")
                 } else if days < 7 && date.weekday().num_days_from_monday() < today.weekday().num_days_from_monday() {
-                    "DIESE WOCHE"
+                    tr("DIESE WOCHE")
                 } else if date.year() == today.year() && date.month() == today.month() {
-                    "DIESER MONAT"
+                    tr("DIESER MONAT")
                 } else {
-                    "FRÜHER"
+                    tr("FRÜHER")
                 };
                 if group != Some(g) {
                     group = Some(g);
@@ -391,7 +399,7 @@ impl MostalgiaApp {
                 let time = if days == 0 || days == 1 {
                     m.started_at.format("%H:%M").to_string()
                 } else {
-                    m.started_at.format("%d.%m. %H:%M").to_string()
+                    format!("{} {}", i18n::short_date(&m.started_at), m.started_at.format("%H:%M"))
                 };
                 items.push(
                     v_flex()
@@ -430,12 +438,12 @@ impl MostalgiaApp {
                         .py_6()
                         .text_sm()
                         .text_color(theme.muted_foreground)
-                        .child("Noch keine Besprechungen. Starte deine erste Aufnahme.")
+                        .child(tr("Noch keine Besprechungen. Starte deine erste Aufnahme."))
                         .into_any_element(),
                 );
             }
         } else {
-            items.push(ui::section_title(format!("{} TREFFER", self.hits.len()), cx).px_2().pt_3().pb_1().into_any_element());
+            items.push(ui::section_title(trf("{} TREFFER", &[&self.hits.len()]), cx).px_2().pt_3().pb_1().into_any_element());
             for (ix, h) in self.hits.iter().enumerate() {
                 let id = h.meeting_id;
                 let snippet = h.snippet.replace(['[', ']'], "");
@@ -454,7 +462,7 @@ impl MostalgiaApp {
                                 .text_xs()
                                 .text_color(theme.muted_foreground)
                                 .truncate()
-                                .child(format!("{} · {} · {}", h.title, h.started_at.format("%d.%m."), ui::hms(h.start_secs))),
+                                .child(format!("{} · {} · {}", h.title, i18n::short_date(&h.started_at), ui::hms(h.start_secs))),
                         )
                         .on_click(cx.listener(move |this, _, window, cx| this.open_meeting(id, window, cx)))
                         .into_any_element(),
@@ -482,8 +490,8 @@ impl MostalgiaApp {
                             .ghost()
                             .when(matches!(self.screen, Screen::Ask(_)), |b| b.selected(true))
                             .icon(IconName::Sparkles)
-                            .label("Fragen")
-                            .tooltip("Frag deine Besprechungen (Strg+K)")
+                            .label(tr("Fragen"))
+                            .tooltip(tr("Frag deine Besprechungen (Strg+K)"))
                             .on_click(cx.listener(|this, _, window, cx| this.open_ask(window, cx))),
                     )
                     .child(
@@ -512,7 +520,7 @@ impl MostalgiaApp {
                         .ghost()
                         .when(settings_active, |b| b.selected(true))
                         .icon(IconName::Settings)
-                        .label("Einstellungen")
+                        .label(tr("Einstellungen"))
                         .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
                 ),
             )
@@ -520,7 +528,13 @@ impl MostalgiaApp {
 }
 
 impl Render for MostalgiaApp {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The app language can change at runtime; inputs keep their own
+        // placeholder text, so refresh it when it does.
+        if self.lang_seen != Some(i18n::lang()) {
+            self.lang_seen = Some(i18n::lang());
+            self.search.update(cx, |s, cx| s.set_placeholder(tr("Transkripte durchsuchen"), window, cx));
+        }
         let sidebar = self.render_sidebar(cx);
         let call_prompt = self.render_call_prompt(cx);
         let content: AnyView = match &self.screen {

@@ -12,6 +12,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use mostalgia_core::ask::{self, AskEvent, Piece};
 use mostalgia_core::config::Config;
+use mostalgia_core::i18n::{self, tr, trf};
 use mostalgia_core::summary;
 
 use crate::ui;
@@ -37,6 +38,8 @@ pub struct AskView {
     input: Entity<InputState>,
     rx: Option<Receiver<AskEvent>>,
     scroll: ScrollHandle,
+    /// Language the input placeholder was last set in.
+    lang_seen: Option<i18n::Lang>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -49,7 +52,7 @@ const SUGGESTIONS: [&str; 4] = [
 
 impl AskView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Frage zu deinen Besprechungen …"));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Frage zu deinen Besprechungen …")));
         let sub = cx.subscribe_in(&input, window, |this, input, event: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { .. } = event {
                 let q = input.read(cx).value().to_string();
@@ -62,6 +65,7 @@ impl AskView {
             input,
             rx: None,
             scroll: ScrollHandle::new(),
+            lang_seen: None,
             _subscriptions: vec![sub],
         }
     }
@@ -101,7 +105,7 @@ impl AskView {
         self.turns.push(Turn {
             question: question.clone(),
             answer: String::new(),
-            status: Some("Durchsuche Besprechungen …".into()),
+            status: Some(tr("Durchsuche Besprechungen …").into()),
             error: None,
             done: false,
         });
@@ -249,7 +253,11 @@ impl AskView {
 }
 
 impl Render for AskView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.lang_seen != Some(i18n::lang()) {
+            self.lang_seen = Some(i18n::lang());
+            self.input.update(cx, |s, cx| s.set_placeholder(tr("Frage zu deinen Besprechungen …"), window, cx));
+        }
         let theme = cx.theme().clone();
         let config = Config::load();
         let provider = config.summary_provider;
@@ -263,18 +271,18 @@ impl Render for AskView {
                     .items_center()
                     .gap_3()
                     .child(Icon::new(IconName::Sparkles).large().text_color(theme.primary))
-                    .child(div().text_xl().font_semibold().child("Frag deine Besprechungen"))
+                    .child(div().text_xl().font_semibold().child(tr("Frag deine Besprechungen")))
                     .child(
                         div()
                             .max_w(px(520.))
                             .text_center()
                             .text_sm()
                             .text_color(theme.muted_foreground)
-                            .child("Die Suche läuft lokal über alle Transkripte und Zusammenfassungen. An das Sprachmodell gehen nur die gefundenen Abschnitte, nie Audio. Jede Aussage verweist auf die Stelle in der Aufnahme."),
+                            .child(tr("Die Suche läuft lokal über alle Transkripte und Zusammenfassungen. An das Sprachmodell gehen nur die gefundenen Abschnitte, nie Audio. Jede Aussage verweist auf die Stelle in der Aufnahme.")),
                     )
                     .child(
                         v_flex().pt_2().gap_2().children(SUGGESTIONS.iter().enumerate().map(|(i, s)| {
-                            let q = s.to_string();
+                            let q = tr(s).to_string();
                             div()
                                 .id(("suggest", i))
                                 .px_3()
@@ -285,7 +293,7 @@ impl Render for AskView {
                                 .text_sm()
                                 .cursor_pointer()
                                 .hover(|st| st.bg(theme.muted))
-                                .child(s.to_string())
+                                .child(tr(s))
                                 .on_click(cx.listener(move |this, _, _, cx| this.ask(q.clone(), cx)))
                         })),
                     )
@@ -355,7 +363,7 @@ impl Render for AskView {
                     .gap_3()
                     .border_b_1()
                     .border_color(theme.border)
-                    .child(div().text_xl().font_semibold().child("Fragen"))
+                    .child(div().text_xl().font_semibold().child(tr("Fragen")))
                     .child(div().text_xs().text_color(theme.muted_foreground).child(format!("{} · {model}", provider.name())))
                     .child(div().flex_1())
                     .when(!self.turns.is_empty(), |el| {
@@ -364,7 +372,7 @@ impl Render for AskView {
                                 .small()
                                 .ghost()
                                 .icon(IconName::Plus)
-                                .label("Neue Unterhaltung")
+                                .label(tr("Neue Unterhaltung"))
                                 .on_click(cx.listener(|this, _, _, cx| this.clear(cx))),
                         )
                     }),
@@ -395,7 +403,7 @@ impl Render for AskView {
                                 Button::new("ask-send")
                                     .primary()
                                     .icon(IconName::ArrowDown)
-                                    .label("Fragen")
+                                    .label(tr("Fragen"))
                                     .loading(self.busy())
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         let q = this.input.read(cx).value().to_string();
@@ -405,9 +413,9 @@ impl Render for AskView {
                             ),
                     )
                     .when(!has_key, |el| {
-                        el.child(div().text_xs().text_color(theme.warning).child(format!(
+                        el.child(div().text_xs().text_color(theme.warning).child(trf(
                             "Kein {}-API-Schlüssel — in Einstellungen → KI & Zusammenfassung hinterlegen.",
-                            provider.name()
+                            &[&provider.name()],
                         )))
                     }),
             )

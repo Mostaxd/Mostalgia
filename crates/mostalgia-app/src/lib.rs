@@ -41,7 +41,7 @@ pub fn load_fonts(cx: &mut App) {
 
 gpui_kit::assets::icon_assets!(pub ExtraIcons, [
     ArrowDown, AudioLines, Bookmark, Calendar, Check, Clock, Cpu, FileText, FolderOpen, Mic, Monitor, Pause,
-    Keyboard, Palette, Pencil, Play, Plus, Radio, RefreshCw, Search, Settings, Sparkles, Square, Trash, TriangleAlert,
+    Keyboard, MicOff, Palette, Pencil, Play, Plus, Radio, RefreshCw, Search, Settings, Sparkles, Square, Trash, TriangleAlert,
     Users, X,
 ]);
 

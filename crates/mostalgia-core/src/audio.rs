@@ -162,22 +162,22 @@ fn friendly_label(name: &str, description: &str, port: Option<(&str, &str)>) -> 
         let n = if n.is_empty() { String::new() } else { format!(" {n}") };
         if card.contains("High Definition Audio Controller") || name.contains("pci-0000_01") {
             // The discrete GPU's audio function.
-            return format!("Grafikkarte HDMI{n}");
+            return crate::i18n::trf("Grafikkarte HDMI{}", &[&n]);
         }
         return format!("HDMI{n}");
     }
     if builtin {
         if p.contains("headphone") {
-            return "Kopfhörer (Klinke)".into();
+            return crate::i18n::tr("Kopfhörer (Klinke)").into();
         }
         if p.contains("headset") {
-            return "Headset-Mikrofon (Klinke)".into();
+            return crate::i18n::tr("Headset-Mikrofon (Klinke)").into();
         }
         if p.contains("speaker") {
-            return "Laptop-Lautsprecher".into();
+            return crate::i18n::tr("Laptop-Lautsprecher").into();
         }
         if p.contains("mic") {
-            return "Laptop-Mikrofon".into();
+            return crate::i18n::tr("Laptop-Mikrofon").into();
         }
     }
     let mut short = card.to_string();

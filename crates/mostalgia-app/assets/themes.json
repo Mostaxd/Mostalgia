@@ -2,6 +2,7 @@
   {
     "id": "hell",
     "name": "Hell",
+    "name_en": "Light",
     "background": "#ffffff",
     "foreground": "#17181c",
     "surface": "#ffffff",
@@ -27,6 +28,7 @@
   {
     "id": "dunkel",
     "name": "Dunkel",
+    "name_en": "Dark",
     "dark": true,
     "background": "#0b0b0d",
     "foreground": "#ededef",
@@ -53,6 +55,7 @@
   {
     "id": "blockwelt",
     "name": "Blockwelt",
+    "name_en": "Blockworld",
     "dark": true,
     "background": "#3a3a3a",
     "foreground": "#f4f4f4",
@@ -86,6 +89,7 @@
   {
     "id": "synthwave",
     "name": "Synthwave",
+    "name_en": "Synthwave",
     "dark": true,
     "background": "#160d2e",
     "foreground": "#f9e8ff",
@@ -114,6 +118,7 @@
   {
     "id": "nord",
     "name": "Nord",
+    "name_en": "Nord",
     "dark": true,
     "background": "#2e3440",
     "foreground": "#eceff4",
@@ -140,6 +145,7 @@
   {
     "id": "solarized",
     "name": "Solarized",
+    "name_en": "Solarized",
     "background": "#fdf6e3",
     "foreground": "#4a5b62",
     "surface": "#fdf6e3",
@@ -165,6 +171,7 @@
   {
     "id": "terminal",
     "name": "Terminal",
+    "name_en": "Terminal",
     "dark": true,
     "background": "#040904",
     "foreground": "#3dff74",
@@ -195,6 +202,7 @@
   {
     "id": "papier",
     "name": "Papier",
+    "name_en": "Paper",
     "background": "#f5edda",
     "foreground": "#3b2f26",
     "surface": "#faf4e6",
@@ -221,6 +229,7 @@
   {
     "id": "kontrast",
     "name": "Hoher Kontrast",
+    "name_en": "High contrast",
     "dark": true,
     "background": "#000000",
     "foreground": "#ffffff",
@@ -251,6 +260,7 @@
   {
     "id": "ozean",
     "name": "Ozean",
+    "name_en": "Ocean",
     "dark": true,
     "background": "#0b1e2d",
     "foreground": "#e6f4f8",
@@ -279,6 +289,7 @@
   {
     "id": "wald",
     "name": "Wald",
+    "name_en": "Forest",
     "dark": true,
     "background": "#18221a",
     "foreground": "#eef2e6",
@@ -307,6 +318,7 @@
   {
     "id": "nachtschatten",
     "name": "Nachtschatten",
+    "name_en": "Nightshade",
     "dark": true,
     "background": "#1e1f29",
     "foreground": "#f8f8f2",
@@ -334,6 +346,7 @@
   {
     "id": "kaffee",
     "name": "Kaffee",
+    "name_en": "Coffee",
     "background": "#f6efe6",
     "foreground": "#3a2a20",
     "surface": "#fbf7f1",
@@ -361,6 +374,7 @@
   {
     "id": "sakura",
     "name": "Sakura",
+    "name_en": "Sakura",
     "background": "#fff7fa",
     "foreground": "#3d2433",
     "surface": "#ffffff",
@@ -388,6 +402,7 @@
   {
     "id": "comic",
     "name": "Comic",
+    "name_en": "Comic",
     "background": "#fffdf0",
     "foreground": "#111111",
     "surface": "#ffffff",
@@ -418,6 +433,7 @@
   {
     "id": "aurora",
     "name": "Aurora",
+    "name_en": "Aurora",
     "dark": true,
     "background": "#0a1020",
     "foreground": "#e8f1ff",
@@ -446,6 +462,7 @@
   {
     "id": "retro90",
     "name": "Retro 90er",
+    "name_en": "Retro 90s",
     "background": "#d4d0c8",
     "foreground": "#000000",
     "surface": "#ffffff",
@@ -475,6 +492,7 @@
   {
     "id": "weltraum",
     "name": "Weltraum",
+    "name_en": "Space",
     "dark": true,
     "background": "#05060f",
     "foreground": "#e9ecff",

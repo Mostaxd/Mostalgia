@@ -13,7 +13,11 @@ pub const SYSTEM: &str = "system";
 #[derive(Clone, Debug, Deserialize)]
 pub struct ThemeSpec {
     pub id: String,
+    /// German display name.
     pub name: String,
+    /// English display name (falls back to `name`).
+    #[serde(default)]
+    pub name_en: Option<String>,
     #[serde(default)]
     pub dark: bool,
     pub background: String,
@@ -73,6 +77,16 @@ fn default_mono() -> String {
 }
 fn default_font_size() -> f32 {
     14.
+}
+
+impl ThemeSpec {
+    /// The name in the current app language.
+    pub fn display_name(&self) -> &str {
+        match (mostalgia_core::i18n::lang(), &self.name_en) {
+            (mostalgia_core::i18n::Lang::En, Some(en)) => en,
+            _ => &self.name,
+        }
+    }
 }
 
 /// The theme in effect, for the bits gpui-component's theme doesn't cover

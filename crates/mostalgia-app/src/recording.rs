@@ -15,6 +15,7 @@ use mostalgia_core::finalize;
 use mostalgia_core::recorder::{Event, RecordConfig, Recorder};
 use mostalgia_core::store::{Bookmark, NewMeeting, Store};
 use mostalgia_core::transcribe::Engine;
+use mostalgia_core::i18n::{self, tr, trf};
 use mostalgia_core::{Source, paths};
 
 use crate::ui;
@@ -58,6 +59,8 @@ struct Live {
     levels: [f32; 2],
     bookmarks: Vec<Bookmark>,
     last_latency_ms: Option<u128>,
+    /// Since when the mic has been near-silent (for the "mic muted?" hint).
+    mic_quiet_since: Option<Instant>,
 }
 
 impl Live {
@@ -77,6 +80,8 @@ pub struct RecordingView {
     /// Keep the newest line in view; turned off when the user scrolls up.
     follow: bool,
     focus: FocusHandle,
+    /// This recording was started for a call: always both sides.
+    call_mode: bool,
 }
 
 impl RecordingView {
@@ -90,7 +95,24 @@ impl RecordingView {
             scroll: ScrollHandle::new(),
             follow: true,
             focus: cx.focus_handle(),
+            call_mode: false,
         }
+    }
+
+    /// Mic and system for the next recording: what the setup screen says,
+    /// except that a call is always recorded from both sides.
+    fn sources(&self) -> [bool; 2] {
+        [self.config.record_mic || self.call_mode, self.config.record_system || self.call_mode]
+    }
+
+    /// Starts a recording for a detected call (both sides, whatever the
+    /// setup toggles say).
+    pub fn start_call(&mut self, cx: &mut Context<Self>) {
+        if self.is_active() {
+            return;
+        }
+        self.call_mode = true;
+        self.start(cx);
     }
 
     /// Shows a recording in progress with the given lines, without any
@@ -119,9 +141,10 @@ impl RecordingView {
             levels: [0.62, 0.48],
             bookmarks: vec![Bookmark {
                 at_secs: 41.0,
-                label: "Markierung 1".into(),
+                label: trf("Markierung {}", &[&1]),
             }],
             last_latency_ms: Some(212),
+            mic_quiet_since: None,
         }));
         cx.notify();
     }
@@ -152,8 +175,8 @@ impl RecordingView {
         if self.is_active() {
             return;
         }
-        if !self.config.record_mic && !self.config.record_system {
-            self.error = Some("Mikrofon oder Desktop-Audio einschalten.".into());
+        if self.sources() == [false, false] {
+            self.error = Some(tr("Mikrofon oder Desktop-Audio einschalten.").into());
             cx.notify();
             return;
         }
@@ -169,8 +192,8 @@ impl RecordingView {
             if slot.is_none() {
                 anyhow::ensure!(
                     model.exists(),
-                    "Whisper-Modell nicht gefunden: {} — scripts/download-model.sh ausführen",
-                    model.display()
+                    "{}",
+                    trf("Whisper-Modell nicht gefunden: {} — scripts/download-model.sh ausführen", &[&model.display()])
                 );
                 *slot = Some(Engine::load(&model, &language)?);
             }
@@ -192,7 +215,7 @@ impl RecordingView {
 
     fn begin(&mut self, cx: &mut Context<Self>) {
         let Some(mut engine) = self.engine.lock().unwrap().take() else {
-            return self.fail(anyhow::anyhow!("Modell nicht geladen"), cx);
+            return self.fail(anyhow::anyhow!(tr("Modell nicht geladen")), cx);
         };
         if let Err(e) = engine.set_language(&self.config.language) {
             return self.fail(e, cx);
@@ -201,8 +224,8 @@ impl RecordingView {
             vad_model: self.config.vad_model_path(),
             vad_threshold: self.config.vad_threshold,
             out_dir: paths::recordings_dir(),
-            mic: self.config.record_mic,
-            system: self.config.record_system,
+            mic: self.sources()[0],
+            system: self.sources()[1],
             mic_device: self.config.mic_device.clone(),
             system_device: self.config.system_device.clone(),
             diarize: self.config.diarize,
@@ -224,6 +247,7 @@ impl RecordingView {
                     levels: [0.; 2],
                     bookmarks: Vec::new(),
                     last_latency_ms: None,
+                    mic_quiet_since: None,
                 }));
                 self.poll_loop(cx);
             }
@@ -234,6 +258,7 @@ impl RecordingView {
     }
 
     fn fail(&mut self, e: anyhow::Error, cx: &mut Context<Self>) {
+        self.call_mode = false;
         self.error = Some(format!("{e:#}").into());
         self.phase = Phase::Setup;
         cx.notify();
@@ -281,6 +306,14 @@ impl RecordingView {
                 }
                 Event::Level { source, rms } => {
                     let i = source as usize;
+                    if source == Source::Mic {
+                        // ≈ −54 dBFS: below any real room, i.e. muted or gain at zero.
+                        if rms < 0.002 {
+                            live.mic_quiet_since.get_or_insert_with(Instant::now);
+                        } else {
+                            live.mic_quiet_since = None;
+                        }
+                    }
                     fresh[i] = fresh[i].max(ui::meter_level(rms));
                 }
                 Event::Chunk { millis, .. } => live.last_latency_ms = Some(millis),
@@ -332,14 +365,14 @@ impl RecordingView {
             let n = live.bookmarks.len() + 1;
             live.bookmarks.push(Bookmark {
                 at_secs: at,
-                label: format!("Markierung {n}"),
+                label: trf("Markierung {}", &[&n]),
             });
             cx.notify();
         }
     }
 
     pub fn stop(&mut self, cx: &mut Context<Self>) {
-        let Phase::Recording(live) = std::mem::replace(&mut self.phase, Phase::Finalizing { what: "Transkript wird fertiggestellt …" }) else {
+        let Phase::Recording(live) = std::mem::replace(&mut self.phase, Phase::Finalizing { what: tr("Transkript wird fertiggestellt …") }) else {
             return;
         };
         let live = *live;
@@ -364,7 +397,7 @@ impl RecordingView {
             let result = (|| -> Result<i64> {
                 let segments = finalize::final_pass(&mut engine, &rec.tracks, &opts)?;
                 let mut store = Store::open(&paths::database())?;
-                let title = format!("Besprechung {}", rec.started_at.format("%d.%m.%Y %H:%M"));
+                let title = trf("Besprechung {}", &[&i18n::date_time(&rec.started_at)]);
                 let id = store.insert_meeting(
                     &NewMeeting {
                         title: &title,
@@ -389,6 +422,7 @@ impl RecordingView {
             this.update(cx, |this, cx| match result {
                 Ok(id) => {
                     this.phase = Phase::Setup;
+                    this.call_mode = false;
                     cx.emit(RecordingEvent::Saved(id));
                     cx.notify();
                 }
@@ -426,8 +460,12 @@ impl RecordingView {
                     cx.notify();
                 })))
         };
-        let mic_detail = self.config.mic_device.clone().unwrap_or_else(|| "Standard-Mikrofon".into());
-        let sys_detail = self.config.system_device.clone().unwrap_or_else(|| "Alles, was gerade abgespielt wird".into());
+        let mic_detail = if self.config.record_mic {
+            self.config.mic_device.clone().unwrap_or_else(|| tr("Standard-Mikrofon").into())
+        } else {
+            tr("Aus – deine Stimme wird nicht aufgenommen (bei erkannten Anrufen immer an)").into()
+        };
+        let sys_detail = self.config.system_device.clone().unwrap_or_else(|| tr("Alles, was gerade abgespielt wird").into());
         let lang = self.config.language.clone();
         let lang_button = |code: &'static str, label: &'static str, cx: &mut Context<Self>| {
             Button::new(SharedString::from(format!("lang-{code}")))
@@ -454,29 +492,34 @@ impl RecordingView {
                     .child(
                         v_flex()
                             .gap_1()
-                            .child(div().text_2xl().font_semibold().child("Neue Aufnahme"))
+                            .child(div().text_2xl().font_semibold().child(tr("Neue Aufnahme")))
                             .child(
                                 div()
                                     .text_color(theme.muted_foreground)
-                                    .child("Nimmt dein Mikrofon und den Ton deines Rechners auf und schreibt live mit."),
+                                    .child(tr("Nimmt dein Mikrofon und den Ton deines Rechners auf und schreibt live mit.")),
                             ),
                     )
-                    .child(source_row("mic", IconName::Mic, "Mikrofon", mic_detail, self.config.record_mic, cx))
-                    .child(source_row("system", IconName::Monitor, "Desktop-Audio", sys_detail, self.config.record_system, cx))
+                    .child(source_row("mic", IconName::Mic, tr("Mikrofon"), mic_detail, self.config.record_mic, cx))
+                    .child(source_row("system", IconName::Monitor, tr("Desktop-Audio"), sys_detail, self.config.record_system, cx))
                     .child(
+                        // Wraps the switch below the language buttons when narrow.
                         h_flex()
+                            .flex_wrap()
                             .justify_between()
+                            .gap_x_4()
+                            .gap_y_2()
                             .child(
                                 h_flex()
+                                    .flex_wrap()
                                     .gap_1()
-                                    .child(div().text_sm().text_color(cx.theme().muted_foreground).mr_2().child("Sprache"))
+                                    .child(div().text_sm().text_color(cx.theme().muted_foreground).mr_2().child(tr("Sprache")))
                                     .child(lang_button("de", "Deutsch", cx))
                                     .child(lang_button("en", "English", cx))
-                                    .child(lang_button("auto", "Automatisch", cx)),
+                                    .child(lang_button("auto", tr("Automatisch"), cx)),
                             )
                             .child(
                                 Switch::new("labels")
-                                    .label("Sprecher")
+                                    .label(tr("Sprecher"))
                                     .checked(self.config.speaker_labels)
                                     .on_change(cx.listener(|this, checked: &bool, _, cx| {
                                         this.config.speaker_labels = *checked;
@@ -502,7 +545,7 @@ impl RecordingView {
                             .large()
                             .w_full()
                             .icon(IconName::Mic)
-                            .label("Aufnahme starten")
+                            .label(tr("Aufnahme starten"))
                             .on_click(cx.listener(|this, _, _, cx| this.start(cx))),
                     ),
             )
@@ -535,13 +578,16 @@ impl RecordingView {
         let theme = cx.theme();
         let paused = live.paused_since.is_some();
         let elapsed = live.elapsed().as_secs_f64();
-        let enabled = [self.config.record_mic, self.config.record_system];
+        let enabled = self.sources();
+        let mic_silent = enabled[0]
+            && live.paused_since.is_none()
+            && live.mic_quiet_since.is_some_and(|t| t.elapsed() > Duration::from_secs(20));
 
         let meter = |source: Source, cx: &App| {
             let i = source as usize;
             h_flex()
                 .gap_2()
-                .w(px(190.))
+                .w(px(150.))
                 .child(
                     Icon::new(if source == Source::Mic { IconName::Mic } else { IconName::Monitor })
                         .small()
@@ -550,10 +596,13 @@ impl RecordingView {
                 .child(ui::level_meter(live.levels[i], enabled[i] && !paused, cx))
         };
 
+        // Wraps the buttons onto a second row on narrow windows.
         let header = h_flex()
+            .flex_wrap()
             .px_6()
             .py_4()
-            .gap_6()
+            .gap_x_6()
+            .gap_y_3()
             .border_b_1()
             .border_color(theme.border)
             .child(
@@ -574,7 +623,7 @@ impl RecordingView {
                         div()
                             .text_sm()
                             .text_color(theme.muted_foreground)
-                            .child(if paused { "Pausiert" } else { "Aufnahme läuft" }),
+                            .child(if paused { tr("Pausiert") } else { tr("Aufnahme läuft") }),
                     ),
             )
             .child(v_flex().gap_2().child(meter(Source::Mic, cx)).child(meter(Source::System, cx)))
@@ -585,22 +634,22 @@ impl RecordingView {
                     .child(
                         Button::new("mark")
                             .icon(IconName::Bookmark)
-                            .label("Markieren")
+                            .label(tr("Markieren"))
                             .ghost()
-                            .tooltip("Moment markieren")
+                            .tooltip(tr("Moment markieren"))
                             .on_click(cx.listener(|this, _, _, cx| this.mark_moment(cx))),
                     )
                     .child(
                         Button::new("pause")
                             .icon(if paused { IconName::Play } else { IconName::Pause })
-                            .label(if paused { "Fortsetzen" } else { "Pause" })
+                            .label(if paused { tr("Fortsetzen") } else { tr("Pause") })
                             .outline()
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_pause(cx))),
                     )
                     .child(
                         Button::new("stop")
                             .icon(IconName::Square)
-                            .label("Beenden")
+                            .label(tr("Beenden"))
                             .danger()
                             .on_click(cx.listener(|this, _, _, cx| this.stop(cx))),
                     ),
@@ -629,7 +678,7 @@ impl RecordingView {
                             .child(ui::hms(line.start_secs)),
                     )
                     .when(speaker_labels, |el| el.child(ui::speaker_chip(label, cx)))
-                    .child(ui::bidi_text(line.text.clone(), true).flex_1().line_height(rems(1.5)));
+                    .child(ui::bidi_text(line.text.clone(), true).flex_1().min_w_0().line_height(rems(1.5)));
             rows.push(if motion { anim::arrive(row, ("line-in", ix), playful) } else { row.into_any_element() });
         }
         for b in marks {
@@ -655,7 +704,7 @@ impl RecordingView {
                             .child(ui::hms(*start)),
                     )
                     .when(speaker_labels, |el| el.child(ui::speaker_chip(source.speaker_label(), cx)))
-                    .child(div().flex_1().italic().line_height(rems(1.5)).text_color(theme.muted_foreground).child(format!("{text} …")));
+                    .child(div().flex_1().min_w_0().italic().line_height(rems(1.5)).text_color(theme.muted_foreground).child(format!("{text} …")));
             rows.push(if motion { anim::breathe(row, ("interim-breathe", i)) } else { row.opacity(0.6).into_any_element() });
         }
         let empty = live.lines.is_empty();
@@ -668,8 +717,8 @@ impl RecordingView {
             .border_color(theme.border)
             .text_xs()
             .text_color(theme.muted_foreground)
-            .child(format!("{} Zeilen", live.lines.len()))
-            .when_some(live.last_latency_ms, |el, ms| el.child(format!("Latenz {ms} ms")))
+            .child(trf("{} Zeilen", &[&live.lines.len()]))
+            .when_some(live.last_latency_ms, |el, ms| el.child(trf("Latenz {} ms", &[&ms])))
             .when_some(gpu, |el, gpu| el.child(gpu))
             .child(div().flex_1())
             .when(!follow, |el| {
@@ -678,7 +727,7 @@ impl RecordingView {
                         .xsmall()
                         .ghost()
                         .icon(IconName::ArrowDown)
-                        .label("Zum Ende")
+                        .label(tr("Zum Ende"))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.follow = true;
                             this.scroll.scroll_to_bottom();
@@ -690,6 +739,18 @@ impl RecordingView {
         v_flex()
             .size_full()
             .child(header)
+            .when(mic_silent, |el| {
+                el.child(
+                    h_flex()
+                        .px_6()
+                        .py_2()
+                        .gap_2()
+                        .bg(cx.theme().warning.opacity(0.15))
+                        .text_sm()
+                        .child(Icon::new(IconName::MicOff).small().text_color(cx.theme().warning))
+                        .child(tr("Dein Mikrofon ist seit über 20 s stumm oder sehr leise – prüfe das Gerät, oder ob die Anruf-App das Mikrofon stummgeschaltet bzw. leiser gestellt hat.")),
+                )
+            })
             .child(
                 div()
                     .flex_1()
@@ -722,7 +783,7 @@ impl RecordingView {
                                     } else {
                                         Icon::new(IconName::AudioLines).large().into_any_element()
                                     })
-                                    .child("Sobald jemand spricht, erscheint hier der Text."),
+                                    .child(tr("Sobald jemand spricht, erscheint hier der Text.")),
                             )
                         }),
                 ),
@@ -760,7 +821,7 @@ impl Render for RecordingView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content = match &self.phase {
             Phase::Setup => self.render_setup(cx).into_any_element(),
-            Phase::Loading => self.render_busy("Modell wird geladen …", false, cx).into_any_element(),
+            Phase::Loading => self.render_busy(tr("Modell wird geladen …"), false, cx).into_any_element(),
             Phase::Finalizing { what } => self.render_busy(what, true, cx).into_any_element(),
             Phase::Recording(_) => self.render_live(cx).into_any_element(),
         };

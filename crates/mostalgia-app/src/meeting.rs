@@ -17,6 +17,7 @@ use serde::Deserialize;
 use mostalgia_core::config::Config;
 use mostalgia_core::playback::{self, Player};
 use mostalgia_core::store::{Meeting, Store};
+use mostalgia_core::i18n::{self, tr, trf};
 use mostalgia_core::{Source, paths, summary};
 
 use crate::ui;
@@ -115,7 +116,7 @@ impl MeetingView {
         let key = match summary::api_key(req.provider) {
             Ok(Some(key)) => key,
             Ok(None) => {
-                self.error = Some(format!("Kein {}-API-Schlüssel — in den Einstellungen hinterlegen.", req.provider.name()).into());
+                self.error = Some(trf("Kein {}-API-Schlüssel — in den Einstellungen hinterlegen.", &[&req.provider.name()]).into());
                 cx.notify();
                 return;
             }
@@ -132,7 +133,7 @@ impl MeetingView {
         let id = self.id;
         let task = cx.background_spawn(async move {
             let store = Store::open(&paths::database())?;
-            let meeting = store.get(id)?.ok_or_else(|| anyhow::anyhow!("Besprechung nicht gefunden"))?;
+            let meeting = store.get(id)?.ok_or_else(|| anyhow::anyhow!(tr("Besprechung nicht gefunden")))?;
             let s = summary::summarize(&req, &key, &meeting)?;
             store.save_summary(id, s.provider.id(), &s.model, s.effort.as_deref(), &s.markdown)?;
             if let Some(title) = &s.title {
@@ -149,7 +150,7 @@ impl MeetingView {
             this.update(cx, |this, cx| {
                 this.summarizing = false;
                 if let Err(e) = result {
-                    this.error = Some(format!("Zusammenfassung fehlgeschlagen: {e:#}").into());
+                    this.error = Some(trf("Zusammenfassung fehlgeschlagen: {}", &[&format!("{e:#}")]).into());
                 }
                 this.reload(cx);
                 cx.emit(MeetingEvent::Changed);
@@ -195,7 +196,7 @@ impl MeetingView {
                 })
                 .detach();
             }
-            Err(e) => self.error = Some(format!("Wiedergabe: {e:#}").into()),
+            Err(e) => self.error = Some(trf("Wiedergabe: {}", &[&format!("{e:#}")]).into()),
         }
         cx.notify();
     }
@@ -279,7 +280,7 @@ impl MeetingView {
                 Ok(Ok(None)) | Err(_) => return,
                 Ok(Err(e)) => {
                     this.update(cx, |this, cx| {
-                        this.error = Some(format!("Dateiauswahl: {e:#}").into());
+                        this.error = Some(trf("Dateiauswahl: {}", &[&format!("{e:#}")]).into());
                         cx.notify();
                     })
                     .ok();
@@ -287,12 +288,12 @@ impl MeetingView {
                 }
             };
             let result = Store::open(&paths::database()).and_then(|s| {
-                let m = s.get(id)?.ok_or_else(|| anyhow::anyhow!("Besprechung nicht gefunden"))?;
+                let m = s.get(id)?.ok_or_else(|| anyhow::anyhow!(tr("Besprechung nicht gefunden")))?;
                 export::write(&m, format, &path)
             });
             this.update(cx, |this, cx| {
                 match result {
-                    Ok(()) => this.notice = Some(format!("Exportiert: {}", path.display()).into()),
+                    Ok(()) => this.notice = Some(trf("Exportiert: {}", &[&path.display()]).into()),
                     Err(e) => this.error = Some(format!("{e:#}").into()),
                 }
                 cx.notify();
@@ -317,8 +318,8 @@ impl MeetingView {
             Some(Edit::Title(input)) => h_flex()
                 .gap_2()
                 .child(Input::new(input).w(px(420.)))
-                .child(Button::new("title-save").small().primary().label("Speichern").on_click(cx.listener(|this, _, _, cx| this.commit_edit(cx))))
-                .child(Button::new("title-cancel").small().ghost().label("Abbrechen").on_click(cx.listener(|this, _, _, cx| this.cancel_edit(cx))))
+                .child(Button::new("title-save").small().primary().label(tr("Speichern")).on_click(cx.listener(|this, _, _, cx| this.commit_edit(cx))))
+                .child(Button::new("title-cancel").small().ghost().label(tr("Abbrechen")).on_click(cx.listener(|this, _, _, cx| this.cancel_edit(cx))))
                 .into_any_element(),
             _ => {
                 let current = m.title.clone();
@@ -339,7 +340,7 @@ impl MeetingView {
                             .xsmall()
                             .ghost()
                             .icon(IconName::Pencil)
-                            .tooltip("Titel ändern")
+                            .tooltip(tr("Titel ändern"))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.begin_edit(Edit::Title, current.clone(), window, cx)
                             })),
@@ -374,9 +375,9 @@ impl MeetingView {
                             .gap_3()
                             .text_sm()
                             .text_color(theme.muted_foreground)
-                            .child(h_flex().gap_1().child(Icon::new(IconName::Calendar).xsmall()).child(m.started_at.format("%d.%m.%Y, %H:%M").to_string()))
+                            .child(h_flex().gap_1().child(Icon::new(IconName::Calendar).xsmall()).child(i18n::date_time(&m.started_at)))
                             .child(h_flex().gap_1().child(Icon::new(IconName::Clock).xsmall()).child(ui::minutes(m.duration_secs)))
-                            .child(h_flex().gap_1().child(Icon::new(IconName::Users).xsmall()).child(format!("{} Sprecher", speakers.len()))),
+                            .child(h_flex().gap_1().child(Icon::new(IconName::Users).xsmall()).child(trf("{} Sprecher", &[&speakers.len()]))),
                     ),
             )
             .child(
@@ -387,11 +388,11 @@ impl MeetingView {
                             .small()
                             .ghost()
                             .icon(IconName::Download)
-                            .label("Exportieren")
+                            .label(tr("Exportieren"))
                             .dropdown_menu(|menu, _, _| {
                                 let mut menu = menu;
                                 for f in mostalgia_core::export::Format::ALL {
-                                    menu = menu.menu(f.label(), Box::new(ExportAs(f.extension().into())));
+                                    menu = menu.menu(tr(f.label()), Box::new(ExportAs(f.extension().into())));
                                 }
                                 menu
                             }),
@@ -400,7 +401,7 @@ impl MeetingView {
                         el.child(
                             Button::new("stop-play")
                                 .icon(IconName::Square)
-                                .label("Wiedergabe stoppen")
+                                .label(tr("Wiedergabe stoppen"))
                                 .outline()
                                 .small()
                                 .on_click(cx.listener(|this, _, _, cx| this.stop_playback(cx))),
@@ -410,7 +411,7 @@ impl MeetingView {
                         el.child(
                             Button::new("play")
                                 .icon(IconName::Play)
-                                .label("Abspielen")
+                                .label(tr("Abspielen"))
                                 .outline()
                                 .small()
                                 .on_click(cx.listener(|this, _, _, cx| this.play_from(0.0, cx))),
@@ -419,8 +420,8 @@ impl MeetingView {
                     .child(if self.confirm_delete {
                         h_flex()
                             .gap_1()
-                            .child(Button::new("del-yes").small().danger().label("Wirklich löschen").on_click(cx.listener(|this, _, _, cx| this.delete(cx))))
-                            .child(Button::new("del-no").small().ghost().label("Abbrechen").on_click(cx.listener(|this, _, _, cx| {
+                            .child(Button::new("del-yes").small().danger().label(tr("Wirklich löschen")).on_click(cx.listener(|this, _, _, cx| this.delete(cx))))
+                            .child(Button::new("del-no").small().ghost().label(tr("Abbrechen")).on_click(cx.listener(|this, _, _, cx| {
                                 this.confirm_delete = false;
                                 cx.notify();
                             })))
@@ -430,7 +431,7 @@ impl MeetingView {
                             .small()
                             .ghost()
                             .icon(IconName::Trash)
-                            .tooltip("Aus der Bibliothek entfernen (Audiodateien bleiben erhalten)")
+                            .tooltip(tr("Aus der Bibliothek entfernen (Audiodateien bleiben erhalten)"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.confirm_delete = true;
                                 cx.notify();
@@ -448,7 +449,7 @@ impl MeetingView {
                 .items_center()
                 .gap_3()
                 .child(gpui_kit::component::spinner::Spinner::new().large())
-                .child(div().text_color(theme.muted_foreground).child("Die Besprechung wird zusammengefasst … (bei hoher Denktiefe bis zu einigen Minuten)"))
+                .child(div().text_color(theme.muted_foreground).child(tr("Die Besprechung wird zusammengefasst … (bei hoher Denktiefe bis zu einigen Minuten)")))
                 .into_any_element();
         }
         match &m.summary {
@@ -464,19 +465,21 @@ impl MeetingView {
                         .gap_3()
                         .text_xs()
                         .text_color(theme.muted_foreground)
-                        .child(format!(
+                        .child(trf(
                             "Erstellt von {} · {}{} am {}",
-                            summary::Provider::parse(&s.provider).map_or(s.provider.as_str(), |p| p.name()),
-                            s.model,
-                            s.effort.as_deref().map(|e| format!(" · Denktiefe {e}")).unwrap_or_default(),
-                            s.created_at.format("%d.%m.%Y %H:%M")
+                            &[
+                                &summary::Provider::parse(&s.provider).map_or(s.provider.as_str(), |p| p.name()),
+                                &s.model,
+                                &s.effort.as_deref().map(|e| trf(" · Denktiefe {}", &[&e])).unwrap_or_default(),
+                                &i18n::date_time(&s.created_at),
+                            ],
                         ))
                         .child(
                             Button::new("resummarize")
                                 .xsmall()
                                 .ghost()
                                 .icon(IconName::RefreshCw)
-                                .label("Neu erstellen")
+                                .label(tr("Neu erstellen"))
                                 .on_click(cx.listener(|this, _, _, cx| this.summarize(cx))),
                         ),
                 )
@@ -486,20 +489,20 @@ impl MeetingView {
                 .items_center()
                 .gap_3()
                 .child(Icon::new(IconName::Sparkles).large().text_color(theme.primary))
-                .child(div().font_medium().child("Noch keine Zusammenfassung"))
+                .child(div().font_medium().child(tr("Noch keine Zusammenfassung")))
                 .child(
                     div()
                         .max_w(px(420.))
                         .text_center()
                         .text_sm()
                         .text_color(theme.muted_foreground)
-                        .child("Kernpunkte, Entscheidungen und Aufgaben mit Verantwortlichen, erstellt vom gewählten Sprachmodell. Es wird nur der Text gesendet, nie Audio."),
+                        .child(tr("Kernpunkte, Entscheidungen und Aufgaben mit Verantwortlichen, erstellt vom gewählten Sprachmodell. Es wird nur der Text gesendet, nie Audio.")),
                 )
                 .child(
                     Button::new("summarize")
                         .primary()
                         .icon(IconName::Sparkles)
-                        .label("Zusammenfassung erstellen")
+                        .label(tr("Zusammenfassung erstellen"))
                         .disabled(m.segments.is_empty())
                         .on_click(cx.listener(|this, _, _, cx| this.summarize(cx))),
                 )
@@ -514,7 +517,7 @@ impl MeetingView {
                 .py_16()
                 .text_center()
                 .text_color(theme.muted_foreground)
-                .child("In dieser Aufnahme wurde keine Sprache erkannt.")
+                .child(tr("In dieser Aufnahme wurde keine Sprache erkannt."))
                 .into_any_element();
         }
         let position = self.position;
@@ -528,10 +531,10 @@ impl MeetingView {
                     .gap_2()
                     .rounded(theme.radius)
                     .bg(theme.muted)
-                    .child(div().text_sm().child(format!("„{current}“ umbenennen in")))
+                    .child(div().text_sm().child(trf("„{}“ umbenennen in", &[&ui::speaker_display(current)])))
                     .child(Input::new(input).w(px(220.)).small())
-                    .child(Button::new("spk-save").small().primary().label("Speichern").on_click(cx.listener(|this, _, _, cx| this.commit_edit(cx))))
-                    .child(Button::new("spk-cancel").small().ghost().label("Abbrechen").on_click(cx.listener(|this, _, _, cx| this.cancel_edit(cx))))
+                    .child(Button::new("spk-save").small().primary().label(tr("Speichern")).on_click(cx.listener(|this, _, _, cx| this.commit_edit(cx))))
+                    .child(Button::new("spk-cancel").small().ghost().label(tr("Abbrechen")).on_click(cx.listener(|this, _, _, cx| this.cancel_edit(cx))))
                     .into_any_element(),
             );
         }
@@ -567,6 +570,7 @@ impl MeetingView {
                     .into_any_element(),
                 _ => div()
                     .flex_1()
+                    .min_w_0()
                     .line_height(rems(1.55))
                     .child(ui::bidi_text(seg.text.clone(), true))
                     .into_any_element(),
@@ -602,7 +606,7 @@ impl MeetingView {
                             .id(("spk", ix))
                             .cursor_pointer()
                             .child(ui::speaker_chip(&label, cx))
-                            .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new("Sprecher umbenennen").build(window, cx))
+                            .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Sprecher umbenennen")).build(window, cx))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 let current = label.clone();
                                 let value = if current == "Ich" || current == "Andere" { String::new() } else { current.clone() };
@@ -617,7 +621,7 @@ impl MeetingView {
                                     .xsmall()
                                     .ghost()
                                     .icon(IconName::Pencil)
-                                    .tooltip("Text korrigieren")
+                                    .tooltip(tr("Text korrigieren"))
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.begin_edit(move |input| Edit::Line(seg_id, input), text.clone(), window, cx)
                                     })),
@@ -694,7 +698,7 @@ impl MeetingView {
                 div()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child("Auf die Wellenform klicken, um ab dieser Stelle abzuspielen."),
+                    .child(tr("Auf die Wellenform klicken, um ab dieser Stelle abzuspielen.")),
             )
             .into_any_element()
     }
@@ -708,7 +712,7 @@ impl Render for MeetingView {
                 .items_center()
                 .justify_center()
                 .text_color(cx.theme().muted_foreground)
-                .child(self.error.clone().unwrap_or_else(|| "Besprechung nicht gefunden.".into()))
+                .child(self.error.clone().unwrap_or_else(|| tr("Besprechung nicht gefunden.").into()))
                 .into_any_element();
         };
         let header = self.render_header(&m, cx);
@@ -735,9 +739,9 @@ impl Render for MeetingView {
                             this.tab = *ix;
                             cx.notify();
                         }))
-                        .child(Tab::new().prefix(Icon::new(IconName::Sparkles).small()).label("Zusammenfassung"))
-                        .child(Tab::new().prefix(Icon::new(IconName::FileText).small()).label(format!("Transkript · {lines}")))
-                        .child(Tab::new().prefix(Icon::new(IconName::AudioLines).small()).label("Audio")),
+                        .child(Tab::new().prefix(Icon::new(IconName::Sparkles).small()).label(tr("Zusammenfassung")))
+                        .child(Tab::new().prefix(Icon::new(IconName::FileText).small()).label(trf("Transkript · {}", &[&lines])))
+                        .child(Tab::new().prefix(Icon::new(IconName::AudioLines).small()).label(tr("Audio"))),
                 ),
             )
             .when_some(self.notice.clone(), |el, note| {

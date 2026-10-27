@@ -85,7 +85,7 @@ pub fn classify(s: &CaptureStream) -> Option<String> {
     BROWSERS
         .iter()
         .find(|(_, n)| matches(n))
-        .map(|(label, _)| format!("Browser-Anruf ({label})"))
+        .map(|(label, _)| crate::i18n::trf("Browser-Anruf ({})", &[label]))
 }
 
 /// A Pulse connection kept open for polling.

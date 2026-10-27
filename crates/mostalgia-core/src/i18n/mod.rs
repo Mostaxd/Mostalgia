@@ -84,6 +84,20 @@ pub fn trf(de: &'static str, args: &[&dyn std::fmt::Display]) -> String {
     out
 }
 
+/// How a stored speaker label is shown: "Ich", "Andere" and "Sprecher N"
+/// are data (German in the database) and get translated; names people gave
+/// stay as they are.
+pub fn speaker(label: &str) -> String {
+    match label {
+        "Ich" => tr("Ich").into(),
+        "Andere" => tr("Andere").into(),
+        other => match other.strip_prefix("Sprecher ").and_then(|n| n.parse::<usize>().ok()) {
+            Some(n) => trf("Sprecher {}", &[&n]),
+            None => other.to_string(),
+        },
+    }
+}
+
 /// "27.10.2026" / "Oct 27, 2026".
 pub fn date(dt: &DateTime<Local>) -> String {
     match lang() {

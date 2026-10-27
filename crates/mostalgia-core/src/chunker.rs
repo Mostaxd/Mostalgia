@@ -20,16 +20,34 @@ const MIN_INTERIM_SECS: f64 = 0.8;
 /// A chunk quieter than this (RMS, ≈ −34 dBFS) is "low energy": if Whisper
 /// returns only a known filler phrase for it, that's a hallucination.
 const LOW_ENERGY_RMS: f32 = 0.02;
-/// Utterances quieter than this overall (≈ −42 dBFS) are background — room
-/// noise, earphone bleed — not speech; they never reach Whisper. Speech on
-/// a desk mic sits around −25 dBFS.
-pub const MIN_UTTERANCE_RMS: f32 = 0.008;
+/// An utterance must be this many times louder (RMS) than the source's
+/// background noise to reach Whisper (~8 dB): room noise and earphone bleed
+/// stay out, while quiet speech — e.g. after a call app turned the mic gain
+/// down — still gets through. Relative, because absolute levels vary
+/// wildly between mics and gain settings.
+pub const SPEECH_OVER_NOISE: f32 = 2.5;
+/// Absolute floor for that gate (≈ −52 dBFS), for near-silent sources.
+pub const MIN_UTTERANCE_RMS: f32 = 0.0025;
+
+/// The loudness an utterance needs over a background of `noise` RMS.
+pub fn speech_gate(noise: f32) -> f32 {
+    (noise * SPEECH_OVER_NOISE).max(MIN_UTTERANCE_RMS)
+}
 
 /// A span of speech cut from one source, ready for Whisper.
 pub struct Utterance {
     /// Seconds from the start of the recording.
     pub offset_secs: f64,
     pub samples: Vec<f32>,
+    /// Background noise level (RMS) of the source when it was cut.
+    pub noise: f32,
+}
+
+impl Utterance {
+    /// Loud enough over the source's background to be speech.
+    pub fn is_loud_enough(&self) -> bool {
+        vad::rms(&self.samples) >= speech_gate(self.noise)
+    }
 }
 
 /// Accumulates one source's live audio and cuts it into utterances at
@@ -42,6 +60,8 @@ pub struct Chunker {
     heard_speech: bool,
     /// Samples consumed before the current chunk started (for timestamps).
     consumed: u64,
+    /// Running background level (RMS of frames the VAD calls non-speech).
+    noise: f32,
 }
 
 impl Chunker {
@@ -53,6 +73,7 @@ impl Chunker {
             silent_frames: 0,
             heard_speech: false,
             consumed: 0,
+            noise: 0.003,
         }
     }
 
@@ -73,6 +94,13 @@ impl Chunker {
     }
 
     fn push_frame(&mut self, frame: &[f32], is_speech: bool) -> Option<Utterance> {
+        if !is_speech {
+            // Falls fast, rises slowly: a quiet room is learned within a
+            // second, a burst of noise barely moves it.
+            let rms = vad::rms(frame);
+            let rate = if rms < self.noise { 0.1 } else { 0.01 };
+            self.noise += (rms - self.noise) * rate;
+        }
         if !is_speech && !self.heard_speech {
             // Leading silence: keep only a short tail as lead-in, so the
             // chunk's timestamps stay close to the first word.
@@ -136,6 +164,7 @@ impl Chunker {
         Some(Utterance {
             offset_secs: start as f64 / SAMPLE_RATE as f64,
             samples,
+            noise: self.noise,
         })
     }
 
@@ -146,6 +175,7 @@ impl Chunker {
         (self.heard_speech && secs >= MIN_INTERIM_SECS).then(|| Utterance {
             offset_secs: self.consumed as f64 / SAMPLE_RATE as f64,
             samples: self.chunk.clone(),
+            noise: self.noise,
         })
     }
 
@@ -209,7 +239,7 @@ pub fn is_filler_hallucination(text: &str, samples: &[f32]) -> bool {
 /// relative to the recording start, or an empty list when Whisper's whole
 /// output was a filler hallucination.
 pub fn transcribe_utterance(engine: &mut Engine, utt: &Utterance) -> Result<Vec<Segment>> {
-    if vad::rms(&utt.samples) < MIN_UTTERANCE_RMS {
+    if !utt.is_loud_enough() {
         return Ok(Vec::new());
     }
     let mut segments = engine.transcribe(&utt.samples)?;

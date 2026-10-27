@@ -234,7 +234,7 @@ impl Recorder {
                     // Only when the backlog is small, so live audio isn't starved.
                     let caught_up = block_rx.len() < 4;
                     if !finished && grew && caught_up && interim_at[i].elapsed().as_millis() >= 1000 {
-                        if let Some(utt) = chunker.open_chunk().filter(|u| vad::rms(&u.samples) >= chunker::MIN_UTTERANCE_RMS) {
+                        if let Some(utt) = chunker.open_chunk().filter(|u| u.is_loud_enough()) {
                             interim_len[i] = utt.samples.len();
                             interim_at[i] = std::time::Instant::now();
                             if let Ok(segments) = engine.transcribe(&utt.samples) {

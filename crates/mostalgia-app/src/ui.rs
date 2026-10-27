@@ -4,6 +4,7 @@ use gpui_kit::component::{ActiveTheme, StyledExt, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use mostalgia_core::Source;
+use mostalgia_core::i18n::{tr, trf};
 
 use crate::themes;
 
@@ -152,9 +153,16 @@ pub fn speaker_color(label: &str, cx: &App) -> Hsla {
 
 pub fn source_label(source: Source) -> &'static str {
     match source {
-        Source::Mic => "Mikrofon",
-        Source::System => "Desktop",
+        Source::Mic => tr("Mikrofon"),
+        Source::System => tr("Desktop"),
     }
+}
+
+/// How a stored speaker label is shown: "Ich"/"Andere"/"Sprecher N" are
+/// data (kept in German in the database) and get translated for display;
+/// names people gave stay as they are.
+pub fn speaker_display(label: &str) -> String {
+    mostalgia_core::i18n::speaker(label)
 }
 
 /// A speaker "chip": a small coloured dot plus the name.
@@ -171,7 +179,7 @@ pub fn speaker_chip(label: &str, cx: &App) -> Div {
         .text_xs()
         .font_weight(FontWeight::SEMIBOLD)
         .child(div().size(px(6.)).rounded_full().bg(color))
-        .child(SharedString::from(label.to_string()))
+        .child(SharedString::from(speaker_display(label)))
 }
 
 /// RMS → 0..1 on a −60…0 dBFS scale.
@@ -211,7 +219,7 @@ pub fn hms(secs: f64) -> String {
 
 pub fn minutes(secs: f64) -> String {
     let m = (secs / 60.0).round() as u64;
-    if m == 0 { "< 1 min".into() } else { format!("{m} min") }
+    if m == 0 { tr("< 1 min").into() } else { trf("{} min", &[&m]) }
 }
 
 /// Section heading used in settings and the detail view.

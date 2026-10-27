@@ -7,6 +7,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc::Sender;
 
+use mostalgia_core::i18n::tr;
 use mostalgia_core::paths;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,7 +89,7 @@ impl ksni::Tray for Tray {
 
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip {
-            title: if self.recording { "mostalgia — Aufnahme läuft".into() } else { "mostalgia".into() },
+            title: if self.recording { format!("mostalgia — {}", tr("Aufnahme läuft")) } else { "mostalgia".into() },
             ..Default::default()
         }
     }
@@ -112,13 +113,13 @@ impl ksni::Tray for Tray {
         };
         vec![
             if self.recording {
-                item("Aufnahme beenden", "media-playback-stop", Command::Stop)
+                item(tr("Aufnahme beenden"), "media-playback-stop", Command::Stop)
             } else {
-                item("Aufnahme starten", "media-record", Command::Start)
+                item(tr("Aufnahme starten"), "media-record", Command::Start)
             },
-            item("Fenster anzeigen", "window-new", Command::Show),
+            item(tr("Fenster anzeigen"), "window-new", Command::Show),
             ksni::MenuItem::Separator,
-            item("Beenden", "application-exit", Command::Quit),
+            item(tr("mostalgia beenden"), "application-exit", Command::Quit),
         ]
     }
 }

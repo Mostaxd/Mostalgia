@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Local, TimeZone};
 use clap::{Parser, Subcommand, ValueEnum};
 use mostalgia_core::chunker::format_ts;
+use mostalgia_core::i18n::{self, tr, trf};
 use mostalgia_core::recorder::{Event, RecordConfig, Recorder, Recording};
 use mostalgia_core::store::{NewMeeting, Store};
 use mostalgia_core::transcribe::Engine;
@@ -67,7 +68,7 @@ impl SummaryChoice {
         let config = mostalgia_core::config::Config::load();
         let mut req = config.summary_request();
         if let Some(p) = &self.provider {
-            let provider = summary::Provider::parse(p).with_context(|| format!("unknown provider {p:?} (claude, deepseek)"))?;
+            let provider = summary::Provider::parse(p).with_context(|| trf("Unbekannter Anbieter {} (claude, deepseek)", &[&format!("{p:?}")]))?;
             if provider != req.provider {
                 req.provider = provider;
                 req.model = provider.default_model().into();
@@ -79,7 +80,7 @@ impl SummaryChoice {
         if req.provider == summary::Provider::DeepSeek {
             req.effort = None;
         } else if let Some(e) = &self.effort {
-            anyhow::ensure!(summary::EFFORTS.contains(&e.as_str()), "unknown effort {e:?} (low, medium, high, xhigh, max)");
+            anyhow::ensure!(summary::EFFORTS.contains(&e.as_str()), "{}", trf("Unbekannte Denktiefe {} (low, medium, high, xhigh, max)", &[&format!("{e:?}")]));
             req.effort = Some(e.clone());
         } else if req.effort.is_none() {
             req.effort = Some(config.summary_effort.clone());
@@ -254,14 +255,14 @@ impl ModelArgs {
         let model = self.whisper();
         anyhow::ensure!(
             model.exists(),
-            "model not found at {} — run scripts/download-model.sh first or pass --model",
-            model.display()
+            "{}",
+            trf("Modell nicht gefunden: {} — zuerst scripts/download-model.sh ausführen oder --model angeben", &[&model.display()])
         );
-        eprintln!("[mostalgia] loading model {} …", model.display());
+        eprintln!("[mostalgia] {}", trf("Lade Modell {} …", &[&model.display()]));
         let engine = Engine::load(&model, &self.language)?;
         match engine.gpu() {
-            Some(gpu) => eprintln!("[mostalgia] using GPU: {gpu}"),
-            None => eprintln!("[mostalgia] no discrete GPU found — using the default device"),
+            Some(gpu) => eprintln!("[mostalgia] {}", trf("Nutze GPU: {}", &[&gpu])),
+            None => eprintln!("[mostalgia] {}", tr("Keine eigene Grafikkarte gefunden — nutze das Standardgerät")),
         }
         Ok(engine)
     }
@@ -314,8 +315,8 @@ fn main() -> Result<()> {
         }
         Command::Export { id, format, output } => export(id, format.as_deref(), output),
         Command::Delete { id } => {
-            anyhow::ensure!(open_store()?.delete(id)?, "no meeting #{id}");
-            println!("Deleted meeting #{id} from the library (WAV files kept).");
+            anyhow::ensure!(open_store()?.delete(id)?, "{}", trf("Keine Besprechung #{}", &[&id]));
+            println!("{}", trf("Besprechung #{} aus der Bibliothek entfernt (WAV-Dateien bleiben).", &[&id]));
             Ok(())
         }
         Command::Toggle => control("toggle", &["--start"]),
@@ -344,7 +345,7 @@ fn start(models: &ModelArgs, sum: &SummaryArgs, cfg: RecordConfig, speakers: boo
     static PRESSES: AtomicUsize = AtomicUsize::new(0);
     ctrlc::set_handler(move || {
         if PRESSES.fetch_add(1, Ordering::SeqCst) == 0 {
-            eprintln!("\n[mostalgia] stopping … (Ctrl+C again to skip the final pass)");
+            eprintln!("\n[mostalgia] {}", tr("Beende … (nochmal Strg+C überspringt den letzten Durchgang)"));
             stop.stop();
         } else {
             std::process::exit(130);
@@ -352,7 +353,7 @@ fn start(models: &ModelArgs, sum: &SummaryArgs, cfg: RecordConfig, speakers: boo
     })
     .context("installing Ctrl+C handler")?;
 
-    eprintln!("[mostalgia] recording to {} — press Ctrl+C to stop", recorder.dir().display());
+    eprintln!("[mostalgia] {}", trf("Nehme auf nach {} — Strg+C beendet", &[&recorder.dir().display()]));
     // MOSTALGIA_TIMING=1: log when each line becomes visible (latency checks).
     let debug = std::env::var_os("MOSTALGIA_TIMING").is_some();
     let t0 = std::time::Instant::now();
@@ -398,20 +399,20 @@ fn start(models: &ModelArgs, sum: &SummaryArgs, cfg: RecordConfig, speakers: boo
                 let ts = format_ts(start_secs);
                 if speakers {
                     let who = speaker.as_deref().unwrap_or(source.speaker_label());
-                    println!("[{ts}] {who}: {text}");
+                    println!("[{ts}] {}: {text}", i18n::speaker(who));
                 } else {
                     println!("[{ts}] {text}");
                 }
             }
             Event::Chunk { audio_secs, millis, .. } => {
-                eprintln!("[mostalgia] {audio_secs:.1} s chunk transcribed in {millis} ms");
+                eprintln!("[mostalgia] {}", trf("{} s Abschnitt in {} ms transkribiert", &[&format!("{audio_secs:.1}"), &millis]));
             }
             Event::Warning(w) => eprintln!("[mostalgia] {w}"),
             Event::Level { .. } => {}
         }
     }
     let (recording, mut engine) = recorder.join()?;
-    eprintln!("[mostalgia] tracks saved in {}", recording.dir.display());
+    eprintln!("[mostalgia] {}", trf("Spuren gespeichert in {}", &[&recording.dir.display()]));
     if no_final {
         return Ok(());
     }
@@ -420,17 +421,16 @@ fn start(models: &ModelArgs, sum: &SummaryArgs, cfg: RecordConfig, speakers: boo
 
 /// Final pass → library → summary, shared by `start` and `import`.
 fn finish(engine: &mut Engine, models: &ModelArgs, sum: &SummaryArgs, rec: &Recording) -> Result<()> {
-    eprintln!("[mostalgia] final pass over {:.0} s of audio …", rec.duration_secs);
+    eprintln!("[mostalgia] {}", trf("Letzter Durchgang über {} s Audio …", &[&format!("{:.0}", rec.duration_secs)]));
     let t = std::time::Instant::now();
     let segments = finalize::final_pass(engine, &rec.tracks, &models.final_pass_options())?;
     eprintln!(
-        "[mostalgia] final transcript: {} lines in {:.1} s",
-        segments.len(),
-        t.elapsed().as_secs_f64()
+        "[mostalgia] {}",
+        trf("Fertiges Transkript: {} Zeilen in {} s", &[&segments.len(), &format!("{:.1}", t.elapsed().as_secs_f64())])
     );
 
     let mut store = open_store()?;
-    let title = format!("Besprechung {}", rec.started_at.format("%d.%m.%Y %H:%M"));
+    let title = trf("Besprechung {}", &[&i18n::date_time(&rec.started_at)]);
     let id = store.insert_meeting(
         &NewMeeting {
             title: &title,
@@ -441,45 +441,49 @@ fn finish(engine: &mut Engine, models: &ModelArgs, sum: &SummaryArgs, rec: &Reco
         },
         &segments,
     )?;
-    println!("\n=== Meeting #{id}: {title} ===");
+    println!("\n=== {} ===", trf("Besprechung #{}: {}", &[&id, &title]));
     for s in &segments {
-        let who = s.speaker.as_deref().unwrap_or(s.source.speaker_label());
+        let who = i18n::speaker(s.speaker.as_deref().unwrap_or(s.source.speaker_label()));
         println!("[{}] {who}: {}", format_ts(s.start_secs), s.text);
     }
 
     if !sum.no_summary && !segments.is_empty() {
         if let Err(e) = sum.choice.request().and_then(|req| summarize(&store, id, &req, false)) {
-            eprintln!("[mostalgia] summary skipped: {e:#}");
+            eprintln!("[mostalgia] {}", trf("Zusammenfassung übersprungen: {}", &[&format!("{e:#}")]));
         }
     }
     index_for_ask(id);
-    println!("\nSaved as meeting #{id} — `mostalgia show {id}` to view it again.");
+    println!("\n{}", trf("Gespeichert als Besprechung #{} — `mostalgia show {}` zeigt sie wieder an.", &[&id, &id]));
     Ok(())
 }
 
 fn summarize(store: &Store, id: i64, req: &summary::SummaryRequest, required: bool) -> Result<()> {
-    let meeting = store.get(id)?.with_context(|| format!("no meeting #{id}"))?;
+    let meeting = store.get(id)?.with_context(|| trf("Keine Besprechung #{}", &[&id]))?;
     let Some(key) = summary::api_key(req.provider)? else {
-        let msg = format!(
-            "no {} API key — run `mostalgia set-api-key --provider {}`",
-            req.provider.name(),
-            req.provider.id()
+        let msg = trf(
+            "Kein {}-API-Schlüssel — `mostalgia set-api-key --provider {}` ausführen",
+            &[&req.provider.name(), &req.provider.id()],
         );
         if required {
             anyhow::bail!(msg);
         }
-        eprintln!("[mostalgia] {msg}, then `mostalgia summarize {id}`");
+        eprintln!("[mostalgia] {}", trf("{}, danach `mostalgia summarize {}`", &[&msg, &id]));
         return Ok(());
     };
     eprintln!(
-        "[mostalgia] summarizing with {} {}{} …",
-        req.provider.name(),
-        req.model,
-        req.effort.as_deref().map(|e| format!(" (effort {e})")).unwrap_or_default()
+        "[mostalgia] {}",
+        trf(
+            "Fasse zusammen mit {} {}{} …",
+            &[
+                &req.provider.name(),
+                &req.model,
+                &req.effort.as_deref().map(|e| trf(" (Denktiefe {})", &[&e])).unwrap_or_default(),
+            ],
+        )
     );
     let t = std::time::Instant::now();
     let s = summary::summarize(req, &key, &meeting)?;
-    eprintln!("[mostalgia] summary took {:.1} s", t.elapsed().as_secs_f64());
+    eprintln!("[mostalgia] {}", trf("Zusammenfassung dauerte {} s", &[&format!("{:.1}", t.elapsed().as_secs_f64())]));
     store.save_summary(id, s.provider.id(), &s.model, s.effort.as_deref(), &s.markdown)?;
     if let Some(title) = &s.title {
         store.set_title(id, title)?;
@@ -494,7 +498,7 @@ fn import(dir: &Path, models: &ModelArgs, sum: &SummaryArgs) -> Result<()> {
         .map(|s| (s, dir.join(s.file_name())))
         .filter(|(_, p)| p.exists())
         .collect();
-    anyhow::ensure!(!tracks.is_empty(), "no mic.wav or system.wav in {}", dir.display());
+    anyhow::ensure!(!tracks.is_empty(), "{}", trf("Kein mic.wav oder system.wav in {}", &[&dir.display()]));
 
     // session-<unix ts> folders carry their start time; else use the file time.
     let started_at = dir
@@ -524,15 +528,16 @@ fn import(dir: &Path, models: &ModelArgs, sum: &SummaryArgs) -> Result<()> {
 fn list(limit: usize) -> Result<()> {
     let meetings = open_store()?.list(limit)?;
     if meetings.is_empty() {
-        println!("No meetings yet — record one with `mostalgia start`.");
+        println!("{}", tr("Noch keine Besprechungen — mit `mostalgia start` die erste aufnehmen."));
     }
     for m in meetings {
         println!(
-            "#{:<4} {}  {:>3} min  {:>4} lines  {}  {}",
+            "#{:<4} {}  {:>3} min  {:>4} {}  {}  {}",
             m.id,
-            m.started_at.format("%d.%m.%Y %H:%M"),
+            i18n::date_time(&m.started_at),
             (m.duration_secs / 60.0).round(),
             m.segment_count,
+            tr("Zeilen"),
             if m.has_summary { "✓" } else { " " },
             m.title
         );
@@ -541,32 +546,38 @@ fn list(limit: usize) -> Result<()> {
 }
 
 fn show(id: i64, with_summary: bool, with_transcript: bool) -> Result<()> {
-    let m = open_store()?.get(id)?.with_context(|| format!("no meeting #{id}"))?;
+    let m = open_store()?.get(id)?.with_context(|| trf("Keine Besprechung #{}", &[&id]))?;
     println!(
-        "Meeting #{} — {}\n{} · {} min · {}\n",
+        "{} #{} — {}\n{} · {} min · {}\n",
+        tr("Besprechung"),
         m.id,
         m.title,
-        m.started_at.format("%d.%m.%Y %H:%M"),
+        i18n::date_time(&m.started_at),
         (m.duration_secs / 60.0).round(),
         m.dir.display()
     );
     if with_summary {
         match &m.summary {
             Some(s) => println!(
-                "{}\n\n(summary by {} {}{}, {})\n",
+                "{}\n\n({})\n",
                 s.markdown,
-                summary::Provider::parse(&s.provider).map_or(s.provider.as_str(), |p| p.name()),
-                s.model,
-                s.effort.as_deref().map(|e| format!(", effort {e}")).unwrap_or_default(),
-                s.created_at.format("%d.%m.%Y %H:%M")
+                trf(
+                    "Zusammenfassung von {} {}{}, {}",
+                    &[
+                        &summary::Provider::parse(&s.provider).map_or(s.provider.as_str(), |p| p.name()),
+                        &s.model,
+                        &s.effort.as_deref().map(|e| trf(", Denktiefe {}", &[&e])).unwrap_or_default(),
+                        &i18n::date_time(&s.created_at),
+                    ],
+                )
             ),
-            None => println!("(no summary yet — `mostalgia summarize {id}`)\n"),
+            None => println!("({})\n", trf("noch keine Zusammenfassung — `mostalgia summarize {}`", &[&id])),
         }
     }
     if with_transcript {
-        println!("Transcript:");
+        println!("{}:", tr("Transkript"));
         for s in &m.segments {
-            println!("[{}] {}: {}", format_ts(s.start_secs), s.speaker_label(), s.text);
+            println!("[{}] {}: {}", format_ts(s.start_secs), i18n::speaker(s.speaker_label()), s.text);
         }
     }
     Ok(())
@@ -575,15 +586,15 @@ fn show(id: i64, with_summary: bool, with_transcript: bool) -> Result<()> {
 fn search(query: &str, limit: usize) -> Result<()> {
     let hits = open_store()?.search(query, limit)?;
     if hits.is_empty() {
-        println!("No matches for “{query}”.");
+        println!("{}", trf("Keine Treffer für „{}“.", &[&query]));
     }
     for h in hits {
         println!(
             "#{:<4} {}  [{}] {}: {}   — {}",
             h.meeting_id,
-            h.started_at.format("%d.%m.%Y"),
+            i18n::date(&h.started_at),
             format_ts(h.start_secs),
-            h.source.speaker_label(),
+            i18n::speaker(h.source.speaker_label()),
             h.snippet,
             h.title
         );
@@ -593,9 +604,9 @@ fn search(query: &str, limit: usize) -> Result<()> {
 
 fn export(id: i64, format: Option<&str>, output: Option<PathBuf>) -> Result<()> {
     use mostalgia_core::export::{self, Format};
-    let m = open_store()?.get(id)?.with_context(|| format!("no meeting #{id}"))?;
+    let m = open_store()?.get(id)?.with_context(|| trf("Keine Besprechung #{}", &[&id]))?;
     let format = match format {
-        Some(f) => Format::from_extension(f).with_context(|| format!("unknown format {f:?} (md, txt, srt, docx)"))?,
+        Some(f) => Format::from_extension(f).with_context(|| trf("Unbekanntes Format {} (md, txt, srt, docx)", &[&format!("{f:?}")]))?,
         None => output
             .as_ref()
             .and_then(|p| p.extension()?.to_str())
@@ -604,7 +615,7 @@ fn export(id: i64, format: Option<&str>, output: Option<PathBuf>) -> Result<()> 
     };
     let path = output.unwrap_or_else(|| PathBuf::from(export::suggested_name(&m, format)));
     export::write(&m, format, &path)?;
-    println!("Exported meeting #{id} to {}", path.display());
+    println!("{}", trf("Besprechung #{} exportiert nach {}", &[&id, &path.display()]));
     Ok(())
 }
 
@@ -628,7 +639,7 @@ fn control(cmd: &str, launch_args: &[&str]) -> Result<()> {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .with_context(|| format!("starting {}", app.display()))?;
+        .with_context(|| trf("{} konnte nicht gestartet werden", &[&app.display()]))?;
     Ok(())
 }
 
@@ -636,15 +647,15 @@ fn control(cmd: &str, launch_args: &[&str]) -> Result<()> {
 fn index_for_ask(id: i64) {
     let t = std::time::Instant::now();
     match mostalgia_core::ask::index_meeting(id) {
-        Ok(n) => eprintln!("[mostalgia] search index: {n} passages in {:.2} s", t.elapsed().as_secs_f64()),
-        Err(e) => eprintln!("[mostalgia] search index not updated: {e:#}"),
+        Ok(n) => eprintln!("[mostalgia] {}", trf("Suchindex: {} Abschnitte in {} s", &[&n, &format!("{:.2}", t.elapsed().as_secs_f64())])),
+        Err(e) => eprintln!("[mostalgia] {}", trf("Suchindex nicht aktualisiert: {}", &[&format!("{e:#}")])),
     }
 }
 
 fn reindex(all: bool) -> Result<()> {
     use mostalgia_core::ask;
     if !ask::embed::available() {
-        eprintln!("[mostalgia] embedding model missing (scripts/download-model.sh) — keyword search only");
+        eprintln!("[mostalgia] {}", tr("Bedeutungsmodell fehlt (scripts/download-model.sh) — nur Stichwortsuche"));
     }
     let t = std::time::Instant::now();
     let n = if all {
@@ -656,7 +667,7 @@ fn reindex(all: bool) -> Result<()> {
     } else {
         ask::index_pending()?
     };
-    println!("Indexed {n} meeting(s) in {:.2} s.", t.elapsed().as_secs_f64());
+    println!("{}", trf("{} Besprechung(en) in {} s indexiert.", &[&n, &format!("{:.2}", t.elapsed().as_secs_f64())]));
     Ok(())
 }
 
@@ -664,7 +675,7 @@ fn ask(question: &str) -> Result<()> {
     use mostalgia_core::ask::{self, AskEvent, Piece};
     // Bring the index up to date first (cheap when nothing changed).
     if let Err(e) = ask::index_pending() {
-        eprintln!("[mostalgia] search index: {e:#}");
+        eprintln!("[mostalgia] {}", trf("Suchindex: {}", &[&format!("{e:#}")]));
     }
     let (tx, rx) = crossbeam_channel::unbounded();
     let q = question.to_string();
@@ -677,7 +688,7 @@ fn ask(question: &str) -> Result<()> {
             AskEvent::Status(s) => eprintln!("[mostalgia] {s}"),
             AskEvent::TextDelta(_) => {
                 if !writing {
-                    eprintln!("[mostalgia] Antwort wird geschrieben …");
+                    eprintln!("[mostalgia] {}", tr("Antwort wird geschrieben …"));
                     writing = true;
                 }
             }
@@ -693,7 +704,7 @@ fn ask(question: &str) -> Result<()> {
                     .collect();
                 println!("{text}");
                 if !citations.is_empty() {
-                    println!("\nQuellen:");
+                    println!("\n{}:", tr("Quellen"));
                     let mut seen = Vec::new();
                     for c in citations {
                         if !seen.contains(&c.label) {
@@ -714,42 +725,42 @@ fn ask(question: &str) -> Result<()> {
 }
 
 fn list_models(provider: &str) -> Result<()> {
-    let provider = summary::Provider::parse(provider).with_context(|| format!("unknown provider {provider:?}"))?;
+    let provider = summary::Provider::parse(provider).with_context(|| trf("Unbekannter Anbieter {}", &[&format!("{provider:?}")]))?;
     let models = match summary::api_key(provider)? {
         Some(key) => summary::list_models(provider, &key)?,
         None => {
-            eprintln!("(no {} API key — showing the built-in list)", provider.name());
+            eprintln!("({})", trf("kein {}-API-Schlüssel — zeige die eingebaute Liste", &[&provider.name()]));
             summary::fallback_models(provider)
         }
     };
     for m in models {
         let efforts = if m.efforts.is_empty() { "—".to_string() } else { m.efforts.join(", ") };
-        println!("{:<28} {:<26} thinking: {efforts}", m.id, m.display_name);
+        println!("{:<28} {:<26} {}: {efforts}", m.id, m.display_name, tr("Denktiefe"));
     }
     Ok(())
 }
 
 fn set_api_key(provider: &str) -> Result<()> {
-    let provider = summary::Provider::parse(provider).with_context(|| format!("unknown provider {provider:?}"))?;
-    let key = rpassword::prompt_password(format!("{} API key: ", provider.name())).context("reading the key")?;
-    anyhow::ensure!(!key.trim().is_empty(), "no key entered");
+    let provider = summary::Provider::parse(provider).with_context(|| trf("Unbekannter Anbieter {}", &[&format!("{provider:?}")]))?;
+    let key = rpassword::prompt_password(trf("{}-API-Schlüssel: ", &[&provider.name()])).context(tr("Schlüssel konnte nicht gelesen werden"))?;
+    anyhow::ensure!(!key.trim().is_empty(), "{}", tr("Kein Schlüssel eingegeben"));
     summary::save_api_key(provider, &key)?;
-    println!("Saved in the system keyring (an environment variable, if set, still takes precedence).");
+    println!("{}", tr("Im Schlüsselbund gespeichert (eine gesetzte Umgebungsvariable hat weiterhin Vorrang)."));
     Ok(())
 }
 
 fn list_devices() -> Result<()> {
     let sources = audio::list_sources()?;
-    for (title, monitors) in [("Microphones (--mic-device)", false), ("System audio (--system-device)", true)] {
+    for (title, monitors) in [(tr("Mikrofone (--mic-device)"), false), (tr("Systemaudio (--system-device)"), true)] {
         println!("{title}:");
         for s in sources.iter().filter(|s| s.is_monitor == monitors) {
             let mark = if s.is_default { "*" } else { " " };
-            let unplugged = if s.available { "" } else { "  (nicht angeschlossen)" };
+            let unplugged = if s.available { String::new() } else { format!("  ({})", tr("nicht angeschlossen")) };
             println!("  {mark} {}{unplugged}\n      {}", s.label, s.name);
         }
         println!();
     }
-    println!("* = used by default");
+    println!("{}", tr("* = wird standardmäßig verwendet"));
     Ok(())
 }
 
@@ -763,14 +774,17 @@ fn transcribe_file(file: &Path, models: &ModelArgs) -> Result<()> {
     let elapsed = t.elapsed().as_secs_f64();
     for seg in segments {
         match &seg.speaker {
-            Some(who) => println!("[{}] {who}: {}", format_ts(seg.start_secs), seg.text),
+            Some(who) => println!("[{}] {}: {}", format_ts(seg.start_secs), i18n::speaker(who), seg.text),
             None => println!("[{}] {}", format_ts(seg.start_secs), seg.text),
         }
     }
     let audio_secs = samples.len() as f64 / mostalgia_core::SAMPLE_RATE as f64;
     eprintln!(
-        "[mostalgia] {audio_secs:.1} s of audio transcribed in {elapsed:.2} s ({:.1}x real time)",
-        audio_secs / elapsed
+        "[mostalgia] {}",
+        trf(
+            "{} s Audio in {} s transkribiert ({}× Echtzeit)",
+            &[&format!("{audio_secs:.1}"), &format!("{elapsed:.2}"), &format!("{:.1}", audio_secs / elapsed)],
+        )
     );
     Ok(())
 }

@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use docx_rs::{Docx, Paragraph, Run};
 
 use crate::chunker::format_ts;
+use crate::i18n::{self, tr, trf};
 use crate::store::Meeting;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,8 +32,8 @@ impl Format {
     pub fn label(self) -> &'static str {
         match self {
             Format::Markdown => "Markdown",
-            Format::Text => "Text",
-            Format::Srt => "Untertitel (SRT)",
+            Format::Text => tr("Text"),
+            Format::Srt => tr("Untertitel (SRT)"),
             Format::Docx => "Word (.docx)",
         }
     }
@@ -68,8 +69,8 @@ pub fn write(m: &Meeting, format: Format, path: &Path) -> Result<()> {
 
 fn header(m: &Meeting) -> String {
     let mins = (m.duration_secs / 60.0).round();
-    let length = if mins < 1.0 { "< 1 min".to_string() } else { format!("{mins} min") };
-    format!("{} · {length}", m.started_at.format("%d.%m.%Y, %H:%M"))
+    let length = if mins < 1.0 { tr("< 1 min").to_string() } else { trf("{} min", &[&mins]) };
+    format!("{} · {length}", i18n::date_time(&m.started_at))
 }
 
 /// The summary without its own "# Title" line (the export has one).
@@ -87,9 +88,9 @@ pub fn markdown(m: &Meeting) -> String {
         out.push_str(body.trim_end());
         out.push_str("\n\n");
     }
-    out.push_str("## Transkript\n\n");
+    out.push_str(&format!("## {}\n\n", tr("Transkript")));
     for s in &m.segments {
-        out.push_str(&format!("**[{}] {}:** {}\n\n", format_ts(s.start_secs), s.speaker_label(), s.text));
+        out.push_str(&format!("**[{}] {}:** {}\n\n", format_ts(s.start_secs), i18n::speaker(s.speaker_label()), s.text));
     }
     out
 }
@@ -104,9 +105,9 @@ pub fn text(m: &Meeting) -> String {
         }
         out.push('\n');
     }
-    out.push_str("Transkript\n\n");
+    out.push_str(&format!("{}\n\n", tr("Transkript")));
     for s in &m.segments {
-        out.push_str(&format!("[{}] {}: {}\n", format_ts(s.start_secs), s.speaker_label(), s.text));
+        out.push_str(&format!("[{}] {}: {}\n", format_ts(s.start_secs), i18n::speaker(s.speaker_label()), s.text));
     }
     out
 }
@@ -119,7 +120,7 @@ pub fn srt(m: &Meeting) -> String {
     let mut out = String::new();
     for (i, s) in m.segments.iter().enumerate() {
         let end = s.end_secs.max(s.start_secs + 0.5);
-        out.push_str(&format!("{}\n{} --> {}\n{}: {}\n\n", i + 1, ts(s.start_secs), ts(end), s.speaker_label(), s.text));
+        out.push_str(&format!("{}\n{} --> {}\n{}: {}\n\n", i + 1, ts(s.start_secs), ts(end), i18n::speaker(s.speaker_label()), s.text));
     }
     out
 }
@@ -157,12 +158,12 @@ pub fn docx(m: &Meeting, path: &Path) -> Result<()> {
             });
         }
     }
-    doc = doc.add_paragraph(Paragraph::new().add_run(Run::new().add_text("Transkript").bold().size(28)));
+    doc = doc.add_paragraph(Paragraph::new().add_run(Run::new().add_text(tr("Transkript")).bold().size(28)));
     for s in &m.segments {
         doc = doc.add_paragraph(
             Paragraph::new()
                 .add_run(Run::new().add_text(format!("[{}] ", format_ts(s.start_secs))).color("888888").size(20))
-                .add_run(Run::new().add_text(format!("{}: ", s.speaker_label())).bold().size(22))
+                .add_run(Run::new().add_text(format!("{}: ", i18n::speaker(s.speaker_label()))).bold().size(22))
                 .add_run(Run::new().add_text(&s.text).size(22)),
         );
     }

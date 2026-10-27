@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use super::search::{self, Filter};
 use crate::chunker::format_ts;
 use crate::config::Config;
+use crate::i18n::{tr, trf};
 use crate::store::Store;
 use crate::summary::{self, Provider};
 use crate::paths;
@@ -144,7 +145,7 @@ fn run_tool(name: &str, input: &Value) -> (String, String) {
                         })
                     })
                     .collect();
-                Ok((serde_json::to_string(&out)?, format!("Suche: {q} ({} Treffer, {ms} ms)", out.len())))
+                Ok((serde_json::to_string(&out)?, trf("Suche: {} ({} Treffer, {} ms)", &[&q, &out.len(), &ms])))
             }
             "list_meetings" => {
                 let filter = Filter {
@@ -176,7 +177,7 @@ fn run_tool(name: &str, input: &Value) -> (String, String) {
                 let id = input["meeting_id"].as_i64().context("meeting_id fehlt")?;
                 let from = input["from_secs"].as_f64().unwrap_or(0.0);
                 let to = input["to_secs"].as_f64().unwrap_or(f64::MAX);
-                let m = store.get(id)?.context("Besprechung nicht gefunden")?;
+                let m = store.get(id)?.context(tr("Besprechung nicht gefunden"))?;
                 let mut out = format!("{} · {}\n", m.title, m.started_at.format("%Y-%m-%d %H:%M"));
                 for s in m.segments.iter().filter(|s| s.end_secs >= from && s.start_secs <= to) {
                     out.push_str(&format!("[{:.0}s {}] {}: {}\n", s.start_secs, format_ts(s.start_secs), s.speaker_label(), s.text));
@@ -185,9 +186,9 @@ fn run_tool(name: &str, input: &Value) -> (String, String) {
                         break;
                     }
                 }
-                Ok((out, format!("Lese Transkript: {}", m.title)))
+                Ok((out, trf("Lese Transkript: {}", &[&m.title])))
             }
-            other => bail!("unbekanntes Werkzeug {other}"),
+            other => bail!("{}", trf("unbekanntes Werkzeug {}", &[&other])),
         }
     })();
     match result {
@@ -257,7 +258,7 @@ fn ask_claude(question: &str, history: &[(String, String)], config: &Config, eve
             body["fallbacks"] = json!("default");
             request = request.header("anthropic-beta", "server-side-fallback-2026-07-01");
         }
-        let resp = request.json(&body).send().context("Claude-API nicht erreichbar")?;
+        let resp = request.json(&body).send().context(tr("Claude-API nicht erreichbar"))?;
         if !resp.status().is_success() {
             let status = resp.status();
             let v: Value = resp.json().unwrap_or_default();
@@ -267,7 +268,7 @@ fn ask_claude(question: &str, history: &[(String, String)], config: &Config, eve
                 effort = None;
                 continue;
             }
-            bail!("Claude-API-Fehler ({status}): {msg}");
+            bail!("{}", trf("Claude-API-Fehler ({}): {}", &[&status, &msg]));
         }
 
         // Rebuild the assistant's content blocks from the stream so they can
@@ -317,7 +318,7 @@ fn ask_claude(question: &str, history: &[(String, String)], config: &Config, eve
                         stop_reason = r.to_string();
                     }
                 }
-                Some("error") => bail!("Claude-API-Fehler: {}", ev["error"]["message"].as_str().unwrap_or("unbekannt")),
+                Some("error") => bail!("{}", trf("Claude-API-Fehler: {}", &[&ev["error"]["message"].as_str().unwrap_or(tr("unbekannt"))])),
                 _ => {}
             }
         }
@@ -337,7 +338,7 @@ fn ask_claude(question: &str, history: &[(String, String)], config: &Config, eve
                     messages.push(json!({"role": "user", "content": "Bitte antworte jetzt mit dem, was du gefunden hast."}));
                 }
             }
-            "refusal" => bail!("Claude hat die Frage abgelehnt"),
+            "refusal" => bail!("{}", tr("Claude hat die Frage abgelehnt")),
             _ => {
                 let answer: String = blocks
                     .iter()
@@ -349,7 +350,7 @@ fn ask_claude(question: &str, history: &[(String, String)], config: &Config, eve
             }
         }
     }
-    bail!("keine Antwort nach {MAX_ROUNDS} Suchschritten")
+    bail!("{}", trf("keine Antwort nach {} Suchschritten", &[&MAX_ROUNDS]))
 }
 
 /// DeepSeek via its OpenAI-compatible tool calling (not streamed).
@@ -373,11 +374,11 @@ fn ask_deepseek(question: &str, history: &[(String, String)], config: &Config, e
     let client = reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(900)).build()?;
     for _ in 0..MAX_ROUNDS {
         let body = json!({"model": config.summary_model, "messages": messages, "tools": tools, "stream": false});
-        let resp = client.post(DEEPSEEK_URL).bearer_auth(&key).json(&body).send().context("DeepSeek-API nicht erreichbar")?;
+        let resp = client.post(DEEPSEEK_URL).bearer_auth(&key).json(&body).send().context(tr("DeepSeek-API nicht erreichbar"))?;
         let status = resp.status();
         let v: Value = resp.json()?;
         if !status.is_success() {
-            bail!("DeepSeek-API-Fehler ({status}): {}", v["error"]["message"].as_str().unwrap_or("unbekannt"));
+            bail!("{}", trf("DeepSeek-API-Fehler ({}): {}", &[&status, &v["error"]["message"].as_str().unwrap_or(tr("unbekannt"))]));
         }
         let msg = v["choices"][0]["message"].clone();
         let calls = msg["tool_calls"].as_array().cloned().unwrap_or_default();
@@ -399,7 +400,7 @@ fn ask_deepseek(question: &str, history: &[(String, String)], config: &Config, e
             messages.push(json!({"role": "tool", "tool_call_id": call["id"], "content": text}));
         }
     }
-    bail!("keine Antwort nach {MAX_ROUNDS} Suchschritten")
+    bail!("{}", trf("keine Antwort nach {} Suchschritten", &[&MAX_ROUNDS]))
 }
 
 /// Splits an answer into text and citations ([[m:ID@SECS]] markers),
@@ -420,8 +421,8 @@ pub fn parse_answer(answer: &str) -> Vec<Piece> {
                             })
                             .ok()
                     })
-                    .map(|(t, ts)| (t, Local.timestamp_opt(ts, 0).single().map_or(String::new(), |d| d.format("%d.%m.").to_string())))
-                    .unwrap_or_else(|| (format!("Besprechung #{id}"), String::new()))
+                    .map(|(t, ts)| (t, Local.timestamp_opt(ts, 0).single().map_or(String::new(), |d| crate::i18n::short_date(&d))))
+                    .unwrap_or_else(|| (trf("Besprechung #{}", &[&id]), String::new()))
             })
             .clone();
         if date.is_empty() { format!("{title} · {}", format_ts(secs)) } else { format!("{title} · {date} · {}", format_ts(secs)) }

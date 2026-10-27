@@ -78,13 +78,14 @@ pub fn final_pass(engine: &mut Engine, tracks: &[(Source, PathBuf)], opts: &Fina
             samples = crate::denoise::denoise_all(&samples);
         }
         let first = out.len();
+        let gate = crate::chunker::speech_gate(noise_floor(&samples));
         let spans = match vad.as_mut() {
             Some(vad) => speech_spans(vad, &samples)?,
             None => vec![(0.0, samples.len() as f64 / SAMPLE_RATE as f64)],
         };
         for (start, end) in spans {
             let audio = &samples[sample_range(start, end, samples.len())];
-            if audio.is_empty() || crate::vad::rms(audio) < crate::chunker::MIN_UTTERANCE_RMS {
+            if audio.is_empty() || crate::vad::rms(audio) < gate {
                 continue;
             }
             let segments = if vad.is_some() {
@@ -118,6 +119,16 @@ pub fn final_pass(engine: &mut Engine, tracks: &[(Source, PathBuf)], opts: &Fina
     }
     out.sort_by(|a, b| a.start_secs.total_cmp(&b.start_secs));
     Ok(out)
+}
+
+/// Background level of a track: the 20th percentile of 100 ms block RMS.
+fn noise_floor(samples: &[f32]) -> f32 {
+    let mut blocks: Vec<f32> = samples.chunks(crate::BLOCK_SAMPLES).map(crate::vad::rms).collect();
+    if blocks.is_empty() {
+        return 0.0;
+    }
+    blocks.sort_by(f32::total_cmp);
+    blocks[blocks.len() / 5]
 }
 
 fn load_vad(path: &Path) -> Result<WhisperVadContext> {
