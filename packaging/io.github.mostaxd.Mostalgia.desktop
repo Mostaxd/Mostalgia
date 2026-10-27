@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Mostalgia
+GenericName=Meeting Recorder
+GenericName[de]=Besprechungsrekorder
+Comment=Nostalgia, but for meetings you can actually recall in full
+Comment[de]=Nostalgie – aber für Besprechungen, an die du dich wirklich ganz erinnerst
+Exec=mostalgia-app
+Icon=io.github.mostaxd.Mostalgia
+Terminal=false
+Categories=AudioVideo;Audio;Office;
+Keywords=meeting;transcript;whisper;recorder;summary;
+StartupWMClass=io.github.mostaxd.Mostalgia

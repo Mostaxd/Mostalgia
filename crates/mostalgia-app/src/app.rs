@@ -496,7 +496,7 @@ impl MostalgiaApp {
         let ids = self.confirm_delete.clone()?;
         let theme = cx.theme().clone();
         let title = if ids.len() == 1 {
-            tr("Besprechung löschen?").to_string()
+            tr("Diese Besprechung endgültig vergessen?").to_string()
         } else {
             trf("{} Besprechungen löschen?", &[&ids.len()])
         };
@@ -683,7 +683,7 @@ impl MostalgiaApp {
                         .py_6()
                         .text_sm()
                         .text_color(theme.muted_foreground)
-                        .child(tr("Noch keine Besprechungen. Starte deine erste Aufnahme."))
+                        .child(tr("Noch keine Erinnerungen. Zeit, welche zu machen."))
                         .into_any_element(),
                 );
             }
@@ -806,8 +806,8 @@ impl Render for MostalgiaApp {
                         .gap_2()
                         .text_sm()
                         .font_semibold()
-                        .child(Icon::new(IconName::AudioLines).small().text_color(theme.primary))
-                        .child("mostalgia"),
+                        .child(img(crate::ICON_PATH).size(px(18.)).flex_none())
+                        .child("Mostalgia"),
                 ),
             )
             .children(call_prompt)

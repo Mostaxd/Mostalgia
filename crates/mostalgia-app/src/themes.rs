@@ -135,7 +135,7 @@ pub fn all() -> Vec<ThemeSpec> {
 /// The theme to use for a config value; "system" picks light or dark.
 pub fn resolve(id: &str, system_dark: bool) -> ThemeSpec {
     let themes = all();
-    let id = if id == SYSTEM { if system_dark { "dunkel" } else { "hell" } } else { id };
+    let id = if id == SYSTEM { if system_dark { "mostalgia-nacht" } else { "mostalgia" } } else { id };
     themes
         .iter()
         .find(|t| t.id == id)
@@ -252,5 +252,5 @@ pub fn apply(spec: &ThemeSpec, cx: &mut App) {
 pub fn active(cx: &App) -> ThemeSpec {
     cx.try_global::<ActiveSpec>()
         .map(|s| s.0.clone())
-        .unwrap_or_else(|| resolve("hell", false))
+        .unwrap_or_else(|| resolve("mostalgia", false))
 }

@@ -1,7 +1,7 @@
 //! English for the app shell: sidebar, ask view, tray, shared helpers.
 
 pub const EN: &[(&str, &str)] = &[
-    ("Besprechung löschen?", "Delete meeting?"),
+    ("Diese Besprechung endgültig vergessen?", "Forget this meeting for good?"),
     ("{} Besprechungen löschen?", "Delete {} meetings?"),
     ("Transkript, Zusammenfassung, Lesezeichen, Sprechernamen und Suchindex werden entfernt. Das lässt sich nicht rückgängig machen.", "The transcript, summary, bookmarks, speaker names and search index will be removed. This can't be undone."),
     ("Audiodateien ebenfalls löschen", "Also delete the audio files"),
@@ -11,7 +11,7 @@ pub const EN: &[(&str, &str)] = &[
     ("{} Besprechungen löschen…", "Delete {} meetings…"),
     ("Umbenennen", "Rename"),
     ("Exportieren: {}", "Export: {}"),
-    ("mostalgia beenden", "Quit mostalgia"),
+    ("Mostalgia beenden", "Quit Mostalgia"),
     // Sidebar and title bar
     ("Neue Aufnahme", "New recording"),
     ("Aufnahme", "Recording"),
@@ -25,7 +25,7 @@ pub const EN: &[(&str, &str)] = &[
     ("DIESER MONAT", "THIS MONTH"),
     ("FRÜHER", "EARLIER"),
     ("{} TREFFER", "{} RESULTS"),
-    ("Noch keine Besprechungen. Starte deine erste Aufnahme.", "No meetings yet. Start your first recording."),
+    ("Noch keine Erinnerungen. Zeit, welche zu machen.", "No memories yet. Let's make some."),
     ("Einstellungen", "Settings"),
     // Call banner
     ("Anruf in {} erkannt – aufnehmen?", "Call detected in {} – record it?"),

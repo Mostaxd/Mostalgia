@@ -134,7 +134,7 @@ pub const EN: &[(&str, &str)] = &[
     ("Noch nicht eingerichtet.", "Not set up yet."),
     ("Super + Shift + R einrichten", "Set up Super + Shift + R"),
     ("Ändern oder entfernen: GNOME-Einstellungen → Tastatur → Eigene Tastenkürzel.", "To change or remove it: GNOME Settings → Keyboard → Custom Shortcuts."),
-    ("mostalgia: Aufnahme starten/stoppen", "mostalgia: start/stop recording"),
+    ("Mostalgia: Aufnahme starten/stoppen", "Mostalgia: start/stop recording"),
     ("mostalgia (CLI) nicht neben der App gefunden: {}", "mostalgia (CLI) not found next to the app: {}"),
     ("gsettings fehlgeschlagen", "gsettings failed"),
     ("Tray-Symbol", "Tray icon"),

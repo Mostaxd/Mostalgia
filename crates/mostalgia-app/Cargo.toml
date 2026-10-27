@@ -1,6 +1,6 @@
 [package]
 name = "mostalgia-app"
-description = "mostalgia desktop app"
+description = "Mostalgia desktop app"
 version.workspace = true
 edition.workspace = true
 
@@ -23,6 +23,7 @@ schemars = "1.2.3"
 ksni = { version = "0.3.7", default-features = false, features = ["blocking", "async-io"] }
 # Desktop notifications with an "Aufnahme starten" button (same zbus as ksni/keyring).
 zbus = { version = "5.19", default-features = false, features = ["blocking-api", "async-io"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [features]
 default = []

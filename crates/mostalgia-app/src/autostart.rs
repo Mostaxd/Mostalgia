@@ -87,13 +87,13 @@ impl AutoStart {
                     }
                     if config.call_autostart == "automatisch" {
                         self.started_for = Some(app.clone());
-                        notify(tr("Aufnahme gestartet"), &trf("Anruf in {} erkannt – mostalgia nimmt auf.", &[&app]), None);
+                        notify(tr("Aufnahme gestartet"), &trf("Anruf in {} erkannt – Mostalgia nimmt auf.", &[&app]), None);
                         actions.push(Action::Start(app));
                     } else {
                         self.prompt = Some(app.clone());
                         notify(
                             &trf("Anruf in {}", &[&app]),
-                            tr("Soll mostalgia diese Besprechung aufnehmen?"),
+                            tr("Soll Mostalgia diese Besprechung aufnehmen?"),
                             Some((app, self.clicked_tx.clone())),
                         );
                     }
@@ -163,7 +163,7 @@ fn send_notification(summary: &str, body: &str, action: Option<(String, crossbea
     let hints: HashMap<&str, zbus::zvariant::Value> = HashMap::new();
     let id: u32 = proxy.call(
         "Notify",
-        &("mostalgia", 0u32, "audio-input-microphone", summary, body, actions, hints, -1i32),
+        &("Mostalgia", 0u32, "audio-input-microphone", summary, body, actions, hints, -1i32),
     )?;
     let (Some((app, tx)), Some(signals)) = (action, signals) else {
         return Ok(());

@@ -20,7 +20,7 @@ if [[ $existing != *"$PATH_KEY"* ]]; then
   fi
   gsettings set $SCHEMA custom-keybindings "$new"
 fi
-gsettings set $SCHEMA.custom-keybinding:$PATH_KEY name 'mostalgia: Aufnahme starten/stoppen'
+gsettings set $SCHEMA.custom-keybinding:$PATH_KEY name 'Mostalgia: Aufnahme starten/stoppen'
 gsettings set $SCHEMA.custom-keybinding:$PATH_KEY command "$CMD"
 gsettings set $SCHEMA.custom-keybinding:$PATH_KEY binding "$BINDING"
 echo "Shortcut $BINDING → $CMD"

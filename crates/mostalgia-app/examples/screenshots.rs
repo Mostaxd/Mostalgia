@@ -38,8 +38,8 @@ fn main() {
     let only: Option<Vec<String>> = std::env::var("THEMES").ok().map(|t| t.split(',').map(str::to_string).collect());
 
     // Every theme on the live-recording screen; the full tour in light and dark.
-    let mut runs: Vec<(String, bool)> = vec![("hell".into(), true), ("dunkel".into(), true)];
-    runs.extend(mostalgia_app::themes::all().into_iter().map(|t| (t.id, false)).filter(|(id, _)| id != "hell" && id != "dunkel"));
+    let mut runs: Vec<(String, bool)> = vec![("mostalgia".into(), true), ("mostalgia-nacht".into(), true)];
+    runs.extend(mostalgia_app::themes::all().into_iter().map(|t| (t.id, false)).filter(|(id, _)| id != "mostalgia" && id != "mostalgia-nacht"));
     for (theme, full) in runs {
         if only.as_ref().is_some_and(|o| !o.contains(&theme)) {
             continue;

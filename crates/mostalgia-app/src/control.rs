@@ -41,7 +41,7 @@ pub fn listen(tx: Sender<Command>) -> std::io::Result<()> {
     if path.exists() {
         // A live socket means another instance runs; a dead one is stale.
         if UnixStream::connect(&path).is_ok() {
-            return Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, "mostalgia is already running"));
+            return Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, "Mostalgia is already running"));
         }
         std::fs::remove_file(&path)?;
     }
@@ -80,16 +80,37 @@ impl ksni::Tray for Tray {
     }
 
     fn title(&self) -> String {
-        "mostalgia".into()
+        "Mostalgia".into()
     }
 
     fn icon_name(&self) -> String {
-        if self.recording { "media-record".into() } else { "audio-input-microphone".into() }
+        // While recording, the theme's red record symbol; otherwise the
+        // Mostalgia icon from `icon_pixmap`.
+        if self.recording { "media-record".into() } else { String::new() }
+    }
+
+    fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+        if self.recording {
+            return Vec::new();
+        }
+        static ICON: std::sync::OnceLock<Vec<ksni::Icon>> = std::sync::OnceLock::new();
+        ICON.get_or_init(|| {
+            let Ok(img) = image::load_from_memory(crate::ICON_PNG) else { return Vec::new() };
+            let rgba = img.to_rgba8();
+            // StatusNotifierItem wants ARGB32 in network byte order.
+            let data = rgba.pixels().flat_map(|p| [p[3], p[0], p[1], p[2]]).collect();
+            vec![ksni::Icon {
+                width: rgba.width() as i32,
+                height: rgba.height() as i32,
+                data,
+            }]
+        })
+        .clone()
     }
 
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip {
-            title: if self.recording { format!("mostalgia — {}", tr("Aufnahme läuft")) } else { "mostalgia".into() },
+            title: if self.recording { format!("Mostalgia — {}", tr("Aufnahme läuft")) } else { "Mostalgia".into() },
             ..Default::default()
         }
     }
@@ -119,7 +140,7 @@ impl ksni::Tray for Tray {
             },
             item(tr("Fenster anzeigen"), "window-new", Command::Show),
             ksni::MenuItem::Separator,
-            item(tr("mostalgia beenden"), "application-exit", Command::Quit),
+            item(tr("Mostalgia beenden"), "application-exit", Command::Quit),
         ]
     }
 }

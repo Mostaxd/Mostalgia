@@ -213,7 +213,7 @@ impl Store {
         let version: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
         anyhow::ensure!(
             version <= SCHEMA_VERSION,
-            "database {} was created by a newer mostalgia",
+            "database {} was created by a newer Mostalgia",
             path.display()
         );
         if version == 0 {

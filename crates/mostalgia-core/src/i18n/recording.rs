@@ -1,7 +1,7 @@
 //! English for the recording screen and call auto-start (German original → English).
 
 pub const EN: &[(&str, &str)] = &[
-    ("Dein Mikrofon ist seit über 20 s stumm oder sehr leise – prüfe das Gerät, oder ob die Anruf-App das Mikrofon stummgeschaltet bzw. leiser gestellt hat.", "Your microphone has been silent or very quiet for over 20 s – check the device, or whether the call app muted it or turned it down."),
+    ("Dein Mikrofon ist ganz still. Stummgeschaltet – oder nur nachdenklich? Prüfe das Gerät oder ob die Anruf-App es leiser gestellt hat.", "Your mic has gone quiet. Muted — or just thinking? Check the device, or whether the call app turned it down."),
     ("Aus – deine Stimme wird nicht aufgenommen (bei erkannten Anrufen immer an)", "Off – your voice is not recorded (always on for detected calls)"),
     // Setup
     ("Neue Aufnahme", "New recording"),
@@ -18,7 +18,7 @@ pub const EN: &[(&str, &str)] = &[
     ("Whisper-Modell nicht gefunden: {} — scripts/download-model.sh ausführen", "Whisper model not found: {} — run scripts/download-model.sh"),
     ("Modell nicht geladen", "Model not loaded"),
     // Busy
-    ("Modell wird geladen …", "Loading the model …"),
+    ("Erinnerungen werden geladen …", "Loading memories …"),
     ("Transkript wird fertiggestellt …", "Finishing the transcript …"),
     // Live
     ("Aufnahme läuft", "Recording"),
@@ -32,13 +32,13 @@ pub const EN: &[(&str, &str)] = &[
     ("{} Zeilen", "{} lines"),
     ("Latenz {} ms", "Latency {} ms"),
     ("Zum Ende", "Jump to end"),
-    ("Sobald jemand spricht, erscheint hier der Text.", "As soon as someone speaks, the text appears here."),
+    ("Bereit, wenn ihr es seid. Der erste Satz landet hier.", "Ready when you are. The first word lands here."),
     ("Besprechung {}", "Meeting {}"),
     // Call auto-start
     ("Aufnahme gestartet", "Recording started"),
-    ("Anruf in {} erkannt – mostalgia nimmt auf.", "Call in {} detected – mostalgia is recording."),
+    ("Anruf in {} erkannt – Mostalgia nimmt auf.", "Call in {} detected – Mostalgia is recording."),
     ("Anruf in {}", "Call in {}"),
-    ("Soll mostalgia diese Besprechung aufnehmen?", "Should mostalgia record this meeting?"),
+    ("Soll Mostalgia diese Besprechung aufnehmen?", "Should Mostalgia record this meeting?"),
     ("Aufnahme beendet", "Recording stopped"),
     ("Der Anruf in {} ist vorbei.", "The call in {} has ended."),
     ("Anruf in {} erkannt – aufnehmen?", "Call in {} detected – record it?"),

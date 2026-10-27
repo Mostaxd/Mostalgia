@@ -748,7 +748,7 @@ impl RecordingView {
                         .bg(cx.theme().warning.opacity(0.15))
                         .text_sm()
                         .child(Icon::new(IconName::MicOff).small().text_color(cx.theme().warning))
-                        .child(tr("Dein Mikrofon ist seit über 20 s stumm oder sehr leise – prüfe das Gerät, oder ob die Anruf-App das Mikrofon stummgeschaltet bzw. leiser gestellt hat.")),
+                        .child(tr("Dein Mikrofon ist ganz still. Stummgeschaltet – oder nur nachdenklich? Prüfe das Gerät oder ob die Anruf-App es leiser gestellt hat.")),
                 )
             })
             .child(
@@ -783,7 +783,7 @@ impl RecordingView {
                                     } else {
                                         Icon::new(IconName::AudioLines).large().into_any_element()
                                     })
-                                    .child(tr("Sobald jemand spricht, erscheint hier der Text.")),
+                                    .child(tr("Bereit, wenn ihr es seid. Der erste Satz landet hier.")),
                             )
                         }),
                 ),
@@ -821,7 +821,7 @@ impl Render for RecordingView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content = match &self.phase {
             Phase::Setup => self.render_setup(cx).into_any_element(),
-            Phase::Loading => self.render_busy(tr("Modell wird geladen …"), false, cx).into_any_element(),
+            Phase::Loading => self.render_busy(tr("Erinnerungen werden geladen …"), false, cx).into_any_element(),
             Phase::Finalizing { what } => self.render_busy(what, true, cx).into_any_element(),
             Phase::Recording(_) => self.render_live(cx).into_any_element(),
         };

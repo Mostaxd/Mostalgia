@@ -4686,66 +4686,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mostalgia"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "crossbeam-channel",
- "ctrlc",
- "hound",
- "mostalgia-core",
- "rpassword",
-]
-
-[[package]]
-name = "mostalgia-app"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "chrono",
- "crossbeam-channel",
- "gpui-kit",
- "gpui-pre",
- "gpui-pre-platform",
- "ksni",
- "mostalgia-core",
- "schemars",
- "serde",
- "serde_json",
- "zbus",
-]
-
-[[package]]
-name = "mostalgia-core"
-version = "0.2.0"
-dependencies = [
- "anyhow",
- "candle-core",
- "candle-nn",
- "candle-transformers",
- "chrono",
- "crossbeam-channel",
- "dirs 7.0.0",
- "docx-rs",
- "hound",
- "keyring",
- "libpulse-binding",
- "libpulse-simple-binding",
- "nnnoiseless",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "sherpa-rs",
- "sherpa-rs-sys",
- "tokenizers 0.23.2",
- "whisper-rs",
- "whisper-rs-sys",
-]
-
-[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4859,6 +4799,67 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "mostalgia"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "crossbeam-channel",
+ "ctrlc",
+ "hound",
+ "mostalgia-core",
+ "rpassword",
+]
+
+[[package]]
+name = "mostalgia-app"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "crossbeam-channel",
+ "gpui-kit",
+ "gpui-pre",
+ "gpui-pre-platform",
+ "image",
+ "ksni",
+ "mostalgia-core",
+ "schemars",
+ "serde",
+ "serde_json",
+ "zbus",
+]
+
+[[package]]
+name = "mostalgia-core"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "candle-core",
+ "candle-nn",
+ "candle-transformers",
+ "chrono",
+ "crossbeam-channel",
+ "dirs 7.0.0",
+ "docx-rs",
+ "hound",
+ "keyring",
+ "libpulse-binding",
+ "libpulse-simple-binding",
+ "nnnoiseless",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sherpa-rs",
+ "sherpa-rs-sys",
+ "tokenizers 0.23.2",
+ "whisper-rs",
+ "whisper-rs-sys",
 ]
 
 [[package]]

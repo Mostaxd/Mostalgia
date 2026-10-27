@@ -48,8 +48,16 @@ gpui_kit::assets::icon_assets!(pub ExtraIcons, [
 /// The default GPUI Kit assets plus the extra Lucide icons the app uses.
 pub struct AppAssets;
 
+/// The app icon (64 px PNG), for the title bar and About card.
+pub const ICON_PNG: &[u8] = include_bytes!("../../../assets/brand/icons/hicolor/64x64/apps/io.github.mostaxd.Mostalgia.png");
+/// Asset path of [`ICON_PNG`] (served by [`AppAssets`]).
+pub const ICON_PATH: &str = "brand/icon.png";
+
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if path == ICON_PATH {
+            return Ok(Some(Cow::Borrowed(ICON_PNG)));
+        }
         // The default set reports icons it doesn't bundle as an error.
         match gpui_kit::assets::Assets.load(path) {
             Ok(Some(data)) => Ok(Some(data)),

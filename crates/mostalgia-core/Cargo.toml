@@ -1,6 +1,6 @@
 [package]
 name = "mostalgia-core"
-description = "Capture, live + final transcription, storage and summaries for mostalgia"
+description = "Capture, live + final transcription, storage and summaries for Mostalgia"
 version.workspace = true
 edition.workspace = true
 

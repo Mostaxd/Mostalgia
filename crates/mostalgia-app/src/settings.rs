@@ -175,7 +175,7 @@ fn install_shortcut() -> anyhow::Result<String> {
     let schema = format!("{MEDIA_KEYS}.custom-keybinding:{SHORTCUT_PATH}");
     let binding = "<Super><Shift>r";
     for (key, value) in [
-        ("name", tr("mostalgia: Aufnahme starten/stoppen").to_string()),
+        ("name", tr("Mostalgia: Aufnahme starten/stoppen").to_string()),
         ("command", format!("{} toggle", cli.display())),
         ("binding", binding.to_string()),
     ] {
@@ -602,8 +602,8 @@ impl SettingsView {
                 }))
         };
 
-        let light = themes::resolve("hell", false);
-        let dark = themes::resolve("dunkel", true);
+        let light = themes::resolve("mostalgia", false);
+        let dark = themes::resolve("mostalgia-nacht", true);
         let mut tiles: Vec<AnyElement> = vec![
             tile(
                 themes::SYSTEM.into(),
@@ -1134,7 +1134,7 @@ impl Render for SettingsView {
         };
         let info = ui::card(cx)
             .child(title("Info"))
-            .child(div().text_sm().child(format!("mostalgia {}", env!("CARGO_PKG_VERSION"))))
+            .child(div().text_sm().child(format!("Mostalgia {}", env!("CARGO_PKG_VERSION"))))
             .child(status_row(model.exists(), format!("Whisper: {}", model.display())))
             .child(status_row(self.config.vad_model_path().exists(), "Silero VAD".into()))
             .child(status_row(diarize_ok, tr("Sprechertrennung (sherpa-onnx)").into()))
