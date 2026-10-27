@@ -103,7 +103,7 @@ impl MeetingView {
     pub fn auto_summarize(&mut self, cx: &mut Context<Self>) {
         let config = Config::load();
         let ready = self.meeting.as_ref().is_some_and(|m| m.summary.is_none() && !m.segments.is_empty());
-        if config.auto_summary && ready && matches!(summary::api_key(config.summary_provider), Ok(Some(_))) {
+        if config.auto_summary && ready && config.summary_connection().is_ok_and(|c| c.is_configured()) {
             self.summarize(cx);
         }
     }
@@ -112,14 +112,8 @@ impl MeetingView {
         if self.summarizing {
             return;
         }
-        let req = Config::load().summary_request();
-        let key = match summary::api_key(req.provider) {
-            Ok(Some(key)) => key,
-            Ok(None) => {
-                self.error = Some(trf("Kein {}-API-Schlüssel — in den Einstellungen hinterlegen.", &[&req.provider.name()]).into());
-                cx.notify();
-                return;
-            }
+        let req = match Config::load().summary_request().and_then(|req| req.connection.require_key().map(|_| req)) {
+            Ok(req) => req,
             Err(e) => {
                 self.error = Some(format!("{e:#}").into());
                 cx.notify();
@@ -134,8 +128,8 @@ impl MeetingView {
         let task = cx.background_spawn(async move {
             let store = Store::open(&paths::database())?;
             let meeting = store.get(id)?.ok_or_else(|| anyhow::anyhow!(tr("Besprechung nicht gefunden")))?;
-            let s = summary::summarize(&req, &key, &meeting)?;
-            store.save_summary(id, s.provider.id(), &s.model, s.effort.as_deref(), &s.markdown)?;
+            let s = summary::summarize(&req, &meeting)?;
+            store.save_summary(id, &s.provider, &s.model, s.effort.as_deref(), &s.markdown)?;
             if let Some(title) = &s.title {
                 store.set_title(id, title)?;
             }
@@ -453,7 +447,7 @@ impl MeetingView {
                         .child(trf(
                             "Erstellt von {} · {}{} am {}",
                             &[
-                                &summary::Provider::parse(&s.provider).map_or(s.provider.as_str(), |p| p.name()),
+                                &summary::provider_display(&s.provider),
                                 &s.model,
                                 &s.effort.as_deref().map(|e| trf(" · Denktiefe {}", &[&e])).unwrap_or_default(),
                                 &i18n::date_time(&s.created_at),

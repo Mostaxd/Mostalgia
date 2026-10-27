@@ -13,7 +13,6 @@ use gpui_kit::*;
 use mostalgia_core::ask::{self, AskEvent, Piece};
 use mostalgia_core::config::Config;
 use mostalgia_core::i18n::{self, tr, trf};
-use mostalgia_core::summary;
 
 use crate::ui;
 
@@ -260,8 +259,18 @@ impl Render for AskView {
         }
         let theme = cx.theme().clone();
         let config = Config::load();
-        let provider = config.summary_provider;
-        let has_key = matches!(summary::api_key(provider), Ok(Some(_)));
+        // Which connection and model answer, shown in the header; a missing
+        // or unconfigured connection is shown as an error, never swapped.
+        let ask = config.ask_request();
+        let (provider_name, model, ask_problem) = match &ask {
+            Ok(req) if req.connection.is_configured() => (req.connection.name.clone(), req.model.clone(), None),
+            Ok(req) => (
+                req.connection.name.clone(),
+                req.model.clone(),
+                Some(trf("{} ist nicht eingerichtet — in Einstellungen → KI hinterlegen.", &[&req.connection.name])),
+            ),
+            Err(e) => (String::new(), String::new(), Some(format!("{e:#}"))),
+        };
 
         let mut body: Vec<AnyElement> = Vec::new();
         if self.turns.is_empty() {
@@ -353,7 +362,6 @@ impl Render for AskView {
             );
         }
 
-        let model = config.summary_model.clone();
         v_flex()
             .size_full()
             .child(
@@ -364,7 +372,7 @@ impl Render for AskView {
                     .border_b_1()
                     .border_color(theme.border)
                     .child(div().text_xl().font_semibold().child(tr("Fragen")))
-                    .child(div().text_xs().text_color(theme.muted_foreground).child(format!("{} · {model}", provider.name())))
+                    .child(div().text_xs().text_color(theme.muted_foreground).child(format!("{provider_name} · {model}")))
                     .child(div().flex_1())
                     .when(!self.turns.is_empty(), |el| {
                         el.child(
@@ -412,12 +420,7 @@ impl Render for AskView {
                                     })),
                             ),
                     )
-                    .when(!has_key, |el| {
-                        el.child(div().text_xs().text_color(theme.warning).child(trf(
-                            "Kein {}-API-Schlüssel — in Einstellungen → KI & Zusammenfassung hinterlegen.",
-                            &[&provider.name()],
-                        )))
-                    }),
+                    .when_some(ask_problem, |el, problem| el.child(div().text_xs().text_color(theme.warning).child(problem))),
             )
     }
 }

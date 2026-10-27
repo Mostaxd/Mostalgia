@@ -14,16 +14,13 @@ use crate::chunker::format_ts;
 use crate::config::Config;
 use crate::i18n::{tr, trf};
 use crate::store::Store;
-use crate::summary::{self, Provider};
+use crate::connections::{Api, api_error, unreachable};
+use crate::llm::{ANTHROPIC_VERSION, CLAUDE_FALLBACK_MODELS};
 use crate::paths;
+use crate::summary::SummaryRequest;
 
-const ANTHROPIC_URL: &str = "https://api.anthropic.com/v1/messages";
-const ANTHROPIC_VERSION: &str = "2026-10-21";
-const DEEPSEEK_URL: &str = "https://api.deepseek.com/chat/completions";
 /// Tool rounds before the model must answer.
 const MAX_ROUNDS: usize = 6;
-/// Claude models that accept the server-side refusal fallback.
-const FALLBACK_MODELS: [&str; 4] = ["claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"];
 
 /// Progress of an answer.
 #[derive(Clone, Debug)]
@@ -198,14 +195,13 @@ fn run_tool(name: &str, input: &Value) -> (String, String) {
 }
 
 /// Answers `question`, with earlier (question, answer) turns as context,
-/// using the summary provider/model from the config. Streams progress to
+/// using the "ask" connection/model from the config. Streams progress to
 /// `events`; always ends with `Done` or `Error`.
 pub fn ask(question: &str, history: &[(String, String)], events: &Sender<AskEvent>) {
-    let config = Config::load();
-    let result = match config.summary_provider {
-        Provider::Claude => ask_claude(question, history, &config, events),
-        Provider::DeepSeek => ask_deepseek(question, history, &config, events),
-    };
+    let result = Config::load().ask_request().and_then(|req| match req.connection.api {
+        Api::Anthropic => ask_claude(question, history, &req, events),
+        Api::OpenAi => ask_openai(question, history, &req, events),
+    });
     match result {
         Ok(answer) => {
             let citations = parse_answer(&answer)
@@ -220,21 +216,17 @@ pub fn ask(question: &str, history: &[(String, String)], events: &Sender<AskEven
     }
 }
 
-fn key(provider: Provider) -> Result<String> {
-    summary::api_key(provider)?
-        .with_context(|| format!("Kein {}-API-Schlüssel — in den Einstellungen hinterlegen", provider.name()))
-}
-
-fn ask_claude(question: &str, history: &[(String, String)], config: &Config, events: &Sender<AskEvent>) -> Result<String> {
-    let key = key(Provider::Claude)?;
-    let model = config.summary_model.clone();
+fn ask_claude(question: &str, history: &[(String, String)], req: &SummaryRequest, events: &Sender<AskEvent>) -> Result<String> {
+    let conn = &req.connection;
+    let key = conn.require_key()?.unwrap_or_default();
+    let model = req.model.clone();
     let mut messages: Vec<Value> = Vec::new();
     for (q, a) in history {
         messages.push(json!({"role": "user", "content": q}));
         messages.push(json!({"role": "assistant", "content": a}));
     }
     messages.push(json!({"role": "user", "content": question}));
-    let mut effort = Some(config.ask_effort.clone()).filter(|e| !e.is_empty());
+    let mut effort = req.effort.clone();
     let client = reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(900)).build()?;
 
     for round in 0..MAX_ROUNDS {
@@ -251,24 +243,23 @@ fn ask_claude(question: &str, history: &[(String, String)], config: &Config, eve
             body["output_config"] = json!({ "effort": e });
         }
         let mut request = client
-            .post(ANTHROPIC_URL)
+            .post(format!("{}/messages", conn.base()))
             .header("x-api-key", &key)
             .header("anthropic-version", ANTHROPIC_VERSION);
-        if FALLBACK_MODELS.contains(&model.as_str()) {
+        if CLAUDE_FALLBACK_MODELS.contains(&model.as_str()) {
             body["fallbacks"] = json!("default");
             request = request.header("anthropic-beta", "server-side-fallback-2026-07-01");
         }
-        let resp = request.json(&body).send().context(tr("Claude-API nicht erreichbar"))?;
+        let resp = request.json(&body).send().map_err(|e| unreachable(conn, e))?;
         if !resp.status().is_success() {
             let status = resp.status();
-            let v: Value = resp.json().unwrap_or_default();
-            let msg = v["error"]["message"].as_str().unwrap_or("unbekannter Fehler").to_string();
+            let body = resp.text().unwrap_or_default();
             // Older models have no effort control; retry the round without it.
-            if effort.is_some() && msg.contains("effort") {
+            if effort.is_some() && body.contains("effort") {
                 effort = None;
                 continue;
             }
-            bail!("{}", trf("Claude-API-Fehler ({}): {}", &[&status, &msg]));
+            return Err(api_error(conn, status, &body));
         }
 
         // Rebuild the assistant's content blocks from the stream so they can
@@ -318,7 +309,7 @@ fn ask_claude(question: &str, history: &[(String, String)], config: &Config, eve
                         stop_reason = r.to_string();
                     }
                 }
-                Some("error") => bail!("{}", trf("Claude-API-Fehler: {}", &[&ev["error"]["message"].as_str().unwrap_or(tr("unbekannt"))])),
+                Some("error") => bail!("{}: {}", conn.name, ev["error"]["message"].as_str().unwrap_or(tr("unbekannt"))),
                 _ => {}
             }
         }
@@ -338,7 +329,7 @@ fn ask_claude(question: &str, history: &[(String, String)], config: &Config, eve
                     messages.push(json!({"role": "user", "content": "Bitte antworte jetzt mit dem, was du gefunden hast."}));
                 }
             }
-            "refusal" => bail!("{}", tr("Claude hat die Frage abgelehnt")),
+            "refusal" => bail!("{}", trf("{} hat die Frage abgelehnt", &[&conn.name])),
             _ => {
                 let answer: String = blocks
                     .iter()
@@ -353,33 +344,65 @@ fn ask_claude(question: &str, history: &[(String, String)], config: &Config, eve
     bail!("{}", trf("keine Antwort nach {} Suchschritten", &[&MAX_ROUNDS]))
 }
 
-/// DeepSeek via its OpenAI-compatible tool calling (not streamed).
-fn ask_deepseek(question: &str, history: &[(String, String)], config: &Config, events: &Sender<AskEvent>) -> Result<String> {
-    let key = key(Provider::DeepSeek)?;
-    let tools: Vec<Value> = tools_claude()
+fn tools_openai() -> Vec<Value> {
+    tools_claude()
         .as_array()
-        .unwrap()
+        .expect("tool list")
         .iter()
         .map(|t| {
             json!({"type": "function", "function": {
                 "name": t["name"], "description": t["description"], "parameters": t["input_schema"]}})
         })
-        .collect();
+        .collect()
+}
+
+/// Whether an error says the model or server can't do tool calling
+/// (Ollama: "does not support tools", vLLM: "auto tool choice requires …").
+fn no_tool_support(body: &str) -> bool {
+    let b = body.to_ascii_lowercase();
+    b.contains("tool") && ["support", "not enabled", "requires", "invalid", "unrecognized", "unknown", "not allowed"].iter().any(|w| b.contains(w))
+}
+
+/// OpenAI-compatible tool calling (OpenAI, DeepSeek, Ollama, LiteLLM …).
+/// A model without tool support gets the search results up front instead.
+fn ask_openai(question: &str, history: &[(String, String)], req: &SummaryRequest, events: &Sender<AskEvent>) -> Result<String> {
+    let conn = &req.connection;
+    let key = conn.require_key()?;
     let mut messages = vec![json!({"role": "system", "content": system_prompt()})];
     for (q, a) in history {
         messages.push(json!({"role": "user", "content": q}));
         messages.push(json!({"role": "assistant", "content": a}));
     }
     messages.push(json!({"role": "user", "content": question}));
-    let client = reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(900)).build()?;
-    for _ in 0..MAX_ROUNDS {
-        let body = json!({"model": config.summary_model, "messages": messages, "tools": tools, "stream": false});
-        let resp = client.post(DEEPSEEK_URL).bearer_auth(&key).json(&body).send().context(tr("DeepSeek-API nicht erreichbar"))?;
-        let status = resp.status();
-        let v: Value = resp.json()?;
-        if !status.is_success() {
-            bail!("{}", trf("DeepSeek-API-Fehler ({}): {}", &[&status, &v["error"]["message"].as_str().unwrap_or(tr("unbekannt"))]));
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(900))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let mut effort = req.effort.clone().filter(|_| !crate::llm::openai_efforts(conn, &req.model).is_empty());
+    let mut round = 0;
+    while round < MAX_ROUNDS {
+        let mut body = json!({"model": req.model, "messages": messages, "tools": tools_openai(), "stream": false});
+        if let Some(e) = &effort {
+            body["reasoning_effort"] = json!(match e.as_str() { "low" => "low", "medium" => "medium", _ => "high" });
         }
+        let mut request = client.post(format!("{}/chat/completions", conn.base())).json(&body);
+        if let Some(key) = &key {
+            request = request.bearer_auth(key);
+        }
+        let resp = request.send().map_err(|e| unreachable(conn, e))?;
+        let status = resp.status();
+        let text = resp.text().unwrap_or_default();
+        if !status.is_success() {
+            if effort.is_some() && text.contains("reasoning_effort") {
+                effort = None;
+                continue;
+            }
+            if round == 0 && no_tool_support(&text) {
+                return retrieve_then_answer(question, history, req, events);
+            }
+            return Err(api_error(conn, status, &text));
+        }
+        let v: Value = serde_json::from_str(&text).with_context(|| trf("{}: Antwort konnte nicht gelesen werden", &[&conn.name]))?;
         let msg = v["choices"][0]["message"].clone();
         let calls = msg["tool_calls"].as_array().cloned().unwrap_or_default();
         if calls.is_empty() {
@@ -399,8 +422,33 @@ fn ask_deepseek(question: &str, history: &[(String, String)], config: &Config, e
             let _ = events.send(AskEvent::Status(status));
             messages.push(json!({"role": "tool", "tool_call_id": call["id"], "content": text}));
         }
+        round += 1;
+        if round + 1 == MAX_ROUNDS {
+            messages.push(json!({"role": "user", "content": "Bitte antworte jetzt mit dem, was du gefunden hast."}));
+        }
     }
     bail!("{}", trf("keine Antwort nach {} Suchschritten", &[&MAX_ROUNDS]))
+}
+
+/// For models without tool calling: search the library for the question
+/// first and hand the hits to the model with the question.
+fn retrieve_then_answer(question: &str, history: &[(String, String)], req: &SummaryRequest, events: &Sender<AskEvent>) -> Result<String> {
+    let _ = events.send(AskEvent::Status(trf("{} kann keine Werkzeuge nutzen – suche vorab", &[&req.model])));
+    let (hits, status) = run_tool("search_meetings", &json!({ "query": question }));
+    let _ = events.send(AskEvent::Status(status));
+    let mut user = String::new();
+    for (q, a) in history {
+        user.push_str(&format!("Frühere Frage: {q}\nFrühere Antwort: {a}\n\n"));
+    }
+    user.push_str(&format!(
+        "Suchergebnisse aus den Besprechungen (JSON):\n{hits}\n\nFrage: {question}\n\n\
+Antworte nur auf Grundlage dieser Ergebnisse und belege jede Aussage mit [[m:<meeting_id>@<start_secs>]]."
+    ));
+    let system = system_prompt().replace("Nutze die Werkzeuge", "Die Suchergebnisse stehen in der Nachricht; nutze sie");
+    let done = crate::llm::complete(&req.connection, &req.model, req.effort.as_deref(), &system, &user)?;
+    let answer = done.text.trim().to_string();
+    let _ = events.send(AskEvent::TextDelta(answer.clone()));
+    Ok(answer)
 }
 
 /// Splits an answer into text and citations ([[m:ID@SECS]] markers),

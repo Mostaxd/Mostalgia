@@ -318,6 +318,7 @@ impl RecordingView {
                 }
                 Event::Chunk { millis, .. } => live.last_latency_ms = Some(millis),
                 Event::Warning(w) => eprintln!("[mostalgia] {w}"),
+                Event::EngineError { engine, message } => eprintln!("[mostalgia] {engine}: {message}"),
             }
         }
         // Meters: rise quickly but not instantly, fall slowly — smooth at 30 Hz.

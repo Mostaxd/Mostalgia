@@ -171,3 +171,88 @@ fn sample_range(start: f64, end: f64, len: usize) -> std::ops::Range<usize> {
     let (a, b) = (at(start), at(end));
     a..b.max(a)
 }
+
+/// A speech-to-text engine for `choice`: local Whisper from the config's
+/// model, or the chosen cloud model. Errors name the connection.
+pub fn engine_for(config: &crate::config::Config, choice: &crate::config::SttChoice) -> Result<Engine> {
+    if choice.is_local() {
+        let model = config.whisper_model_path();
+        anyhow::ensure!(
+            model.exists(),
+            "{}",
+            crate::i18n::trf("Whisper-Modell nicht gefunden: {} — scripts/download-model.sh ausführen", &[&model.display()])
+        );
+        return Engine::load(&model, &config.language);
+    }
+    let conn = config.connection(&choice.connection).with_context(|| {
+        crate::i18n::trf("Transkriptions-Verbindung \"{}\" gibt es nicht mehr — in den Einstellungen wählen", &[&choice.connection])
+    })?;
+    Engine::cloud(conn, &choice.model, &config.language)
+}
+
+/// What [`save_recording`] stored.
+pub struct Saved {
+    pub meeting_id: i64,
+    /// Set when the final pass failed: the meeting holds the live
+    /// transcript instead, and this says why.
+    pub error: Option<String>,
+}
+
+/// Runs the final pass over a finished recording and saves it to the
+/// library. If the final pass fails, nothing is thrown away: the meeting is
+/// saved with the live transcript, marked with the engine's error, so it
+/// can be transcribed again later with an engine the user picks.
+pub fn save_recording(
+    rec: &crate::recorder::Recording,
+    engine: &mut Engine,
+    opts: &FinalPassOptions,
+    language: &str,
+    bookmarks: &[crate::store::Bookmark],
+) -> Result<Saved> {
+    use crate::i18n::trf;
+    let (segments, engine_label, error) = match final_pass(engine, &rec.tracks, opts) {
+        Ok(segments) => (segments, engine.label(), None),
+        Err(e) => (
+            rec.live_lines.clone(),
+            trf("Live-Transkript ({})", &[&engine.label()]),
+            Some(trf("Feinschliff mit {} fehlgeschlagen: {}", &[&engine.label(), &format!("{e:#}")])),
+        ),
+    };
+    let mut store = crate::store::Store::open(&crate::paths::database())?;
+    let title = trf("Besprechung {}", &[&crate::i18n::date_time(&rec.started_at)]);
+    let id = store.insert_meeting(
+        &crate::store::NewMeeting {
+            title: &title,
+            started_at: rec.started_at,
+            duration_secs: rec.duration_secs,
+            language,
+            dir: &rec.dir,
+        },
+        &segments,
+    )?;
+    store.set_transcript_info(id, &engine_label, error.as_deref())?;
+    store.add_bookmarks(id, bookmarks)?;
+    if let Err(e) = crate::ask::index_meeting(id) {
+        eprintln!("[mostalgia] search index: {e:#}");
+    }
+    Ok(Saved { meeting_id: id, error })
+}
+
+/// Transcribes a saved meeting again from its WAV tracks with `engine`,
+/// replacing its transcript (speaker renames are reset) and clearing a
+/// previous engine error. Returns the number of lines.
+pub fn retranscribe(meeting_id: i64, engine: &mut Engine, opts: &FinalPassOptions) -> Result<usize> {
+    use crate::i18n::tr;
+    let mut store = crate::store::Store::open(&crate::paths::database())?;
+    let meeting = store.get(meeting_id)?.context(tr("Besprechung nicht gefunden"))?;
+    let tracks = meeting.tracks();
+    anyhow::ensure!(!tracks.is_empty(), "{}", tr("Die Audiodateien dieser Besprechung gibt es nicht mehr"));
+    let segments = final_pass(engine, &tracks, opts)?;
+    store.replace_segments(meeting_id, &segments)?;
+    store.set_transcript_info(meeting_id, &engine.label(), None)?;
+    drop(store);
+    if let Err(e) = crate::ask::index_meeting(meeting_id) {
+        eprintln!("[mostalgia] search index: {e:#}");
+    }
+    Ok(segments.len())
+}

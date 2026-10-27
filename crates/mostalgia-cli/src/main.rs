@@ -7,7 +7,9 @@ use clap::{Parser, Subcommand, ValueEnum};
 use mostalgia_core::chunker::format_ts;
 use mostalgia_core::i18n::{self, tr, trf};
 use mostalgia_core::recorder::{Event, RecordConfig, Recorder, Recording};
-use mostalgia_core::store::{NewMeeting, Store};
+use mostalgia_core::config::{Config, SttChoice};
+use mostalgia_core::connections::{self, Connection};
+use mostalgia_core::store::Store;
 use mostalgia_core::transcribe::Engine;
 use mostalgia_core::{Source, audio, finalize, paths, summary};
 
@@ -38,6 +40,15 @@ struct ModelArgs {
     /// transcribing; the recorded WAV stays untouched
     #[arg(long)]
     denoise: bool,
+    /// Speech-to-text engine: "local" (Whisper on this machine) or
+    /// CONNECTION/MODEL, e.g. openai/gpt-4o-transcribe or groq/whisper-large-v3-turbo
+    /// [default: from the app's settings]. With `start` this is the live engine.
+    #[arg(long)]
+    engine: Option<String>,
+    /// Engine for the final pass after `start` (same format as --engine)
+    /// [default: from the app's settings]
+    #[arg(long)]
+    final_engine: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -49,44 +60,69 @@ struct SummaryArgs {
     choice: SummaryChoice,
 }
 
-/// Which provider/model/thinking level summarizes; defaults from config.json.
+/// Which connection/model/thinking level summarizes; defaults from config.json.
 #[derive(clap::Args)]
 struct SummaryChoice {
-    /// Summary provider: claude or deepseek
+    /// AI connection id, e.g. claude, openai, deepseek, ollama (see `mostalgia connections`)
     #[arg(long)]
     provider: Option<String>,
-    /// Model id, e.g. claude-opus-5-5, claude-sonnet-5-5, deepseek-chat
+    /// Model id, e.g. claude-opus-5-5, gpt-5, deepseek-chat, llama3.1
     #[arg(long)]
     summary_model: Option<String>,
-    /// Thinking level: low, medium, high, xhigh or max (Claude only)
+    /// Thinking level: low, medium, high, xhigh or max (where the model supports it)
     #[arg(long)]
     effort: Option<String>,
 }
 
 impl SummaryChoice {
     fn request(&self) -> Result<summary::SummaryRequest> {
-        let config = mostalgia_core::config::Config::load();
-        let mut req = config.summary_request();
-        if let Some(p) = &self.provider {
-            let provider = summary::Provider::parse(p).with_context(|| trf("Unbekannter Anbieter {} (claude, deepseek)", &[&format!("{p:?}")]))?;
-            if provider != req.provider {
-                req.provider = provider;
-                req.model = provider.default_model().into();
+        let config = Config::load();
+        let mut req = match &self.provider {
+            Some(id) => {
+                let connection = connection(&config, id)?;
+                let model = if config.summary_provider == connection.id { config.summary_model.clone() } else { connection.preset().default_model.to_string() };
+                summary::SummaryRequest { connection, model, effort: None }
             }
-        }
+            None => config.summary_request()?,
+        };
         if let Some(m) = &self.summary_model {
             req.model = m.clone();
         }
-        if req.provider == summary::Provider::DeepSeek {
-            req.effort = None;
-        } else if let Some(e) = &self.effort {
-            anyhow::ensure!(summary::EFFORTS.contains(&e.as_str()), "{}", trf("Unbekannte Denktiefe {} (low, medium, high, xhigh, max)", &[&format!("{e:?}")]));
-            req.effort = Some(e.clone());
-        } else if req.effort.is_none() {
-            req.effort = Some(config.summary_effort.clone());
-        }
+        anyhow::ensure!(
+            !req.model.is_empty(),
+            "{}",
+            trf("Kein Modell für {} gewählt — --summary-model angeben", &[&req.connection.name])
+        );
+        let effort = match &self.effort {
+            Some(e) => {
+                anyhow::ensure!(summary::EFFORTS.contains(&e.as_str()), "{}", trf("Unbekannte Denktiefe {} (low, medium, high, xhigh, max)", &[&format!("{e:?}")]));
+                e.clone()
+            }
+            None => config.summary_effort.clone(),
+        };
+        req.effort = mostalgia_core::config::effort_for(&req.connection, &req.model, &effort);
         Ok(req)
     }
+}
+
+/// A configured connection by id, or an error listing the ids.
+fn connection(config: &Config, id: &str) -> Result<Connection> {
+    config.connection(id).cloned().with_context(|| {
+        let ids: Vec<&str> = config.connections.iter().map(|c| c.id.as_str()).collect();
+        trf("Unbekannte Verbindung {} (vorhanden: {})", &[&format!("{id:?}"), &ids.join(", ")])
+    })
+}
+
+/// "local" or CONNECTION/MODEL.
+fn parse_engine(config: &Config, s: &str) -> Result<SttChoice> {
+    if s.eq_ignore_ascii_case("local") || s.eq_ignore_ascii_case("lokal") {
+        return Ok(SttChoice::local());
+    }
+    let (id, model) = s
+        .split_once('/')
+        .with_context(|| trf("Ungültige Engine {}: \"local\" oder VERBINDUNG/MODELL, z. B. openai/gpt-4o-transcribe", &[&format!("{s:?}")]))?;
+    connection(config, id)?;
+    Ok(SttChoice { connection: id.into(), model: model.into() })
 }
 
 #[derive(Subcommand)]
@@ -194,17 +230,29 @@ enum Command {
         #[arg(long)]
         all: bool,
     },
-    /// List the models a summary provider offers (live, with thinking levels)
+    /// List the models an AI connection offers (live, with thinking levels)
     Models {
-        /// claude or deepseek
+        /// Connection id, e.g. claude, openai, deepseek, ollama
         #[arg(long, default_value = "claude")]
         provider: String,
     },
-    /// Save an API key in the system keyring (for summaries)
+    /// Save an API key in the system keyring for an AI connection
     SetApiKey {
-        /// claude (Anthropic) or deepseek
+        /// Connection id, e.g. claude, openai, deepseek, groq
         #[arg(long, default_value = "claude")]
         provider: String,
+    },
+    /// AI connections: list them with their status, add, test or remove one
+    Connections {
+        #[command(subcommand)]
+        action: Option<ConnectionsAction>,
+    },
+    /// Transcribe a saved meeting again from its audio, e.g. after a cloud
+    /// engine failed (replaces the transcript; speaker names are reset)
+    Retranscribe {
+        id: i64,
+        #[command(flatten)]
+        models: ModelArgs,
     },
     /// List capture devices (for --mic-device / --system-device)
     Devices,
@@ -215,6 +263,33 @@ enum Command {
         #[command(flatten)]
         models: ModelArgs,
     },
+}
+
+#[derive(Subcommand)]
+enum ConnectionsAction {
+    /// List connections and check each one (default)
+    List,
+    /// Add a connection from a preset: claude, openai, deepseek, ollama,
+    /// litellm, lmstudio, vllm, openrouter, groq, together or custom
+    Add {
+        preset: String,
+        /// Display name [default: the preset's name]
+        #[arg(long)]
+        name: Option<String>,
+        /// Base URL including /v1 [default: the preset's URL]
+        #[arg(long)]
+        url: Option<String>,
+        /// Model ids to offer when the server has no model list (repeatable)
+        #[arg(long = "model")]
+        models: Vec<String>,
+        /// Ask for an API key and store it in the keyring
+        #[arg(long)]
+        key: bool,
+    },
+    /// Check a connection (URL, key, model list)
+    Test { id: String },
+    /// Remove a connection and its stored API key
+    Remove { id: String },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -254,6 +329,36 @@ impl ModelArgs {
         }
         let beside = self.whisper().with_file_name(paths::VAD_MODEL);
         if beside.exists() { beside } else { paths::model(paths::VAD_MODEL) }
+    }
+
+    /// The live engine (`start`), or the only one for one-shot commands.
+    fn live_choice(&self) -> Result<SttChoice> {
+        let config = Config::load();
+        match &self.engine {
+            Some(e) => parse_engine(&config, e),
+            None => Ok(config.live_engine.clone()),
+        }
+    }
+
+    /// The final-pass engine; for import/transcribe/retranscribe --engine works too.
+    fn final_choice(&self) -> Result<SttChoice> {
+        let config = Config::load();
+        match self.final_engine.as_ref().or(self.engine.as_ref()) {
+            Some(e) => parse_engine(&config, e),
+            None => Ok(config.final_engine.clone()),
+        }
+    }
+
+    fn build_engine(&self, choice: &SttChoice) -> Result<Engine> {
+        if choice.is_local() {
+            return self.load_engine();
+        }
+        let config = Config::load();
+        let conn = connection(&config, &choice.connection)?;
+        let engine = Engine::cloud(&conn, &choice.model, &self.language)?;
+        let privacy = tr("Audio wird zur Transkription an diesen Anbieter gesendet");
+        eprintln!("[mostalgia] {}", trf("Transkription: {} — {}", &[&engine.label(), &privacy]));
+        Ok(engine)
     }
 
     fn load_engine(&self) -> Result<Engine> {
@@ -332,6 +437,8 @@ fn main() -> Result<()> {
         Command::Open => control("show", &[]),
         Command::SetApiKey { provider } => set_api_key(&provider),
         Command::Models { provider } => list_models(&provider),
+        Command::Connections { action } => connections_cmd(action),
+        Command::Retranscribe { id, models } => retranscribe(id, &models),
         Command::Ask { question } => ask(&question.join(" ")),
         Command::Reindex { all } => reindex(all),
         Command::Devices => list_devices(),
@@ -344,8 +451,11 @@ fn open_store() -> Result<Store> {
 }
 
 fn start(models: &ModelArgs, sum: &SummaryArgs, cfg: RecordConfig, speakers: bool, no_final: bool) -> Result<()> {
-    // Load the model first so a bad path fails before we start recording.
-    let engine = models.load_engine()?;
+    // Set up the engines first so a bad model path or a missing key fails
+    // before anything is recorded.
+    let (live_choice, final_choice) = (models.live_choice()?, models.final_choice()?);
+    let engine = models.build_engine(&live_choice)?;
+    let mut final_engine = if no_final || final_choice == live_choice { None } else { Some(models.build_engine(&final_choice)?) };
     let (tx, rx) = crossbeam_channel::unbounded();
     let recorder = Recorder::start(cfg, engine, tx)?;
 
@@ -417,6 +527,10 @@ fn start(models: &ModelArgs, sum: &SummaryArgs, cfg: RecordConfig, speakers: boo
                 eprintln!("[mostalgia] {}", trf("{} s Abschnitt in {} ms transkribiert", &[&format!("{audio_secs:.1}"), &millis]));
             }
             Event::Warning(w) => eprintln!("[mostalgia] {w}"),
+            Event::EngineError { engine, message } => {
+                clear_interim(&mut interim_shown);
+                eprintln!("[mostalgia] {}", trf("Transkription mit {} fehlgeschlagen (Aufnahme läuft weiter): {}", &[&engine, &message]));
+            }
             Event::Level { .. } => {}
         }
     }
@@ -425,38 +539,39 @@ fn start(models: &ModelArgs, sum: &SummaryArgs, cfg: RecordConfig, speakers: boo
     if no_final {
         return Ok(());
     }
-    finish(&mut engine, models, sum, &recording)
+    finish(final_engine.as_mut().unwrap_or(&mut engine), models, sum, &recording)
 }
 
-/// Final pass → library → summary, shared by `start` and `import`.
+/// Final pass → library → summary, shared by `start` and `import`. If the
+/// final pass fails the meeting is still saved (with the live transcript)
+/// and the error says how to transcribe it again.
 fn finish(engine: &mut Engine, models: &ModelArgs, sum: &SummaryArgs, rec: &Recording) -> Result<()> {
-    eprintln!("[mostalgia] {}", trf("Letzter Durchgang über {} s Audio …", &[&format!("{:.0}", rec.duration_secs)]));
-    let t = std::time::Instant::now();
-    let segments = finalize::final_pass(engine, &rec.tracks, &models.final_pass_options())?;
     eprintln!(
         "[mostalgia] {}",
-        trf("Fertiges Transkript: {} Zeilen in {} s", &[&segments.len(), &format!("{:.1}", t.elapsed().as_secs_f64())])
+        trf("Letzter Durchgang über {} s Audio mit {} …", &[&format!("{:.0}", rec.duration_secs), &engine.label()])
     );
-
-    let mut store = open_store()?;
-    let title = trf("Besprechung {}", &[&i18n::date_time(&rec.started_at)]);
-    let id = store.insert_meeting(
-        &NewMeeting {
-            title: &title,
-            started_at: rec.started_at,
-            duration_secs: rec.duration_secs,
-            language: &models.language,
-            dir: &rec.dir,
-        },
-        &segments,
-    )?;
-    println!("\n=== {} ===", trf("Besprechung #{}: {}", &[&id, &title]));
-    for s in &segments {
-        let who = i18n::speaker(s.speaker.as_deref().unwrap_or(s.source.speaker_label()));
-        println!("[{}] {who}: {}", format_ts(s.start_secs), s.text);
+    let t = std::time::Instant::now();
+    let saved = finalize::save_recording(rec, engine, &models.final_pass_options(), &models.language, &[])?;
+    let id = saved.meeting_id;
+    let store = open_store()?;
+    let meeting = store.get(id)?.with_context(|| trf("Keine Besprechung #{}", &[&id]))?;
+    eprintln!(
+        "[mostalgia] {}",
+        trf("Fertiges Transkript: {} Zeilen in {} s", &[&meeting.segments.len(), &format!("{:.1}", t.elapsed().as_secs_f64())])
+    );
+    println!("\n=== {} ===", trf("Besprechung #{}: {}", &[&id, &meeting.title]));
+    for s in &meeting.segments {
+        println!("[{}] {}: {}", format_ts(s.start_secs), i18n::speaker(s.speaker_label()), s.text);
+    }
+    if let Some(error) = &saved.error {
+        eprintln!("\n[mostalgia] {error}");
+        eprintln!(
+            "[mostalgia] {}",
+            trf("Die Aufnahme ist gespeichert. Erneut transkribieren: `mostalgia retranscribe {} --engine local`", &[&id])
+        );
     }
 
-    if !sum.no_summary && !segments.is_empty() {
+    if !sum.no_summary && !meeting.segments.is_empty() {
         if let Err(e) = sum.choice.request().and_then(|req| summarize(&store, id, &req, false)) {
             eprintln!("[mostalgia] {}", trf("Zusammenfassung übersprungen: {}", &[&format!("{e:#}")]));
         }
@@ -466,34 +581,45 @@ fn finish(engine: &mut Engine, models: &ModelArgs, sum: &SummaryArgs, rec: &Reco
     Ok(())
 }
 
+fn retranscribe(id: i64, models: &ModelArgs) -> Result<()> {
+    let mut engine = models.build_engine(&models.final_choice()?)?;
+    let t = std::time::Instant::now();
+    let lines = finalize::retranscribe(id, &mut engine, &models.final_pass_options())?;
+    println!(
+        "{}",
+        trf("Besprechung #{} neu transkribiert mit {}: {} Zeilen in {} s", &[&id, &engine.label(), &lines, &format!("{:.1}", t.elapsed().as_secs_f64())])
+    );
+    Ok(())
+}
+
 fn summarize(store: &Store, id: i64, req: &summary::SummaryRequest, required: bool) -> Result<()> {
     let meeting = store.get(id)?.with_context(|| trf("Keine Besprechung #{}", &[&id]))?;
-    let Some(key) = summary::api_key(req.provider)? else {
+    if !req.connection.is_configured() {
         let msg = trf(
             "Kein {}-API-Schlüssel — `mostalgia set-api-key --provider {}` ausführen",
-            &[&req.provider.name(), &req.provider.id()],
+            &[&req.connection.name, &req.connection.id],
         );
         if required {
             anyhow::bail!(msg);
         }
         eprintln!("[mostalgia] {}", trf("{}, danach `mostalgia summarize {}`", &[&msg, &id]));
         return Ok(());
-    };
+    }
     eprintln!(
         "[mostalgia] {}",
         trf(
             "Fasse zusammen mit {} {}{} …",
             &[
-                &req.provider.name(),
+                &req.connection.name,
                 &req.model,
                 &req.effort.as_deref().map(|e| trf(" (Denktiefe {})", &[&e])).unwrap_or_default(),
             ],
         )
     );
     let t = std::time::Instant::now();
-    let s = summary::summarize(req, &key, &meeting)?;
+    let s = summary::summarize(req, &meeting)?;
     eprintln!("[mostalgia] {}", trf("Zusammenfassung dauerte {} s", &[&format!("{:.1}", t.elapsed().as_secs_f64())]));
-    store.save_summary(id, s.provider.id(), &s.model, s.effort.as_deref(), &s.markdown)?;
+    store.save_summary(id, &s.provider, &s.model, s.effort.as_deref(), &s.markdown)?;
     if let Some(title) = &s.title {
         store.set_title(id, title)?;
     }
@@ -529,8 +655,10 @@ fn import(dir: &Path, models: &ModelArgs, sum: &SummaryArgs) -> Result<()> {
         started_at,
         duration_secs,
         tracks,
+        live_lines: Vec::new(),
+        live_errors: 0,
     };
-    let mut engine = models.load_engine()?;
+    let mut engine = models.build_engine(&models.final_choice()?)?;
     finish(&mut engine, models, sum, &rec)
 }
 
@@ -573,7 +701,7 @@ fn show(id: i64, with_summary: bool, with_transcript: bool) -> Result<()> {
                 trf(
                     "Zusammenfassung von {} {}{}, {}",
                     &[
-                        &summary::Provider::parse(&s.provider).map_or(s.provider.as_str(), |p| p.name()),
+                        &summary::provider_display(&s.provider),
                         &s.model,
                         &s.effort.as_deref().map(|e| trf(", Denktiefe {}", &[&e])).unwrap_or_default(),
                         &i18n::date_time(&s.created_at),
@@ -734,28 +862,117 @@ fn ask(question: &str) -> Result<()> {
 }
 
 fn list_models(provider: &str) -> Result<()> {
-    let provider = summary::Provider::parse(provider).with_context(|| trf("Unbekannter Anbieter {}", &[&format!("{provider:?}")]))?;
-    let models = match summary::api_key(provider)? {
-        Some(key) => summary::list_models(provider, &key)?,
-        None => {
-            eprintln!("({})", trf("kein {}-API-Schlüssel — zeige die eingebaute Liste", &[&provider.name()]));
-            summary::fallback_models(provider)
+    let conn = connection(&Config::load(), provider)?;
+    let models = match conn.require_key() {
+        Ok(key) => mostalgia_core::llm::list_models(&conn, key.as_deref())?,
+        Err(e) => {
+            eprintln!("({e:#} — {})", tr("zeige die eingebaute Liste"));
+            mostalgia_core::llm::fallback_models(&conn)
         }
     };
     for m in models {
         let efforts = if m.efforts.is_empty() { "—".to_string() } else { m.efforts.join(", ") };
         println!("{:<28} {:<26} {}: {efforts}", m.id, m.display_name, tr("Denktiefe"));
     }
+    for m in conn.stt_models() {
+        println!("{:<28} {:<26} {}", m.id, tr("Transkription"), trf("ca. {} $/h", &[&format!("{:.2}", m.usd_per_hour)]));
+    }
     Ok(())
 }
 
 fn set_api_key(provider: &str) -> Result<()> {
-    let provider = summary::Provider::parse(provider).with_context(|| trf("Unbekannter Anbieter {}", &[&format!("{provider:?}")]))?;
-    let key = rpassword::prompt_password(trf("{}-API-Schlüssel: ", &[&provider.name()])).context(tr("Schlüssel konnte nicht gelesen werden"))?;
+    let conn = connection(&Config::load(), provider)?;
+    let key = rpassword::prompt_password(trf("{}-API-Schlüssel: ", &[&conn.name])).context(tr("Schlüssel konnte nicht gelesen werden"))?;
     anyhow::ensure!(!key.trim().is_empty(), "{}", tr("Kein Schlüssel eingegeben"));
-    summary::save_api_key(provider, &key)?;
+    conn.save_api_key(&key)?;
     println!("{}", tr("Im Schlüsselbund gespeichert (eine gesetzte Umgebungsvariable hat weiterhin Vorrang)."));
     Ok(())
+}
+
+fn connections_cmd(action: Option<ConnectionsAction>) -> Result<()> {
+    let mut config = Config::load();
+    match action.unwrap_or(ConnectionsAction::List) {
+        ConnectionsAction::List => {
+            let uses = |c: &Connection| {
+                let mut u = Vec::new();
+                if config.summary_provider == c.id {
+                    u.push(tr("Zusammenfassungen"));
+                }
+                if config.ask_provider == c.id || config.ask_provider.is_empty() && config.summary_provider == c.id {
+                    u.push(tr("Fragen"));
+                }
+                if [&config.live_engine, &config.final_engine].iter().any(|e| e.connection == c.id) {
+                    u.push(tr("Transkription"));
+                }
+                u.join(", ")
+            };
+            for c in &config.connections {
+                let status = if !c.is_configured() {
+                    tr("Nicht eingerichtet").to_string()
+                } else {
+                    match mostalgia_core::llm::test(c) {
+                        Ok(note) => format!("{} ({note})", tr("Verbunden")),
+                        Err(e) => format!("{}: {e:#}", tr("Fehler")),
+                    }
+                };
+                let place = if c.is_local() { tr("lokal") } else { tr("Cloud") };
+                println!("{:<12} {:<18} {:<6} {}", c.id, c.name, place, c.base());
+                println!("{:<12} {status}", "");
+                let used = uses(c);
+                if !used.is_empty() {
+                    println!("{:<12} {}", "", trf("genutzt für: {}", &[&used]));
+                }
+            }
+            println!("\n{}: {}", tr("Modus"), config.mode().label());
+            println!("{}: {}", tr("Live-Transkription"), config.engine_label(&config.live_engine));
+            println!("{}: {}", tr("Feinschliff"), config.engine_label(&config.final_engine));
+            Ok(())
+        }
+        ConnectionsAction::Add { preset, name, url, models, key } => {
+            anyhow::ensure!(
+                connections::PRESETS.iter().any(|p| p.id == preset),
+                "{}",
+                trf("Unbekannte Vorlage {} (claude, openai, deepseek, ollama, litellm, lmstudio, vllm, openrouter, groq, together, custom)", &[&format!("{preset:?}")])
+            );
+            let id = connections::new_id(&config.connections, &preset);
+            let mut conn = Connection::from_preset(connections::preset(&preset), &id);
+            if let Some(name) = name {
+                conn.name = name;
+            }
+            if let Some(url) = url {
+                conn.base_url = url;
+            }
+            anyhow::ensure!(!conn.base().is_empty(), "{}", tr("Für einen eigenen Endpunkt --url angeben"));
+            conn.models = models;
+            if key {
+                let k = rpassword::prompt_password(trf("{}-API-Schlüssel: ", &[&conn.name])).context(tr("Schlüssel konnte nicht gelesen werden"))?;
+                if !k.trim().is_empty() {
+                    conn.save_api_key(&k)?;
+                }
+            }
+            println!("{}", trf("Verbindung {} hinzugefügt ({}).", &[&conn.id, &conn.base()]));
+            config.connections.push(conn);
+            config.save()
+        }
+        ConnectionsAction::Test { id } => {
+            let conn = connection(&config, &id)?;
+            println!("{}: {}", conn.name, mostalgia_core::llm::test(&conn)?);
+            Ok(())
+        }
+        ConnectionsAction::Remove { id } => {
+            let conn = connection(&config, &id)?;
+            let in_use = config.summary_provider == id
+                || config.ask_provider == id
+                || config.live_engine.connection == id
+                || config.final_engine.connection == id;
+            anyhow::ensure!(!in_use, "{}", trf("{} ist noch in Gebrauch — erst in den Einstellungen etwas anderes wählen", &[&conn.name]));
+            conn.delete_api_key()?;
+            config.connections.retain(|c| c.id != id);
+            config.save()?;
+            println!("{}", trf("Verbindung {} entfernt.", &[&id]));
+            Ok(())
+        }
+    }
 }
 
 fn list_devices() -> Result<()> {
@@ -775,7 +992,7 @@ fn list_devices() -> Result<()> {
 
 fn transcribe_file(file: &Path, models: &ModelArgs) -> Result<()> {
     let samples = finalize::read_wav(file)?;
-    let mut engine = models.load_engine()?;
+    let mut engine = models.build_engine(&models.final_choice()?)?;
     let t = std::time::Instant::now();
     // Treated as the system track so --diarize applies; --denoise as the mic.
     let source = if models.denoise() { Source::Mic } else { Source::System };

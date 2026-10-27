@@ -13,18 +13,88 @@ pub struct Segment {
 
 /// Segments Whisper itself rates as more likely silence than speech are
 /// dropped; they are almost always hallucinated text.
-const MAX_NO_SPEECH_PROB: f32 = 0.6;
+pub(crate) const MAX_NO_SPEECH_PROB: f32 = 0.6;
+
+/// A speech-to-text engine: local Whisper on this machine, or a cloud
+/// model behind one of the AI connections. Which one is in use is always
+/// visible ([`Engine::label`]); a failing cloud engine reports its error
+/// and is never swapped for another behind the user's back.
+pub enum Engine {
+    Local(Whisper),
+    Cloud(crate::cloud_stt::CloudEngine),
+}
+
+impl Engine {
+    /// Local Whisper with the given ggml model.
+    pub fn load(model: &Path, language: &str) -> Result<Self> {
+        Ok(Self::Local(Whisper::load(model, language)?))
+    }
+
+    /// A cloud model on `conn`.
+    pub fn cloud(conn: &crate::connections::Connection, model: &str, language: &str) -> Result<Self> {
+        Ok(Self::Cloud(crate::cloud_stt::CloudEngine::new(conn, model, language)?))
+    }
+
+    pub fn is_cloud(&self) -> bool {
+        matches!(self, Self::Cloud(_))
+    }
+
+    /// "Whisper large-v3-turbo · RTX …" or "OpenAI · gpt-4o-transcribe".
+    pub fn label(&self) -> String {
+        match self {
+            Self::Local(w) => match w.gpu() {
+                Some(gpu) => format!("Whisper large-v3-turbo · {gpu}"),
+                None => "Whisper large-v3-turbo · CPU".into(),
+            },
+            Self::Cloud(c) => c.label(),
+        }
+    }
+
+    pub fn set_language(&mut self, language: &str) -> Result<()> {
+        match self {
+            Self::Local(w) => w.set_language(language),
+            Self::Cloud(c) => {
+                c.set_language(language);
+                Ok(())
+            }
+        }
+    }
+
+    /// Description of the discrete GPU in use (local Whisper only).
+    pub fn gpu(&self) -> Option<&str> {
+        match self {
+            Self::Local(w) => w.gpu(),
+            Self::Cloud(_) => None,
+        }
+    }
+
+    /// Transcribes one short utterance, independent of earlier ones.
+    pub fn transcribe(&mut self, samples: &[f32]) -> Result<Vec<Segment>> {
+        match self {
+            Self::Local(w) => w.transcribe(samples),
+            Self::Cloud(c) => c.transcribe(samples),
+        }
+    }
+
+    /// Transcribes a whole track in one go (see [`Whisper::transcribe_track`]).
+    pub fn transcribe_track(&mut self, samples: &[f32]) -> Result<Vec<Segment>> {
+        match self {
+            Self::Local(w) => w.transcribe_track(samples),
+            Self::Cloud(c) => c.transcribe(samples),
+        }
+    }
+}
 
 /// Thin wrapper around whisper-rs holding one loaded model and a reusable
 /// inference state.
-pub struct Engine {
+pub struct Whisper {
     state: WhisperState,
     language: Option<String>,
     threads: i32,
     gpu: Option<String>,
 }
 
-impl Engine {
+impl Whisper {
     pub fn load(model: &Path, language: &str) -> Result<Self> {
         quiet_native_logs();
         let mut params = WhisperContextParameters::default();
@@ -192,7 +262,7 @@ fn debug_enabled() -> bool {
 
 /// Whisper's sound annotations ("* Musik *", "[Applaus]", "(Lachen)") are
 /// never speech.
-fn is_annotation(text: &str) -> bool {
+pub(crate) fn is_annotation(text: &str) -> bool {
     let t = text.trim();
     [('*', '*'), ('[', ']'), ('(', ')'), ('♪', '♪')]
         .iter()

@@ -291,11 +291,14 @@ impl SettingsView {
     }
 
     fn refresh_key_status(&mut self) {
-        let provider = self.config.summary_provider;
-        self.key_status = match summary::api_key(provider) {
-            Ok(Some(_)) if summary::key_from_env(provider) => tr("Aus der Umgebungsvariable").into(),
+        let Ok(provider) = self.config.summary_connection() else {
+            self.key_status = SharedString::default();
+            return;
+        };
+        self.key_status = match provider.api_key() {
+            Ok(Some(_)) if provider.key_from_env() => tr("Aus der Umgebungsvariable").into(),
             Ok(Some(_)) => tr("Im GNOME-Schlüsselbund gespeichert").into(),
-            Ok(None) => trf("Kein {}-Schlüssel hinterlegt — Zusammenfassungen sind aus", &[&provider.name()]).into(),
+            Ok(None) => trf("Kein {}-Schlüssel hinterlegt — Zusammenfassungen sind aus", &[&provider.name]).into(),
             Err(e) => trf("Schlüsselbund nicht erreichbar: {}", &[&format!("{e:#}")]).into(),
         };
     }
@@ -303,12 +306,13 @@ impl SettingsView {
     /// Shows the built-in model list now and swaps in the live one if the
     /// provider's API answers.
     fn load_models(&mut self, cx: &mut Context<Self>) {
-        let provider = self.config.summary_provider;
-        self.models = summary::fallback_models(provider);
+        let Ok(conn) = self.config.summary_connection() else { return };
+        let provider = conn.id.clone();
+        self.models = mostalgia_core::llm::fallback_models(&conn);
         self.models_live = false;
         let task = cx.background_spawn(async move {
-            let key = summary::api_key(provider).ok().flatten()?;
-            summary::list_models(provider, &key).ok()
+            let key = conn.require_key().ok()?;
+            mostalgia_core::llm::list_models(&conn, key.as_deref()).ok()
         });
         cx.spawn(async move |this, cx| {
             if let Some(models) = task.await {
@@ -325,12 +329,13 @@ impl SettingsView {
         .detach();
     }
 
-    fn set_provider(&mut self, provider: summary::Provider, cx: &mut Context<Self>) {
+    fn set_provider(&mut self, provider: String, cx: &mut Context<Self>) {
         if self.config.summary_provider == provider {
             return;
         }
+        let Some(conn) = self.config.connection(&provider).cloned() else { return };
         self.config.summary_provider = provider;
-        self.config.summary_model = provider.default_model().into();
+        self.config.summary_model = conn.preset().default_model.into();
         self.refresh_key_status();
         self.load_models(cx);
         self.save(cx);
@@ -396,7 +401,8 @@ impl SettingsView {
         if key.trim().is_empty() {
             return;
         }
-        match summary::save_api_key(self.config.summary_provider, &key) {
+        let Ok(conn) = self.config.summary_connection() else { return };
+        match conn.save_api_key(&key) {
             Ok(()) => {
                 self.api_key.update(cx, |s, cx| s.set_value("", window, cx));
                 self.refresh_key_status();
@@ -884,7 +890,8 @@ impl Render for SettingsView {
         });
 
         // ── KI & Zusammenfassung ──
-        let provider = self.config.summary_provider;
+        let provider = self.config.summary_provider.clone();
+        let provider_name = self.config.summary_connection().map(|c| c.name).unwrap_or_default();
         let current = self.models.iter().find(|m| m.id == self.config.summary_model).cloned();
         let model_label = current.as_ref().map_or(self.config.summary_model.clone(), |m| m.display_name.clone());
         let efforts: Vec<String> = current.as_ref().map(|m| m.efforts.clone()).unwrap_or_default();
@@ -915,24 +922,23 @@ impl Render for SettingsView {
                     .into_any_element(),
             );
         }
-        let provider_button = |p: summary::Provider, cx: &mut Context<Self>| {
-            Button::new(SharedString::from(format!("provider-{}", p.id())))
+        let provider_button = |p: &mostalgia_core::connections::Connection, cx: &mut Context<Self>| {
+            let id = p.id.clone();
+            Button::new(SharedString::from(format!("provider-{}", p.id)))
                 .small()
-                .label(p.name())
-                .when(provider == p, |b| b.primary())
-                .when(provider != p, |b| b.ghost())
-                .on_click(cx.listener(move |this, _, _, cx| this.set_provider(p, cx)))
+                .label(p.name.clone())
+                .when(provider == p.id, |b| b.primary())
+                .when(provider != p.id, |b| b.ghost())
+                .on_click(cx.listener(move |this, _, _, cx| this.set_provider(id.clone(), cx)))
+                .into_any_element()
         };
+        let provider_buttons: Vec<AnyElement> = self.config.connections.clone().iter().map(|c| provider_button(c, cx)).collect();
         let model_card = ui::card(cx)
             .child(title("Modell"))
             .child(row(
                 tr("Anbieter"),
                 None,
-                h_flex()
-                    .gap_1()
-                    .child(provider_button(summary::Provider::Claude, cx))
-                    .child(provider_button(summary::Provider::DeepSeek, cx))
-                    .into_any_element(),
+                h_flex().flex_wrap().gap_1().children(provider_buttons).into_any_element(),
             ))
             .child(row(
                 tr("Modell"),
@@ -971,7 +977,7 @@ impl Render for SettingsView {
             element: model_card.into_any_element(),
         });
         let key_card = ui::card(cx)
-            .child(div().font_semibold().child(trf("{}-API-Schlüssel", &[&provider.name()])))
+            .child(div().font_semibold().child(trf("{}-API-Schlüssel", &[&provider_name])))
             .child(div().text_sm().text_color(theme.muted_foreground).child(tr("Gesendet wird nur der Text der Besprechung, nie Audio.")))
             .child(
                 h_flex()

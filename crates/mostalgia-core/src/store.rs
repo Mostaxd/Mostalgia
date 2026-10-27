@@ -37,6 +37,10 @@ pub struct Meeting {
     pub segments: Vec<StoredSegment>,
     pub bookmarks: Vec<Bookmark>,
     pub summary: Option<Summary>,
+    /// The engine that wrote the transcript ("Whisper … (lokal)", "OpenAI · whisper-1").
+    pub transcript_engine: Option<String>,
+    /// Why the transcript is incomplete (the engine failed), if it is.
+    pub transcript_error: Option<String>,
 }
 
 impl Meeting {
@@ -94,7 +98,7 @@ pub struct NewMeeting<'a> {
     pub dir: &'a Path,
 }
 
-const SCHEMA_VERSION: i32 = 4;
+const SCHEMA_VERSION: i32 = 5;
 
 const SCHEMA: &str = "
 CREATE TABLE meetings (
@@ -175,6 +179,10 @@ const MIGRATIONS: &[&str] = &[
         meeting_id  INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,
         fingerprint TEXT NOT NULL
     );",
+    // 5: which speech-to-text engine wrote the transcript, and why it is
+    // incomplete if that engine failed
+    "ALTER TABLE meetings ADD COLUMN transcript_engine TEXT;
+     ALTER TABLE meetings ADD COLUMN transcript_error TEXT;",
 ];
 
 fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
@@ -252,6 +260,33 @@ impl Store {
         Ok(id)
     }
 
+    /// Records which engine wrote a meeting's transcript and, if it failed,
+    /// why the transcript is incomplete (`None` clears the error).
+    pub fn set_transcript_info(&self, meeting_id: i64, engine: &str, error: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE meetings SET transcript_engine = ?2, transcript_error = ?3 WHERE id = ?1",
+            params![meeting_id, engine, error],
+        )?;
+        Ok(())
+    }
+
+    /// Replaces a meeting's transcript (after transcribing it again).
+    pub fn replace_segments(&mut self, meeting_id: i64, segments: &[FinalSegment]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        tx.execute("DELETE FROM segments WHERE meeting_id = ?1", [meeting_id])?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO segments (meeting_id, source, speaker, start_secs, end_secs, text)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            for s in segments {
+                stmt.execute(params![meeting_id, s.source.as_str(), s.speaker, s.start_secs, s.end_secs, s.text])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn list(&self, limit: usize) -> Result<Vec<MeetingSummary>> {
         let mut stmt = self.conn.prepare(
             "SELECT m.id, m.title, m.started_at, m.duration_secs,
@@ -276,7 +311,7 @@ impl Store {
         let head = self
             .conn
             .query_row(
-                "SELECT title, started_at, duration_secs, language, dir FROM meetings WHERE id = ?1",
+                "SELECT title, started_at, duration_secs, language, dir, transcript_engine, transcript_error FROM meetings WHERE id = ?1",
                 [id],
                 |r| {
                     Ok((
@@ -285,11 +320,13 @@ impl Store {
                         r.get::<_, f64>(2)?,
                         r.get::<_, String>(3)?,
                         r.get::<_, String>(4)?,
+                        r.get::<_, Option<String>>(5)?,
+                        r.get::<_, Option<String>>(6)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((title, started_at, duration_secs, language, dir)) = head else {
+        let Some((title, started_at, duration_secs, language, dir, transcript_engine, transcript_error)) = head else {
             return Ok(None);
         };
         let mut stmt = self.conn.prepare(
@@ -345,6 +382,8 @@ impl Store {
             segments,
             bookmarks,
             summary,
+            transcript_engine,
+            transcript_error,
         }))
     }
 

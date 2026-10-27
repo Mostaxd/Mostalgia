@@ -64,6 +64,10 @@ pub enum Event {
     },
     /// Something went wrong but recording continues.
     Warning(String),
+    /// The speech-to-text engine failed on a chunk (e.g. a cloud provider
+    /// is unreachable). Recording continues to disk; the chunk's text is
+    /// missing until the meeting is transcribed again.
+    EngineError { engine: String, message: String },
 }
 
 /// A finished recording on disk.
@@ -72,6 +76,10 @@ pub struct Recording {
     pub started_at: DateTime<Local>,
     pub duration_secs: f64,
     pub tracks: Vec<(Source, PathBuf)>,
+    /// The live transcript as it was shown, for when the final pass fails.
+    pub live_lines: Vec<crate::finalize::FinalSegment>,
+    /// Chunks the live engine failed on.
+    pub live_errors: usize,
 }
 
 /// Records the enabled sources to WAV files and transcribes them live on a
@@ -167,6 +175,8 @@ impl Recorder {
                 Source::Mic => 0,
                 Source::System => 1,
             };
+            let mut live_lines: Vec<crate::finalize::FinalSegment> = Vec::new();
+            let mut live_errors = 0usize;
             let mut run = |engine: &mut Engine, source: Source, utts: Vec<chunker::Utterance>| {
                 for utt in utts {
                     let t = std::time::Instant::now();
@@ -182,6 +192,13 @@ impl Recorder {
                                 millis: t.elapsed().as_millis(),
                             });
                             for seg in segments {
+                                live_lines.push(crate::finalize::FinalSegment {
+                                    source,
+                                    start_secs: seg.start_secs,
+                                    end_secs: seg.end_secs,
+                                    text: seg.text.trim().to_string(),
+                                    speaker: speaker.clone(),
+                                });
                                 let _ = events.send(Event::Line {
                                     source,
                                     speaker: speaker.clone(),
@@ -192,7 +209,11 @@ impl Recorder {
                             }
                         }
                         Err(e) => {
-                            let _ = events.send(Event::Warning(format!("transcription error: {e:#}")));
+                            live_errors += 1;
+                            let _ = events.send(Event::EngineError {
+                                engine: engine.label(),
+                                message: format!("{e:#}"),
+                            });
                         }
                     }
                 }
@@ -217,7 +238,8 @@ impl Recorder {
                     };
                     let finished = !utts.is_empty();
                     run(&mut engine, block.source, utts);
-                    if !interim {
+                    // Cloud engines bill per request; no provisional passes.
+                    if !interim || engine.is_cloud() {
                         continue;
                     }
                     if finished && interim_len[i] > 0 {
@@ -272,6 +294,8 @@ impl Recorder {
                     let _ = events.send(Event::Warning(format!("capture error: {e:#}")));
                 }
             }
+            drop(run);
+            live_lines.sort_by(|a, b| a.start_secs.total_cmp(&b.start_secs));
             let duration_secs = *samples_seen.iter().max().unwrap_or(&0) as f64 / SAMPLE_RATE as f64;
             Ok((
                 Recording {
@@ -279,6 +303,8 @@ impl Recorder {
                     started_at,
                     duration_secs,
                     tracks,
+                    live_lines,
+                    live_errors,
                 },
                 engine,
             ))

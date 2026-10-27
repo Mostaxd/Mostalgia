@@ -218,8 +218,9 @@ mod tests {
     fn recognizes_call_apps() {
         assert_eq!(classify(&stream("ZOOM VoiceEngine", "zoom", false)).as_deref(), Some("Zoom"));
         assert_eq!(classify(&stream("teams-for-linux", "teams-for-linux", false)).as_deref(), Some("Microsoft Teams"));
-        assert_eq!(classify(&stream("Google Chrome", "chrome", false)).as_deref(), Some("Browser-Anruf (Chrome)"));
-        assert_eq!(classify(&stream("Firefox", "firefox", false)).as_deref(), Some("Browser-Anruf (Firefox)"));
+        // Browser labels are translated; another test may switch the language.
+        assert!(classify(&stream("Google Chrome", "chrome", false)).is_some_and(|l| l.ends_with("(Chrome)")));
+        assert!(classify(&stream("Firefox", "firefox", false)).is_some_and(|l| l.ends_with("(Firefox)")));
         assert_eq!(classify(&stream("discord", "Discord", false)).as_deref(), Some("Discord"));
         // Not calls: our own capture, monitors, other recorders.
         assert_eq!(classify(&stream("mostalgia", "mostalgia-app", false)), None);

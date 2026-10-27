@@ -45,8 +45,10 @@ pub struct Config {
     pub call_apps_seen: Vec<String>,
     /// Call apps that never trigger auto-start.
     pub call_apps_ignored: Vec<String>,
-    /// Summary provider.
-    pub summary_provider: crate::summary::Provider,
+    /// AI connections (Claude, OpenAI, Ollama, custom endpoints …).
+    pub connections: Vec<crate::connections::Connection>,
+    /// Connection id used for summaries.
+    pub summary_provider: String,
     /// Model for summaries (an id of the chosen provider).
     pub summary_model: String,
     /// Thinking level for summaries ("low" … "max"), where the model supports it.
@@ -61,6 +63,54 @@ pub struct Config {
     pub reduce_motion: bool,
     /// Thinking level for "ask your meetings" answers (where supported).
     pub ask_effort: String,
+    /// Connection for "ask your meetings" ("" = same as summaries).
+    pub ask_provider: String,
+    /// Model for "ask your meetings" ("" = the summary model).
+    pub ask_model: String,
+    /// Speech-to-text during a recording.
+    pub live_engine: SttChoice,
+    /// Speech-to-text for the final pass after a recording.
+    pub final_engine: SttChoice,
+}
+
+/// Which speech-to-text engine to use: local Whisper (`connection` empty)
+/// or a cloud model on one of the configured connections.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SttChoice {
+    pub connection: String,
+    pub model: String,
+}
+
+impl SttChoice {
+    pub fn local() -> Self {
+        Self::default()
+    }
+
+    pub fn is_local(&self) -> bool {
+        self.connection.is_empty()
+    }
+}
+
+/// Where the work happens, derived from the chosen engines and connections.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    /// Transcription and AI run on this machine (or the local network).
+    Local,
+    /// Transcription local, summaries/answers from a cloud model.
+    Hybrid,
+    /// Transcription in the cloud too.
+    Cloud,
+}
+
+impl Mode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Mode::Local => crate::i18n::tr("Lokal"),
+            Mode::Hybrid => crate::i18n::tr("Hybrid"),
+            Mode::Cloud => crate::i18n::tr("Cloud"),
+        }
+    }
 }
 
 impl Default for Config {
@@ -84,7 +134,8 @@ impl Default for Config {
             call_stop_auto: true,
             call_apps_seen: Vec::new(),
             call_apps_ignored: Vec::new(),
-            summary_provider: crate::summary::Provider::Claude,
+            connections: crate::connections::default_connections(),
+            summary_provider: "claude".into(),
             summary_model: crate::summary::DEFAULT_MODEL.into(),
             summary_effort: crate::summary::DEFAULT_EFFORT.into(),
             auto_summary: true,
@@ -92,23 +143,69 @@ impl Default for Config {
             font: String::new(),
             reduce_motion: false,
             ask_effort: "medium".into(),
+            ask_provider: String::new(),
+            ask_model: String::new(),
+            live_engine: SttChoice::local(),
+            final_engine: SttChoice::local(),
         }
     }
 }
 
 impl Config {
-    /// The configured summary request (provider, model, thinking level).
-    pub fn summary_request(&self) -> crate::summary::SummaryRequest {
-        let models = crate::summary::fallback_models(self.summary_provider);
-        let supports_effort = models
-            .iter()
-            .find(|m| m.id == self.summary_model)
-            .map_or(self.summary_provider == crate::summary::Provider::Claude, |m| !m.efforts.is_empty());
-        crate::summary::SummaryRequest {
-            provider: self.summary_provider,
-            model: self.summary_model.clone(),
-            effort: supports_effort.then(|| self.summary_effort.clone()),
+    /// A connection by id.
+    pub fn connection(&self, id: &str) -> Option<&crate::connections::Connection> {
+        crate::connections::find(&self.connections, id)
+    }
+
+    /// The connection for summaries; an error naming the id if it's gone.
+    pub fn summary_connection(&self) -> Result<crate::connections::Connection> {
+        self.connection(&self.summary_provider)
+            .cloned()
+            .with_context(|| crate::i18n::trf("KI-Verbindung \"{}\" gibt es nicht mehr — in den Einstellungen wählen", &[&self.summary_provider]))
+    }
+
+    /// The configured summary request (connection, model, thinking level).
+    pub fn summary_request(&self) -> Result<crate::summary::SummaryRequest> {
+        let connection = self.summary_connection()?;
+        let effort = effort_for(&connection, &self.summary_model, &self.summary_effort);
+        Ok(crate::summary::SummaryRequest { connection, model: self.summary_model.clone(), effort })
+    }
+
+    /// Connection, model and thinking level for "ask your meetings".
+    pub fn ask_request(&self) -> Result<crate::summary::SummaryRequest> {
+        if self.ask_provider.is_empty() || self.ask_provider == self.summary_provider && self.ask_model.is_empty() {
+            let mut req = self.summary_request()?;
+            req.effort = effort_for(&req.connection, &req.model, &self.ask_effort);
+            return Ok(req);
         }
+        let connection = self
+            .connection(&self.ask_provider)
+            .cloned()
+            .with_context(|| crate::i18n::trf("KI-Verbindung \"{}\" gibt es nicht mehr — in den Einstellungen wählen", &[&self.ask_provider]))?;
+        let model = if self.ask_model.is_empty() { self.summary_model.clone() } else { self.ask_model.clone() };
+        let effort = effort_for(&connection, &model, &self.ask_effort);
+        Ok(crate::summary::SummaryRequest { connection, model, effort })
+    }
+
+    /// Where the work happens with the current choices.
+    pub fn mode(&self) -> Mode {
+        if !self.live_engine.is_local() || !self.final_engine.is_local() {
+            return Mode::Cloud;
+        }
+        let ai_local = [self.summary_provider.as_str(), self.ask_provider.as_str()]
+            .iter()
+            .filter(|id| !id.is_empty())
+            .all(|id| self.connection(id).is_some_and(|c| c.is_local()));
+        if ai_local { Mode::Local } else { Mode::Hybrid }
+    }
+
+    /// Display name of an engine choice: "Whisper (lokal)" or "OpenAI · gpt-4o-transcribe".
+    pub fn engine_label(&self, choice: &SttChoice) -> String {
+        if choice.is_local() {
+            return crate::i18n::tr("Whisper large-v3-turbo (lokal)").to_string();
+        }
+        let name = self.connection(&choice.connection).map_or(choice.connection.as_str(), |c| c.name.as_str());
+        format!("{name} · {}", choice.model)
     }
 
     pub fn path() -> PathBuf {
@@ -152,4 +249,19 @@ impl Config {
             crate::paths::model(crate::paths::VAD_MODEL)
         }
     }
+}
+
+/// The thinking level to send for `model` on `conn`, if it has effort control.
+pub fn effort_for(conn: &crate::connections::Connection, model: &str, effort: &str) -> Option<String> {
+    if effort.is_empty() {
+        return None;
+    }
+    let supported = match conn.api {
+        crate::connections::Api::Anthropic => crate::llm::fallback_models(conn)
+            .iter()
+            .find(|m| m.id == model)
+            .is_none_or(|m| !m.efforts.is_empty()),
+        crate::connections::Api::OpenAi => !crate::llm::openai_efforts(conn, model).is_empty(),
+    };
+    supported.then(|| effort.to_string())
 }
