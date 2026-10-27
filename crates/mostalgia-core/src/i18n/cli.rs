@@ -1,6 +1,7 @@
 //! English for the `mostalgia` command-line tool.
 
 pub const EN: &[(&str, &str)] = &[
+    ("Besprechung #{} samt Audiodateien gelöscht.", "Deleted meeting #{} including its audio files."),
     ("Lade Modell {} …", "Loading model {} …"),
     ("Nutze GPU: {}", "Using GPU: {}"),
     ("Keine eigene Grafikkarte gefunden — nutze das Standardgerät", "No discrete GPU found — using the default device"),

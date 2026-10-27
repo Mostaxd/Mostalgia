@@ -1,6 +1,16 @@
 //! English for the app shell: sidebar, ask view, tray, shared helpers.
 
 pub const EN: &[(&str, &str)] = &[
+    ("Besprechung löschen?", "Delete meeting?"),
+    ("{} Besprechungen löschen?", "Delete {} meetings?"),
+    ("Transkript, Zusammenfassung, Lesezeichen, Sprechernamen und Suchindex werden entfernt. Das lässt sich nicht rückgängig machen.", "The transcript, summary, bookmarks, speaker names and search index will be removed. This can't be undone."),
+    ("Audiodateien ebenfalls löschen", "Also delete the audio files"),
+    ("Abbrechen", "Cancel"),
+    ("Löschen", "Delete"),
+    ("Löschen…", "Delete…"),
+    ("{} Besprechungen löschen…", "Delete {} meetings…"),
+    ("Umbenennen", "Rename"),
+    ("Exportieren: {}", "Export: {}"),
     ("mostalgia beenden", "Quit mostalgia"),
     // Sidebar and title bar
     ("Neue Aufnahme", "New recording"),

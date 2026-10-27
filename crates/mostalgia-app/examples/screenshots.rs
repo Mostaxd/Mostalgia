@@ -137,6 +137,16 @@ fn main() {
         if !full {
             continue;
         }
+        // The delete confirmation for the first meeting.
+        cx.update_window(handle, |_, _, cx| {
+            view.update(cx, |app, cx| app.request_delete(vec![1], cx));
+        })
+        .unwrap();
+        shot("10-delete", &mut cx);
+        cx.update_window(handle, |_, _, cx| {
+            view.update(cx, |app, cx| app.request_delete(Vec::new(), cx));
+        })
+        .unwrap();
 
         if let Some(id) = meeting {
             cx.update_window(handle, |_, window, cx| {

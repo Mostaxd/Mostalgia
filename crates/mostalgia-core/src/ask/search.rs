@@ -61,7 +61,7 @@ fn cache() -> &'static Mutex<Option<VecCache>> {
     CELL.get_or_init(|| Mutex::new(None))
 }
 
-pub(crate) fn invalidate_cache() {
+pub fn invalidate_cache() {
     *cache().lock().unwrap() = None;
 }
 

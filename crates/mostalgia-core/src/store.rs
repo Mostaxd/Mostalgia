@@ -177,6 +177,14 @@ const MIGRATIONS: &[&str] = &[
     );",
 ];
 
+fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+        [name],
+        |r| r.get(0),
+    )
+}
+
 fn local(ts: i64) -> DateTime<Local> {
     Local.timestamp_opt(ts, 0).single().unwrap_or_else(Local::now)
 }
@@ -430,7 +438,40 @@ impl Store {
     }
 
     pub fn delete(&self, meeting_id: i64) -> Result<bool> {
-        Ok(self.conn.execute("DELETE FROM meetings WHERE id = ?1", [meeting_id])? > 0)
+        self.delete_meeting(meeting_id, false)
+    }
+
+    /// Removes a meeting and everything derived from it in one transaction:
+    /// transcript (and its search index rows), summary, bookmarks, speaker
+    /// names, "ask" passages and their index. With `delete_audio`, the
+    /// session's WAV tracks go too (and the folder, if then empty).
+    pub fn delete_meeting(&self, meeting_id: i64, delete_audio: bool) -> Result<bool> {
+        let dir: Option<String> = self
+            .conn
+            .query_row("SELECT dir FROM meetings WHERE id = ?1", [meeting_id], |r| r.get(0))
+            .optional()?;
+        let Some(dir) = dir else { return Ok(false) };
+        let tx = self.conn.unchecked_transaction()?;
+        // Explicit deletes (not only ON DELETE CASCADE), so the FTS delete
+        // triggers run for every row whatever the connection's settings.
+        for table in ["passages", "index_state", "segments", "summaries", "bookmarks"] {
+            if table_exists(&tx, table)? {
+                tx.execute(&format!("DELETE FROM {table} WHERE meeting_id = ?1"), [meeting_id])?;
+            }
+        }
+        tx.execute("DELETE FROM meetings WHERE id = ?1", [meeting_id])?;
+        tx.commit()?;
+        crate::ask::search::invalidate_cache();
+
+        if delete_audio {
+            let dir = PathBuf::from(dir);
+            for source in [Source::Mic, Source::System] {
+                let _ = std::fs::remove_file(dir.join(source.file_name()));
+            }
+            // Only removes the folder if nothing else is in it.
+            let _ = std::fs::remove_dir(&dir);
+        }
+        Ok(true)
     }
 }
 
@@ -491,6 +532,56 @@ mod tests {
 
         assert!(store.delete(id2)?);
         assert!(store.list(10)?.is_empty());
+        std::fs::remove_file(&path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn delete_removes_everything_searchable() -> Result<()> {
+        let path = std::env::temp_dir().join(format!("mostalgia-del-{}.db", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("mostalgia-del-session-{}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join("mic.wav"), b"x")?;
+        let mut store = Store::open(&path)?;
+        let keep = store.insert_meeting(
+            &NewMeeting { title: "Bleibt", started_at: Local::now(), duration_secs: 60.0, language: "de", dir: Path::new("/tmp/keep") },
+            &[seg(Source::Mic, 1.0, "Die Präsentation ist am Freitag.")],
+        )?;
+        let gone = store.insert_meeting(
+            &NewMeeting { title: "Weg", started_at: Local::now(), duration_secs: 60.0, language: "de", dir: &dir },
+            &[seg(Source::Mic, 1.0, "Geheimprojekt Zebra wird eingestellt.")],
+        )?;
+        store.save_summary(gone, "claude", "m", None, "# Weg\n\nZebra")?;
+        store.add_bookmarks(gone, &[Bookmark { at_secs: 1.0, label: "x".into() }])?;
+        crate::ask::index::index_meeting(&mut store, gone)?;
+        crate::ask::index::index_meeting(&mut store, keep)?;
+        let filter = crate::ask::search::Filter::default();
+        assert!(!store.search("zebra", 10)?.is_empty());
+        assert!(!crate::ask::search::search(&store, "Zebra", &filter, 10)?.is_empty());
+
+        assert!(store.delete_meeting(gone, true)?);
+        // Transcript BM25, passage BM25 + vectors (hybrid search), raw FTS rows.
+        assert!(store.search("zebra", 10)?.is_empty());
+        assert!(crate::ask::search::search(&store, "Zebra", &filter, 10)?.iter().all(|h| h.meeting_id != gone));
+        let fts_rows: i64 = store.conn.query_row(
+            "SELECT (SELECT COUNT(*) FROM segments_fts WHERE segments_fts MATCH 'zebra')
+                  + (SELECT COUNT(*) FROM passages_fts WHERE passages_fts MATCH 'zebra')",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(fts_rows, 0);
+        store.conn.execute_batch(
+            "INSERT INTO segments_fts(segments_fts) VALUES('integrity-check');
+             INSERT INTO passages_fts(passages_fts) VALUES('integrity-check');",
+        )?;
+        for table in ["segments", "summaries", "bookmarks", "passages", "index_state"] {
+            let n: i64 = store.conn.query_row(&format!("SELECT COUNT(*) FROM {table} WHERE meeting_id = ?1"), [gone], |r| r.get(0))?;
+            assert_eq!(n, 0, "{table}");
+        }
+        assert!(!dir.exists(), "audio folder removed");
+        // The other meeting is untouched.
+        assert!(!store.search("präsentation", 10)?.is_empty());
         std::fs::remove_file(&path)?;
         Ok(())
     }

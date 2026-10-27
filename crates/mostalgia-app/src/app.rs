@@ -6,6 +6,7 @@ use chrono::{Datelike, Local};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::assets::IconName;
+use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme, Icon, Selectable, Sizable, StyledExt, TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -43,8 +44,21 @@ pub struct MostalgiaApp {
     autostart: crate::autostart::AutoStart,
     /// Language the input placeholders were last set in.
     lang_seen: Option<i18n::Lang>,
+    /// Selected meetings in the sidebar (Ctrl/Shift-click for several).
+    selected: Vec<i64>,
+    /// Where a Shift-click range starts.
+    anchor: Option<i64>,
+    /// Meetings waiting for the delete confirmation, and whether their
+    /// audio files go too.
+    confirm_delete: Option<Vec<i64>>,
+    delete_audio: bool,
+    /// Meeting being renamed inline in the sidebar.
+    rename: Option<(i64, Entity<InputState>)>,
+    library_focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
+
+actions!(library, [DeleteSelected]);
 
 impl MostalgiaApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -82,6 +96,12 @@ impl MostalgiaApp {
             ask_view: None,
             autostart: crate::autostart::AutoStart::new(),
             lang_seen: None,
+            selected: Vec::new(),
+            anchor: None,
+            confirm_delete: None,
+            delete_audio: true,
+            rename: None,
+            library_focus: cx.focus_handle(),
             _subscriptions: subs,
         };
         this.reload(cx);
@@ -297,6 +317,11 @@ impl MostalgiaApp {
                 this.screen = Screen::Recording;
                 this.reload(cx);
             }
+            MeetingEvent::RequestDelete(id) => {
+                this.confirm_delete = Some(vec![*id]);
+                this.delete_audio = true;
+                cx.notify();
+            }
         });
         self._subscriptions.push(sub);
         self.screen = Screen::Meeting(view);
@@ -352,6 +377,191 @@ impl MostalgiaApp {
         }
     }
 
+    /// Click on a sidebar meeting: plain = open it, Ctrl = add/remove from
+    /// the selection, Shift = select the range from the last click.
+    fn click_meeting(&mut self, id: i64, modifiers: Modifiers, window: &mut Window, cx: &mut Context<Self>) {
+        self.library_focus.focus(window, cx);
+        if modifiers.control || modifiers.platform {
+            match self.selected.iter().position(|s| *s == id) {
+                Some(i) => {
+                    self.selected.remove(i);
+                }
+                None => self.selected.push(id),
+            }
+            self.anchor = Some(id);
+        } else if modifiers.shift {
+            let ids: Vec<i64> = self.meetings.iter().map(|m| m.id).collect();
+            let from = self.anchor.and_then(|a| ids.iter().position(|x| *x == a)).unwrap_or(0);
+            let to = ids.iter().position(|x| *x == id).unwrap_or(from);
+            let (a, b) = if from <= to { (from, to) } else { (to, from) };
+            self.selected = ids[a..=b].to_vec();
+        } else {
+            self.selected = vec![id];
+            self.anchor = Some(id);
+            self.open_meeting(id, window, cx);
+        }
+        cx.notify();
+    }
+
+    /// The meetings an action on `id` applies to: the whole selection if
+    /// `id` is part of it, else just `id`.
+    fn targets(&self, id: i64) -> Vec<i64> {
+        if self.selected.contains(&id) { self.selected.clone() } else { vec![id] }
+    }
+
+    /// Opens the delete confirmation for `ids` (an empty list closes it).
+    pub fn request_delete(&mut self, ids: Vec<i64>, cx: &mut Context<Self>) {
+        self.confirm_delete = (!ids.is_empty()).then_some(ids);
+        self.delete_audio = true;
+        cx.notify();
+    }
+
+    fn delete_selected(&mut self, _: &DeleteSelected, _: &mut Window, cx: &mut Context<Self>) {
+        let ids = self.selected.clone();
+        self.request_delete(ids, cx);
+    }
+
+    fn confirm_delete_now(&mut self, cx: &mut Context<Self>) {
+        let Some(ids) = self.confirm_delete.take() else { return };
+        let delete_audio = self.delete_audio;
+        let result = Store::open(&paths::database()).and_then(|store| {
+            for id in &ids {
+                store.delete_meeting(*id, delete_audio)?;
+            }
+            Ok(())
+        });
+        if let Err(e) = result {
+            self.error = Some(format!("{e:#}").into());
+        }
+        if let Screen::Meeting(v) = &self.screen {
+            if ids.contains(&v.read(cx).id) {
+                self.screen = Screen::Recording;
+            }
+        }
+        self.selected.retain(|s| !ids.contains(s));
+        self.reload(cx);
+    }
+
+    fn begin_rename(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        let title = self.meetings.iter().find(|m| m.id == id).map(|m| m.title.clone()).unwrap_or_default();
+        let input = cx.new(|cx| InputState::new(window, cx));
+        input.update(cx, |s, cx| s.set_value(title, window, cx));
+        input.read(cx).focus_handle(cx).focus(window, cx);
+        let sub = cx.subscribe_in(&input, window, move |this, input, event: &InputEvent, _, cx| match event {
+            InputEvent::PressEnter { .. } => {
+                let title = input.read(cx).value().trim().to_string();
+                if !title.is_empty() {
+                    if let Err(e) = Store::open(&paths::database()).and_then(|s| s.set_title(id, &title)) {
+                        this.error = Some(format!("{e:#}").into());
+                    }
+                }
+                this.rename = None;
+                this.reload(cx);
+                if let Screen::Meeting(v) = &this.screen {
+                    v.update(cx, |v, cx| v.reload(cx));
+                }
+            }
+            InputEvent::Blur => {
+                this.rename = None;
+                cx.notify();
+            }
+            _ => {}
+        });
+        self._subscriptions.push(sub);
+        self.rename = Some((id, input));
+        cx.notify();
+    }
+
+    fn export_meeting(&mut self, id: i64, format: mostalgia_core::export::Format, cx: &mut Context<Self>) {
+        use mostalgia_core::export;
+        let Ok(Some(m)) = Store::open(&paths::database()).and_then(|s| s.get(id)) else { return };
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_else(|| ".".into());
+        let dir = if home.join("Documents").is_dir() { home.join("Documents") } else { home };
+        let picked = cx.prompt_for_new_path(&dir, Some(&export::suggested_name(&m, format)));
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(path))) = picked.await else { return };
+            let result = export::write(&m, format, &path);
+            this.update(cx, |this, cx| {
+                if let Err(e) = result {
+                    this.error = Some(format!("{e:#}").into());
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn render_delete_dialog(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let ids = self.confirm_delete.clone()?;
+        let theme = cx.theme().clone();
+        let title = if ids.len() == 1 {
+            tr("Besprechung löschen?").to_string()
+        } else {
+            trf("{} Besprechungen löschen?", &[&ids.len()])
+        };
+        let names: Vec<String> = self.meetings.iter().filter(|m| ids.contains(&m.id)).take(3).map(|m| m.title.clone()).collect();
+        Some(
+            div()
+                .id("delete-overlay")
+                .absolute()
+                .inset_0()
+                .bg(gpui_kit::black().opacity(0.45))
+                .flex()
+                .items_center()
+                .justify_center()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.confirm_delete = None;
+                    cx.notify();
+                }))
+                .child(
+                    v_flex()
+                        .id("delete-dialog")
+                        .w(px(440.))
+                        .p_5()
+                        .gap_3()
+                        .rounded(theme.radius_lg)
+                        .border(ui::border_width(cx))
+                        .border_color(theme.border)
+                        .bg(theme.background)
+                        .shadow_lg()
+                        // Clicks inside the dialog don't close it.
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .child(h_flex().gap_2().child(Icon::new(IconName::Trash).text_color(theme.danger)).child(div().text_lg().font_semibold().child(title)))
+                        .children(names.into_iter().map(|n| ui::bidi_text(n, false).text_sm().font_medium()))
+                        .child(div().text_sm().text_color(theme.muted_foreground).child(tr(
+                            "Transkript, Zusammenfassung, Lesezeichen, Sprechernamen und Suchindex werden entfernt. Das lässt sich nicht rückgängig machen.",
+                        )))
+                        .child(
+                            gpui_kit::component::checkbox::Checkbox::new("delete-audio")
+                                .checked(self.delete_audio)
+                                .label(tr("Audiodateien ebenfalls löschen"))
+                                .on_click(cx.listener(|this, v: &bool, _, cx| {
+                                    this.delete_audio = *v;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            h_flex()
+                                .justify_end()
+                                .gap_2()
+                                .child(Button::new("delete-cancel").ghost().label(tr("Abbrechen")).on_click(cx.listener(|this, _, _, cx| {
+                                    this.confirm_delete = None;
+                                    cx.notify();
+                                })))
+                                .child(
+                                    Button::new("delete-confirm")
+                                        .danger()
+                                        .icon(IconName::Trash)
+                                        .label(tr("Löschen"))
+                                        .on_click(cx.listener(|this, _, _, cx| this.confirm_delete_now(cx))),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let theme = cx.theme();
         let recording_active = self.recording.read(cx).is_active();
@@ -395,7 +605,8 @@ impl MostalgiaApp {
                     items.push(ui::section_title(g, cx).px_2().pt_4().pb_1().into_any_element());
                 }
                 let id = m.id;
-                let active = selected == Some(id);
+                let active = selected == Some(id) || self.selected.contains(&id);
+                let renaming = self.rename.as_ref().filter(|(rid, _)| *rid == id).map(|(_, input)| input.clone());
                 let time = if days == 0 || days == 1 {
                     m.started_at.format("%H:%M").to_string()
                 } else {
@@ -411,14 +622,16 @@ impl MostalgiaApp {
                         .cursor_pointer()
                         .when(active, |el| el.bg(theme.sidebar_accent).text_color(theme.sidebar_accent_foreground))
                         .when(!active, |el| el.hover(|s| s.bg(theme.sidebar_accent.opacity(0.6))))
-                        .child(
-                            div()
+                        .child(match renaming {
+                            Some(input) => Input::new(&input).small().into_any_element(),
+                            None => div()
                                 .w_full()
                                 .text_sm()
                                 .font_medium()
                                 .when(!ui::is_rtl(&m.title), |el| el.truncate().child(m.title.clone()))
-                                .when(ui::is_rtl(&m.title), |el| el.child(ui::bidi_text(m.title.clone(), false))),
-                        )
+                                .when(ui::is_rtl(&m.title), |el| el.child(ui::bidi_text(m.title.clone(), false)))
+                                .into_any_element(),
+                        })
                         .child(
                             h_flex()
                                 .gap_1p5()
@@ -427,7 +640,39 @@ impl MostalgiaApp {
                                 .child(format!("{time} · {}", ui::minutes(m.duration_secs)))
                                 .when(m.has_summary, |el| el.child(Icon::new(IconName::Sparkles).xsmall().text_color(theme.primary))),
                         )
-                        .on_click(cx.listener(move |this, _, window, cx| this.open_meeting(id, window, cx)))
+                        .on_click(cx.listener(move |this, ev: &ClickEvent, window, cx| this.click_meeting(id, ev.modifiers(), window, cx)))
+                        .context_menu({
+                            let app = cx.entity().downgrade();
+                            let targets = self.targets(id);
+                            move |menu, _, _| {
+                                let n = targets.len();
+                                let mut menu = menu;
+                                if n == 1 {
+                                    let rename_app = app.clone();
+                                    menu = menu.item(PopupMenuItem::new(tr("Umbenennen")).icon(IconName::Pencil).on_click(move |_, window, cx| {
+                                        rename_app.update(cx, |this, cx| this.begin_rename(id, window, cx)).ok();
+                                    }));
+                                    for f in mostalgia_core::export::Format::ALL {
+                                        let app = app.clone();
+                                        menu = menu.item(
+                                            PopupMenuItem::new(trf("Exportieren: {}", &[&tr(f.label())]))
+                                                .icon(IconName::Download)
+                                                .on_click(move |_, _, cx| {
+                                                    app.update(cx, |this, cx| this.export_meeting(id, f, cx)).ok();
+                                                }),
+                                        );
+                                    }
+                                    menu = menu.separator();
+                                }
+                                let app = app.clone();
+                                let targets = targets.clone();
+                                let label = if n == 1 { tr("Löschen…").to_string() } else { trf("{} Besprechungen löschen…", &[&n]) };
+                                menu.item(PopupMenuItem::new(label).icon(IconName::Trash).on_click(move |_, _, cx| {
+                                    let targets = targets.clone();
+                                    app.update(cx, |this, cx| this.request_delete(targets, cx)).ok();
+                                }))
+                            }
+                        })
                         .into_any_element(),
                 );
             }
@@ -505,6 +750,9 @@ impl MostalgiaApp {
                 div().flex_1().min_h_0().child(
                     v_flex()
                         .id("library")
+                        .key_context("Library")
+                        .track_focus(&self.library_focus)
+                        .on_action(cx.listener(Self::delete_selected))
                         .size_full()
                         .px_2()
                         .pb_2()
@@ -543,9 +791,11 @@ impl Render for MostalgiaApp {
             Screen::Settings(v) => v.clone().into(),
             Screen::Ask(v) => v.clone().into(),
         };
+        let delete_dialog = self.render_delete_dialog(cx);
         let theme = cx.theme();
         v_flex()
             .size_full()
+            .relative()
             .bg(theme.background)
             .text_color(theme.foreground)
             .font(ui::ui_font(cx))
@@ -562,5 +812,6 @@ impl Render for MostalgiaApp {
             )
             .children(call_prompt)
             .child(h_flex().flex_1().min_h_0().child(sidebar).child(div().flex_1().min_w_0().h_full().child(content)))
+            .children(delete_dialog)
     }
 }

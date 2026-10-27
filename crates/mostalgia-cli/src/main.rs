@@ -171,8 +171,13 @@ enum Command {
         #[arg(long, short)]
         output: Option<PathBuf>,
     },
-    /// Remove a meeting from the library (its WAV files are kept)
-    Delete { id: i64 },
+    /// Delete a meeting: transcript, summary, search index and its audio files
+    Delete {
+        id: i64,
+        /// Keep the session's WAV files
+        #[arg(long)]
+        keep_audio: bool,
+    },
     /// Start or stop recording in the desktop app (launching it if needed).
     /// Bind this to a GNOME keyboard shortcut.
     Toggle,
@@ -314,9 +319,13 @@ fn main() -> Result<()> {
             Ok(())
         }
         Command::Export { id, format, output } => export(id, format.as_deref(), output),
-        Command::Delete { id } => {
-            anyhow::ensure!(open_store()?.delete(id)?, "{}", trf("Keine Besprechung #{}", &[&id]));
-            println!("{}", trf("Besprechung #{} aus der Bibliothek entfernt (WAV-Dateien bleiben).", &[&id]));
+        Command::Delete { id, keep_audio } => {
+            anyhow::ensure!(open_store()?.delete_meeting(id, !keep_audio)?, "{}", trf("Keine Besprechung #{}", &[&id]));
+            if keep_audio {
+                println!("{}", trf("Besprechung #{} aus der Bibliothek entfernt (WAV-Dateien bleiben).", &[&id]));
+            } else {
+                println!("{}", trf("Besprechung #{} samt Audiodateien gelöscht.", &[&id]));
+            }
             Ok(())
         }
         Command::Toggle => control("toggle", &["--start"]),

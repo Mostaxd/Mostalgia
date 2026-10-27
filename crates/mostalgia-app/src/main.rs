@@ -14,6 +14,7 @@ fn main() {
         cx.bind_keys([
             KeyBinding::new("ctrl-q", Quit, None),
             KeyBinding::new("ctrl-k", app::OpenAsk, None),
+            KeyBinding::new("delete", app::DeleteSelected, Some("Library")),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
 

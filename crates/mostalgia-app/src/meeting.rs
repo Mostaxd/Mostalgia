@@ -34,6 +34,8 @@ pub enum MeetingEvent {
     /// Title, summary or transcript changed; the library should refresh.
     Changed,
     Deleted,
+    /// Asks the app to delete this meeting (after its confirmation dialog).
+    RequestDelete(i64),
 }
 
 impl EventEmitter<MeetingEvent> for MeetingView {}
@@ -57,7 +59,6 @@ pub struct MeetingView {
     error: Option<SharedString>,
     notice: Option<SharedString>,
     edit: Option<Edit>,
-    confirm_delete: bool,
     scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -75,7 +76,6 @@ impl MeetingView {
             error: None,
             notice: None,
             edit: None,
-            confirm_delete: false,
             scroll: ScrollHandle::new(),
             _subscriptions: Vec::new(),
         };
@@ -304,11 +304,9 @@ impl MeetingView {
     }
 
     fn delete(&mut self, cx: &mut Context<Self>) {
+        // The app asks for confirmation (and whether to delete the audio).
         self.player = None;
-        match Store::open(&paths::database()).and_then(|s| s.delete(self.id)) {
-            Ok(_) => cx.emit(MeetingEvent::Deleted),
-            Err(e) => self.error = Some(format!("{e:#}").into()),
-        }
+        cx.emit(MeetingEvent::RequestDelete(self.id));
         cx.notify();
     }
 
@@ -417,27 +415,14 @@ impl MeetingView {
                                 .on_click(cx.listener(|this, _, _, cx| this.play_from(0.0, cx))),
                         )
                     })
-                    .child(if self.confirm_delete {
-                        h_flex()
-                            .gap_1()
-                            .child(Button::new("del-yes").small().danger().label(tr("Wirklich löschen")).on_click(cx.listener(|this, _, _, cx| this.delete(cx))))
-                            .child(Button::new("del-no").small().ghost().label(tr("Abbrechen")).on_click(cx.listener(|this, _, _, cx| {
-                                this.confirm_delete = false;
-                                cx.notify();
-                            })))
-                            .into_any_element()
-                    } else {
+                    .child(
                         Button::new("delete")
                             .small()
                             .ghost()
                             .icon(IconName::Trash)
-                            .tooltip(tr("Aus der Bibliothek entfernen (Audiodateien bleiben erhalten)"))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.confirm_delete = true;
-                                cx.notify();
-                            }))
-                            .into_any_element()
-                    }),
+                            .tooltip(tr("Löschen…"))
+                            .on_click(cx.listener(|this, _, _, cx| this.delete(cx))),
+                    )
             )
     }
 

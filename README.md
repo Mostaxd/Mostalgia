@@ -100,6 +100,24 @@ To get it in the GNOME app grid: copy `target/release/mostalgia-app` to
   one-click GNOME shortcut setup. Stored in `~/.config/mostalgia/config.json`, which the CLI also
   reads for the VAD sensitivity.
 
+### Managing meetings
+
+Right-click a meeting in the sidebar: **Rename**, **Export** (Markdown,
+text, SRT, Word) or **Delete…**. Ctrl-click / Shift-click selects several,
+and the Delete key deletes the selection. Deleting asks first and removes,
+in one transaction, the meeting, its transcript and keyword index rows, the
+summary, bookmarks, speaker names and the "Ask" passages and vectors — and
+by default its audio files (untick "Also delete the audio files" to keep
+them). `mostalgia delete <id> [--keep-audio]` does the same.
+
+![Delete](docs/screenshots/delete-dialog-en.png)
+
+### Language
+
+Einstellungen → Darstellung → "Sprache der App": System, Deutsch or
+English, switched live. Summaries and transcripts stay in the meeting's own
+language.
+
 ### Tray, shortcut, export
 
 - **Tray icon**: start/stop recording, show the window, quit. GNOME needs
