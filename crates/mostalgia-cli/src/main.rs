@@ -177,6 +177,17 @@ enum Command {
     Toggle,
     /// Bring the desktop app to the front (launching it if needed)
     Open,
+    /// Ask a question about your meetings; answers cite the moments they come from
+    Ask {
+        /// The question, e.g. "Was haben wir über das Budget entschieden?"
+        #[arg(required = true)]
+        question: Vec<String>,
+    },
+    /// Rebuild the search index used by `ask` (only new/changed meetings unless --all)
+    Reindex {
+        #[arg(long)]
+        all: bool,
+    },
     /// List the models a summary provider offers (live, with thinking levels)
     Models {
         /// claude or deepseek
@@ -296,7 +307,9 @@ fn main() -> Result<()> {
         Command::Search { query, limit } => search(&query.join(" "), limit),
         Command::Summarize { id, choice } => {
             let store = open_store()?;
-            summarize(&store, id, &choice.request()?, true)
+            summarize(&store, id, &choice.request()?, true)?;
+            index_for_ask(id);
+            Ok(())
         }
         Command::Export { id, format, output } => export(id, format.as_deref(), output),
         Command::Delete { id } => {
@@ -308,6 +321,8 @@ fn main() -> Result<()> {
         Command::Open => control("show", &[]),
         Command::SetApiKey { provider } => set_api_key(&provider),
         Command::Models { provider } => list_models(&provider),
+        Command::Ask { question } => ask(&question.join(" ")),
+        Command::Reindex { all } => reindex(all),
         Command::Devices => list_devices(),
         Command::Transcribe { file, models } => transcribe_file(&file, &models),
     }
@@ -436,6 +451,7 @@ fn finish(engine: &mut Engine, models: &ModelArgs, sum: &SummaryArgs, rec: &Reco
             eprintln!("[mostalgia] summary skipped: {e:#}");
         }
     }
+    index_for_ask(id);
     println!("\nSaved as meeting #{id} — `mostalgia show {id}` to view it again.");
     Ok(())
 }
@@ -612,6 +628,87 @@ fn control(cmd: &str, launch_args: &[&str]) -> Result<()> {
         .stderr(std::process::Stdio::null())
         .spawn()
         .with_context(|| format!("starting {}", app.display()))?;
+    Ok(())
+}
+
+/// Updates the `ask` index for a meeting; failures only warn.
+fn index_for_ask(id: i64) {
+    let t = std::time::Instant::now();
+    match mostalgia_core::ask::index_meeting(id) {
+        Ok(n) => eprintln!("[mostalgia] search index: {n} passages in {:.2} s", t.elapsed().as_secs_f64()),
+        Err(e) => eprintln!("[mostalgia] search index not updated: {e:#}"),
+    }
+}
+
+fn reindex(all: bool) -> Result<()> {
+    use mostalgia_core::ask;
+    if !ask::embed::available() {
+        eprintln!("[mostalgia] embedding model missing (scripts/download-model.sh) — keyword search only");
+    }
+    let t = std::time::Instant::now();
+    let n = if all {
+        let ids: Vec<i64> = open_store()?.list(100_000)?.into_iter().map(|m| m.id).collect();
+        for id in &ids {
+            ask::index_meeting(*id)?;
+        }
+        ids.len()
+    } else {
+        ask::index_pending()?
+    };
+    println!("Indexed {n} meeting(s) in {:.2} s.", t.elapsed().as_secs_f64());
+    Ok(())
+}
+
+fn ask(question: &str) -> Result<()> {
+    use mostalgia_core::ask::{self, AskEvent, Piece};
+    // Bring the index up to date first (cheap when nothing changed).
+    if let Err(e) = ask::index_pending() {
+        eprintln!("[mostalgia] search index: {e:#}");
+    }
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let q = question.to_string();
+    let worker = std::thread::spawn(move || ask::ask(&q, &[], &tx));
+    // The answer is printed whole at the end, with readable citations
+    // instead of the raw markers it streams with.
+    let mut writing = false;
+    for ev in rx {
+        match ev {
+            AskEvent::Status(s) => eprintln!("[mostalgia] {s}"),
+            AskEvent::TextDelta(_) => {
+                if !writing {
+                    eprintln!("[mostalgia] Antwort wird geschrieben …");
+                    writing = true;
+                }
+            }
+            AskEvent::ClearText => writing = false,
+            AskEvent::Done { answer, citations } => {
+                println!();
+                let text: String = ask::parse_answer(&answer)
+                    .into_iter()
+                    .map(|p| match p {
+                        Piece::Text(t) => t,
+                        Piece::Cite(c) => format!("[{}]", c.label),
+                    })
+                    .collect();
+                println!("{text}");
+                if !citations.is_empty() {
+                    println!("\nQuellen:");
+                    let mut seen = Vec::new();
+                    for c in citations {
+                        if !seen.contains(&c.label) {
+                            println!("  [{}]  →  mostalgia show {}", c.label, c.meeting_id);
+                            seen.push(c.label);
+                        }
+                    }
+                }
+            }
+            AskEvent::Error(e) => {
+                let _ = worker.join();
+                anyhow::bail!(e);
+            }
+        }
+    }
+    let _ = worker.join();
     Ok(())
 }
 

@@ -138,6 +138,10 @@ impl MeetingView {
             if let Some(title) = &s.title {
                 store.set_title(id, title)?;
             }
+            // Summary sections become searchable too.
+            if let Err(e) = mostalgia_core::ask::index_meeting(id) {
+                eprintln!("[mostalgia] search index: {e:#}");
+            }
             anyhow::Ok(())
         });
         cx.spawn(async move |this, cx| {

@@ -94,7 +94,7 @@ pub struct NewMeeting<'a> {
     pub dir: &'a Path,
 }
 
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 4;
 
 const SCHEMA: &str = "
 CREATE TABLE meetings (
@@ -149,6 +149,32 @@ const MIGRATIONS: &[&str] = &[
     // 3: which provider and thinking level produced a summary
     "ALTER TABLE summaries ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude';
      ALTER TABLE summaries ADD COLUMN effort TEXT;",
+    // 4: "ask your meetings" — searchable passages (transcript windows,
+    // summary sections) with embeddings, and what was indexed when.
+    "CREATE TABLE passages (
+        id         INTEGER PRIMARY KEY,
+        meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        kind       TEXT NOT NULL,
+        start_secs REAL NOT NULL,
+        end_secs   REAL NOT NULL,
+        text       TEXT NOT NULL,
+        embedding  BLOB
+    );
+    CREATE INDEX passages_meeting ON passages(meeting_id);
+    CREATE VIRTUAL TABLE passages_fts USING fts5(
+        text, content='passages', content_rowid='id',
+        tokenize='unicode61 remove_diacritics 2'
+    );
+    CREATE TRIGGER passages_ai AFTER INSERT ON passages BEGIN
+        INSERT INTO passages_fts(rowid, text) VALUES (new.id, new.text);
+    END;
+    CREATE TRIGGER passages_ad AFTER DELETE ON passages BEGIN
+        INSERT INTO passages_fts(passages_fts, rowid, text) VALUES ('delete', old.id, old.text);
+    END;
+    CREATE TABLE index_state (
+        meeting_id  INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,
+        fingerprint TEXT NOT NULL
+    );",
 ];
 
 fn local(ts: i64) -> DateTime<Local> {
@@ -160,6 +186,15 @@ fn source_of(s: String) -> rusqlite::Result<Source> {
 }
 
 impl Store {
+    /// Direct access for the search index (`crate::ask`).
+    pub(crate) fn conn(&self) -> &Connection {
+        &self.conn
+    }
+
+    pub(crate) fn conn_mut(&mut self) -> &mut Connection {
+        &mut self.conn
+    }
+
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).context("creating data directory")?;

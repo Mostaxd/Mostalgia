@@ -1,6 +1,8 @@
 //! mostalgia desktop app: library, live recording, meeting detail, settings.
 
 pub mod app;
+pub mod ask_view;
+pub mod autostart;
 pub mod control;
 pub mod meeting;
 pub mod recording;

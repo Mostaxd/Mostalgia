@@ -2,7 +2,9 @@
 //! meeting storage and summaries. Front ends (the CLI, later the desktop
 //! app) drive a [`recorder::Recorder`] and consume its [`recorder::Event`]s.
 
+pub mod ask;
 pub mod audio;
+pub mod callwatch;
 pub mod chunker;
 pub mod config;
 pub mod denoise;

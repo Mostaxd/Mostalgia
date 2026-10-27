@@ -376,6 +376,9 @@ impl RecordingView {
                     &segments,
                 )?;
                 store.add_bookmarks(id, &bookmarks)?;
+                if let Err(e) = mostalgia_core::ask::index_meeting(id) {
+                    eprintln!("[mostalgia] search index: {e:#}");
+                }
                 Ok(id)
             })();
             *engine_slot.lock().unwrap() = Some(engine);

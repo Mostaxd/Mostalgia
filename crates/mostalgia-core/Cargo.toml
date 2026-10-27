@@ -6,6 +6,9 @@ edition.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
+candle-core = "0.11"
+candle-nn = "0.11"
+candle-transformers = "0.11"
 chrono = "0.4.45"
 crossbeam-channel = "0.5.17"
 dirs = "7.0.0"
@@ -21,6 +24,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sherpa-rs = { version = "0.6.8", default-features = false, features = ["download-binaries"], optional = true }
 sherpa-rs-sys = { version = "0.6.8", default-features = false, features = ["download-binaries"], optional = true }
+tokenizers = { version = "0.23.2", default-features = false, features = ["onig"] }
 whisper-rs = "0.16.0"
 whisper-rs-sys = "0.15.0"
 

@@ -15,6 +15,12 @@ fn main() {
     let out = std::path::PathBuf::from(args.next().unwrap_or_else(|| "screenshots".into()));
     let meeting: Option<i64> = args.next().and_then(|s| s.parse().ok());
     std::fs::create_dir_all(&out).unwrap();
+    // No background index backfill: this process exits right after the shots.
+    // SAFETY: set before any other thread starts.
+    unsafe { std::env::set_var("MOSTALGIA_NO_BACKFILL", "1") };
+    // No call watching / notifications from offscreen windows.
+    // SAFETY: set before any other thread starts.
+    unsafe { std::env::set_var("MOSTALGIA_NO_CALLWATCH", "1") };
 
     let mut cx = HeadlessAppContext::with_platform(
         gpui_platform::current_platform(true).text_system(),
@@ -151,5 +157,22 @@ fn main() {
         .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(300));
         shot("6-settings", &mut cx);
+
+        // "Fragen" with a finished answer (no API call).
+        cx.update_window(handle, |_, window, cx| {
+            view.update(cx, |app, cx| app.open_ask(window, cx));
+            if let Some(a) = view.read(cx).ask_view() {
+                a.update(cx, |a, cx| {
+                    a.demo(
+                        "Was wurde über die Marketingausgaben entschieden?",
+                        "Die Marketingausgaben werden bis Ende Juni eingefroren [[m:1@13]]. Grund: Das Budget liegt etwa zehn Prozent unter Plan, vor allem wegen der Messe [[m:1@6]].\n- Vorschlag kam von Sprecher 1, Sprecher 2 stimmte zu [[m:1@19]].\n- Eine neue Prognose wird an alle verschickt; die Frist ist im Transkript unklar [[m:1@19]].",
+                        cx,
+                    )
+                });
+            }
+        })
+        .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        shot("9-ask", &mut cx);
     }
 }

@@ -17,8 +17,11 @@ use crate::recording::{RecordingEvent, RecordingView, SharedEngine};
 use crate::settings::{SettingsEvent, SettingsView};
 use crate::{control, ui};
 
+actions!(mostalgia, [OpenAsk]);
+
 enum Screen {
     Recording,
+    Ask(Entity<crate::ask_view::AskView>),
     Meeting(Entity<MeetingView>),
     Settings(Entity<SettingsView>),
 }
@@ -33,6 +36,10 @@ pub struct MostalgiaApp {
     hits: Vec<SearchHit>,
     error: Option<SharedString>,
     tray: Option<ksni::blocking::Handle<control::Tray>>,
+    /// "Fragen" screen, kept so the conversation survives switching away.
+    ask_view: Option<Entity<crate::ask_view::AskView>>,
+    /// Notices calls and offers / starts recordings for them.
+    autostart: crate::autostart::AutoStart,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -69,11 +76,66 @@ impl MostalgiaApp {
             hits: Vec::new(),
             error: None,
             tray: None,
+            ask_view: None,
+            autostart: crate::autostart::AutoStart::new(),
             _subscriptions: subs,
         };
         this.reload(cx);
         this.start_control(window, cx);
+        // Bring the "ask your meetings" index up to date in the background.
+        // It's cancelled and joined on quit: exiting while the embedding
+        // model is mid-run crashes in native teardown.
+        if std::env::var_os("MOSTALGIA_NO_BACKFILL").is_none() {
+            let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let worker = {
+                let cancel = cancel.clone();
+                std::thread::spawn(move || {
+                    if let Err(e) = mostalgia_core::ask::index_pending_until(&cancel) {
+                        eprintln!("[mostalgia] search index: {e:#}");
+                    }
+                })
+            };
+            let worker = Mutex::new(Some(worker));
+            cx.on_app_quit(move |_, _| {
+                cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                if let Some(w) = worker.lock().unwrap().take() {
+                    let _ = w.join();
+                }
+                async {}
+            })
+            .detach();
+        }
         this
+    }
+
+    #[doc(hidden)]
+    pub fn ask_view(&self) -> Option<Entity<crate::ask_view::AskView>> {
+        self.ask_view.clone()
+    }
+
+    /// Opens the "Fragen" screen (Ctrl+K), keeping an earlier conversation.
+    pub fn open_ask(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let view = match &self.ask_view {
+            Some(v) => v.clone(),
+            None => {
+                let v = cx.new(|cx| crate::ask_view::AskView::new(window, cx));
+                let sub = cx.subscribe_in(&v, window, |this, _, event: &crate::ask_view::AskViewEvent, window, cx| {
+                    let crate::ask_view::AskViewEvent::OpenCitation { meeting_id, secs } = event;
+                    this.open_meeting(*meeting_id, window, cx);
+                    if let Some(m) = this.meeting_view() {
+                        let secs = *secs;
+                        m.update(cx, |m, cx| m.jump_to(secs, cx));
+                    }
+                });
+                self._subscriptions.push(sub);
+                self.ask_view = Some(v.clone());
+                v
+            }
+        };
+        let focus = view.read(cx).focus_handle(cx);
+        focus.focus(window, cx);
+        self.screen = Screen::Ask(view);
+        cx.notify();
     }
 
     /// The control socket (`mostalgia toggle`) and the tray icon.
@@ -98,6 +160,7 @@ impl MostalgiaApp {
                         for cmd in commands {
                             this.handle_command(cmd, window, cx);
                         }
+                        this.autostart_tick(cx);
                         let recording = this.recording.read(cx).is_recording();
                         if recording != was_recording {
                             was_recording = recording;
@@ -127,6 +190,60 @@ impl MostalgiaApp {
             Command::Quit => cx.quit(),
             _ => {}
         }
+    }
+
+    fn autostart_tick(&mut self, cx: &mut Context<Self>) {
+        let active = self.recording.read(cx).is_active();
+        for action in self.autostart.tick(active) {
+            self.apply_autostart(action, cx);
+        }
+        if self.autostart.prompt.is_some() {
+            cx.notify();
+        }
+    }
+
+    fn apply_autostart(&mut self, action: crate::autostart::Action, cx: &mut Context<Self>) {
+        match action {
+            crate::autostart::Action::Start(_) if !self.recording.read(cx).is_active() => self.start_recording(cx),
+            crate::autostart::Action::Stop if self.recording.read(cx).is_recording() => {
+                self.recording.update(cx, |r, cx| r.stop(cx))
+            }
+            _ => {}
+        }
+    }
+
+    /// "Anruf erkannt" bar above the content while asking whether to record.
+    fn render_call_prompt(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let app = self.autostart.prompt.clone()?;
+        let theme = cx.theme();
+        Some(
+            h_flex()
+                .px_4()
+                .py_2()
+                .gap_3()
+                .bg(theme.primary.opacity(0.12))
+                .border_b_1()
+                .border_color(theme.border)
+                .child(Icon::new(IconName::Mic).small().text_color(theme.primary))
+                .child(div().flex_1().text_sm().child(format!("Anruf in {app} erkannt – aufnehmen?")))
+                .child(
+                    Button::new("call-record")
+                        .small()
+                        .primary()
+                        .label("Aufnahme starten")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(action) = this.autostart.accept() {
+                                this.apply_autostart(action, cx);
+                            }
+                            cx.notify();
+                        })),
+                )
+                .child(Button::new("call-ignore").small().ghost().label("Ignorieren").on_click(cx.listener(|this, _, _, cx| {
+                    this.autostart.dismiss();
+                    cx.notify();
+                })))
+                .into_any_element(),
+        )
     }
 
     /// Switches to the recording screen and starts recording.
@@ -360,6 +477,16 @@ impl MostalgiaApp {
                     .gap_3()
                     .child(record_button.when(on_record_screen && !is_recording, |b| b.outline()))
                     .child(
+                        Button::new("ask")
+                            .w_full()
+                            .ghost()
+                            .when(matches!(self.screen, Screen::Ask(_)), |b| b.selected(true))
+                            .icon(IconName::Sparkles)
+                            .label("Fragen")
+                            .tooltip("Frag deine Besprechungen (Strg+K)")
+                            .on_click(cx.listener(|this, _, window, cx| this.open_ask(window, cx))),
+                    )
+                    .child(
                         Input::new(&self.search)
                             .small()
                             .prefix(Icon::new(IconName::Search).small().text_color(theme.muted_foreground))
@@ -395,10 +522,12 @@ impl MostalgiaApp {
 impl Render for MostalgiaApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let sidebar = self.render_sidebar(cx);
+        let call_prompt = self.render_call_prompt(cx);
         let content: AnyView = match &self.screen {
             Screen::Recording => self.recording.clone().into(),
             Screen::Meeting(v) => v.clone().into(),
             Screen::Settings(v) => v.clone().into(),
+            Screen::Ask(v) => v.clone().into(),
         };
         let theme = cx.theme();
         v_flex()
@@ -406,6 +535,7 @@ impl Render for MostalgiaApp {
             .bg(theme.background)
             .text_color(theme.foreground)
             .font(ui::ui_font(cx))
+            .on_action(cx.listener(|this, _: &OpenAsk, window, cx| this.open_ask(window, cx)))
             .child(
                 TitleBar::new().child(
                     h_flex()
@@ -416,6 +546,7 @@ impl Render for MostalgiaApp {
                         .child("mostalgia"),
                 ),
             )
+            .children(call_prompt)
             .child(h_flex().flex_1().min_h_0().child(sidebar).child(div().flex_1().min_w_0().h_full().child(content)))
     }
 }

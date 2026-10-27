@@ -750,6 +750,79 @@ impl Render for SettingsView {
             element: recognition.into_any_element(),
         });
 
+        // Auto-start with calls.
+        let mode = self.config.call_autostart.clone();
+        let mode_button = |id: &'static str, label: &'static str, value: &'static str, cx: &mut Context<Self>| {
+            Button::new(id)
+                .small()
+                .label(label)
+                .when(mode == value, |b| b.primary())
+                .when(mode != value, |b| b.ghost())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.config.call_autostart = value.into();
+                    this.save(cx);
+                }))
+        };
+        let mut app_rows: Vec<AnyElement> = Vec::new();
+        for (i, app) in self.config.call_apps_seen.clone().into_iter().enumerate() {
+            let watched = !self.config.call_apps_ignored.contains(&app);
+            let name = app.clone();
+            app_rows.push(row(
+                &app,
+                None,
+                Switch::new(SharedString::from(format!("call-app-{i}")))
+                    .checked(watched)
+                    .on_change(cx.listener(move |this, on: &bool, _, cx| {
+                        this.config.call_apps_ignored.retain(|a| a != &name);
+                        if !*on {
+                            this.config.call_apps_ignored.push(name.clone());
+                        }
+                        this.save(cx);
+                    }))
+                    .into_any_element(),
+            ).into_any_element());
+        }
+        let calls = ui::card(cx)
+            .child(title("Anrufe erkennen"))
+            .child(div().text_sm().text_color(theme.muted_foreground).child(
+                "Bemerkt, wenn Zoom, Teams, Meet im Browser, Discord & Co. das Mikrofon benutzen.",
+            ))
+            .child(row(
+                "Bei einem Anruf",
+                None,
+                h_flex()
+                    .gap_1()
+                    .child(mode_button("call-off", "Aus", "aus", cx))
+                    .child(mode_button("call-ask", "Fragen", "fragen", cx))
+                    .child(mode_button("call-auto", "Automatisch", "automatisch", cx))
+                    .into_any_element(),
+            ))
+            .child(row(
+                "Automatisch beenden, wenn der Anruf endet",
+                Some("Nur für Aufnahmen, die durch einen Anruf gestartet wurden."),
+                switch("call-stop", self.config.call_stop_auto, cx, |c, v| c.call_stop_auto = v),
+            ))
+            .child(if app_rows.is_empty() {
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("Erkannte Apps erscheinen hier nach dem ersten Anruf – einzeln abschaltbar.")
+                    .into_any_element()
+            } else {
+                v_flex()
+                    .gap_2()
+                    .child(div().text_xs().font_semibold().text_color(theme.muted_foreground).child("ERKANNTE APPS"))
+                    .children(app_rows)
+                    .into_any_element()
+            });
+        cards.push(Card {
+            category: Category::Aufnahme,
+            title: "Anrufe erkennen",
+            keywords: "anruf anrufe call zoom teams meet discord slack auto start automatisch aufnahme starten erkennen",
+            wide: false,
+            element: calls.into_any_element(),
+        });
+
         // ── Sprecher ──
         let diarize_ok = mostalgia_core::diarize::available();
         let dt = self.config.diarize_threshold;

@@ -9,7 +9,10 @@ fn main() {
         gpui_kit::init(cx);
         load_fonts(cx);
 
-        cx.bind_keys([KeyBinding::new("ctrl-q", Quit, None)]);
+        cx.bind_keys([
+            KeyBinding::new("ctrl-q", Quit, None),
+            KeyBinding::new("ctrl-k", app::OpenAsk, None),
+        ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
 
         let options = WindowOptions {

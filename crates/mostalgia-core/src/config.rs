@@ -34,6 +34,15 @@ pub struct Config {
     pub diarize_threshold: f32,
     /// Last category open in the app's settings.
     pub settings_category: String,
+    /// When a call app starts using the mic: "aus", "fragen" (notify and
+    /// offer to record) or "automatisch" (start recording).
+    pub call_autostart: String,
+    /// Stop a recording once the call that started it ends.
+    pub call_stop_auto: bool,
+    /// Call apps seen so far (labels like "Zoom"), for the settings list.
+    pub call_apps_seen: Vec<String>,
+    /// Call apps that never trigger auto-start.
+    pub call_apps_ignored: Vec<String>,
     /// Summary provider.
     pub summary_provider: crate::summary::Provider,
     /// Model for summaries (an id of the chosen provider).
@@ -48,6 +57,8 @@ pub struct Config {
     pub font: String,
     /// Fewer and shorter animations.
     pub reduce_motion: bool,
+    /// Thinking level for "ask your meetings" answers (where supported).
+    pub ask_effort: String,
 }
 
 impl Default for Config {
@@ -66,6 +77,10 @@ impl Default for Config {
             interim_text: true,
             diarize_threshold: 0.5,
             settings_category: String::new(),
+            call_autostart: "fragen".into(),
+            call_stop_auto: true,
+            call_apps_seen: Vec::new(),
+            call_apps_ignored: Vec::new(),
             summary_provider: crate::summary::Provider::Claude,
             summary_model: crate::summary::DEFAULT_MODEL.into(),
             summary_effort: crate::summary::DEFAULT_EFFORT.into(),
@@ -73,6 +88,7 @@ impl Default for Config {
             theme: "system".into(),
             font: String::new(),
             reduce_motion: false,
+            ask_effort: "medium".into(),
         }
     }
 }

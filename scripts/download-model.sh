@@ -35,5 +35,16 @@ if [[ ! -s "$DEST/pyannote-segmentation-3.0.onnx" ]]; then
   mv "$tmp"/sherpa-onnx-pyannote-segmentation-3-0/model.onnx "$DEST/pyannote-segmentation-3.0.onnx"
   rm -rf "$tmp"
 fi
+# "Ask your meetings": multilingual-e5-small sentence embeddings (~490 MB).
+mkdir -p "$DEST/e5-small"
+for f in model.safetensors tokenizer.json config.json; do
+  if [[ -s "$DEST/e5-small/$f" ]]; then
+    echo "$DEST/e5-small/$f already present, skipping"
+  else
+    echo "Downloading e5-small/$f …"
+    curl -fL --progress-bar -o "$DEST/e5-small/$f.part" "https://huggingface.co/intfloat/multilingual-e5-small/resolve/main/$f"
+    mv "$DEST/e5-small/$f.part" "$DEST/e5-small/$f"
+  fi
+done
 rmdir models 2>/dev/null || true
 echo "Done: models are in $DEST"

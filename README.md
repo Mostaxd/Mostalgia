@@ -261,6 +261,47 @@ Quick no-code check that monitor capture works on your system:
 parec -d @DEFAULT_MONITOR@ | aplay
 ```
 
+## Ask your meetings
+
+"Fragen" in the sidebar (Ctrl+K), or `mostalgia ask "Was haben wir über das Budget entschieden?"`:
+Claude answers questions across all your meetings, with a clickable source
+for every claim (opens the meeting at that line and plays from there), and
+says so when the transcripts don't contain the answer.
+
+![Ask your meetings](docs/screenshots/ask-hell.png)
+
+- **Search (local):** transcripts are split into ~90 s passages (15 s
+  overlap) plus summary sections and action items, and indexed two ways —
+  SQLite FTS5 (BM25) and multilingual-e5-small embeddings (candle, CPU) —
+  merged with Reciprocal Rank Fusion (k=60), top 15. Date/meeting filters run
+  in SQL first. Without the embedding model it falls back to BM25 only.
+- **Answering:** Claude with three tools (search_meetings, list_meetings,
+  read_transcript), up to 6 rounds, streamed; thinking level `ask_effort`
+  (default medium). DeepSeek via its tool-calling API (untested). Only the
+  passages Claude looks up are sent — never audio or the whole library.
+- **Indexing:** after each final pass and summary, plus a one-time
+  background backfill; `mostalgia reindex [--all]`.
+- **Measured** (Core Ultra 7 255HX): indexing ~30–150 ms per passage (a whole
+  8-meeting library in 3.7 s), search 23–30 ms, answers ~5 s with Opus 5.5 at
+  medium.
+
+The e5 model (~490 MB) comes with `scripts/download-model.sh`.
+
+## Auto-start with calls
+
+mostalgia notices when a call app starts using the microphone and offers to
+record — Einstellungen → Aufnahme → "Anrufe erkennen": **Aus**, **Fragen**
+(in-app banner + desktop notification with "Aufnahme starten"; default) or
+**Automatisch** (starts right away). When the call's mic stream has been gone
+for 10 s, a recording that auto-start began is stopped and saved.
+
+Recognised: Zoom, Teams, Discord, Slack, Signal, Element, Jitsi, Skype,
+Webex, Telegram, WhatsApp, and any microphone capture in Chrome/Chromium/
+Brave/Edge/Vivaldi/Opera/Firefox (Meet, Teams web, …). Apps can be ignored
+individually; mostalgia's own streams and desktop-audio captures never count.
+Detection polls PipeWire's Pulse interface once a second: a call is seen
+within ~1 s.
+
 ## Telling speakers apart (optional)
 
 `--diarize` (or "Mehrere Sprecher unterscheiden" in the app's settings)
