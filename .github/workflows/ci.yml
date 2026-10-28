@@ -27,7 +27,12 @@ jobs:
           sudo apt-get install -y build-essential cmake clang pkg-config libpulse-dev \
             libvulkan-dev glslc libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev \
             libxcb1-dev libfontconfig-dev libfreetype-dev libasound2-dev libzstd-dev
+      # sherpa-onnx's libraries are downloaded by its build script into the
+      # user cache; cache them with target/, or a restored build links to nothing.
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: sherpa
+          cache-directories: ~/.cache/sherpa-rs
       - run: cargo build --workspace --all-targets
       - run: cargo test --workspace
 
@@ -37,6 +42,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: sherpa
+          cache-directories: ~/AppData/Local/sherpa-rs
       # CMake and LLVM (for whisper.cpp and its bindings) come with the runner.
       - run: cargo build --workspace --all-targets
       - run: cargo test --workspace
