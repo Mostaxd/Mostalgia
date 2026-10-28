@@ -327,7 +327,9 @@ Brand, icon and palette: see [`assets/brand/BRANDING.md`](assets/brand/BRANDING.
 
 ## Contributing
 
-Bug reports, ideas and pull requests are welcome. See
+Questions, ideas and setups to show off go to
+[Discussions](https://github.com/Mostaxd/Mostalgia/discussions); bug reports
+and pull requests are welcome too. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test and open a pull
 request, and the [Code of Conduct](CODE_OF_CONDUCT.md) for how we treat each other.
 To report a security problem privately, see [SECURITY.md](SECURITY.md).

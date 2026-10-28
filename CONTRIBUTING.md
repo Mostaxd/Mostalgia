@@ -1,7 +1,9 @@
 # Contributing to Mostalgia
 
 Thanks for wanting to help! Bug reports, ideas, translations, themes and code
-are all welcome. If you're new, look for issues labelled
+are all welcome. Questions and early ideas are best in
+[Discussions](https://github.com/Mostaxd/Mostalgia/discussions); issues are
+for bugs and concrete tasks. If you're new, look for issues labelled
 [`good first issue`](https://github.com/Mostaxd/Mostalgia/labels/good%20first%20issue).
 
 Please read the [Code of Conduct](CODE_OF_CONDUCT.md) before you join in.
