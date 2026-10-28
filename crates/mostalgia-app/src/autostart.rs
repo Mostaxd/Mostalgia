@@ -148,6 +148,7 @@ fn notify(summary: &str, body: &str, action: Option<(String, crossbeam_channel::
     });
 }
 
+#[cfg(target_os = "linux")]
 fn send_notification(summary: &str, body: &str, action: Option<(String, crossbeam_channel::Sender<String>)>) -> zbus::Result<()> {
     use std::collections::HashMap;
     let conn = zbus::blocking::Connection::session()?;
@@ -191,4 +192,9 @@ fn send_notification(summary: &str, body: &str, action: Option<(String, crossbea
         }
     }
     Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn send_notification(_summary: &str, _body: &str, _action: Option<(String, crossbeam_channel::Sender<String>)>) -> anyhow::Result<()> {
+    anyhow::bail!("desktop notifications are not available on this system yet")
 }

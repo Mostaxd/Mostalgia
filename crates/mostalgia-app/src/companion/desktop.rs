@@ -187,7 +187,10 @@ pub(crate) fn send(msg: &FromMori) {
 pub fn run(demo: bool) {
     // XWayland, not Wayland: only X11 windows may stay on top and be
     // placed on GNOME.
+    #[cfg(target_os = "linux")]
     let env = GraphicalEnvironment { wayland_display: None, ..GraphicalEnvironment::detect() };
+    #[cfg(not(target_os = "linux"))]
+    let env = GraphicalEnvironment::detect();
     let rx = spawn_stdin_reader(demo);
     gpui_kit::application().with_assets(AppAssets).with_windowing(WindowingRequest::Windowed(env)).run(move |cx: &mut App| {
         gpui_kit::init(cx);

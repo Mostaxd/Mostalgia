@@ -1,4 +1,6 @@
+#[cfg(target_os = "linux")]
 use std::fs::File;
+#[cfg(target_os = "linux")]
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -6,12 +8,18 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 
 use anyhow::{Context, Result};
+#[cfg(target_os = "linux")]
 use libpulse_binding::def::BufferAttr;
+#[cfg(target_os = "linux")]
 use libpulse_binding::sample::{Format, Spec};
+#[cfg(target_os = "linux")]
 use libpulse_binding::stream::Direction;
+#[cfg(target_os = "linux")]
 use libpulse_simple_binding::Simple;
 
-use crate::{BLOCK_SAMPLES, SAMPLE_RATE};
+#[cfg(target_os = "linux")]
+use crate::BLOCK_SAMPLES;
+use crate::SAMPLE_RATE;
 
 /// Plays a meeting's tracks mixed together from a given time, on the
 /// default output. Dropping it stops playback.
@@ -25,6 +33,7 @@ pub struct Player {
 }
 
 impl Player {
+    #[cfg(target_os = "linux")]
     pub fn play(tracks: &[PathBuf], from_secs: f64) -> Result<Self> {
         let start = (from_secs.max(0.0) * SAMPLE_RATE as f64) as u32;
         let mut readers = Vec::new();
@@ -77,6 +86,11 @@ impl Player {
         })
     }
 
+    #[cfg(not(target_os = "linux"))]
+    pub fn play(_tracks: &[PathBuf], _from_secs: f64) -> Result<Self> {
+        anyhow::bail!("{}", crate::i18n::tr("Wiedergabe ist auf diesem System noch nicht verfügbar"))
+    }
+
     /// Current playback position in seconds from the recording start.
     pub fn position_secs(&self) -> f64 {
         self.from_secs + self.played.load(Ordering::Relaxed) as f64 / SAMPLE_RATE as f64
@@ -96,6 +110,7 @@ impl Drop for Player {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn play_loop(
     pulse: &Simple,
     mut readers: Vec<hound::WavReader<BufReader<File>>>,

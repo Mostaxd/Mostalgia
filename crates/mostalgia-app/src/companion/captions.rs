@@ -45,7 +45,10 @@ pub fn next_opacity(now: f32) -> f32 {
 
 /// Entry point of `mostalgia-app --captions [--demo]`.
 pub fn run(demo: bool) {
+    #[cfg(target_os = "linux")]
     let env = GraphicalEnvironment { wayland_display: None, ..GraphicalEnvironment::detect() };
+    #[cfg(not(target_os = "linux"))]
+    let env = GraphicalEnvironment::detect();
     let rx = spawn_stdin_reader(demo);
     gpui_kit::application().with_assets(AppAssets).with_windowing(WindowingRequest::Windowed(env)).run(move |cx: &mut App| {
         gpui_kit::init(cx);

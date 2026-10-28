@@ -43,7 +43,7 @@ pub struct MostalgiaApp {
     query: String,
     hits: Vec<SearchHit>,
     error: Option<SharedString>,
-    tray: Option<ksni::blocking::Handle<control::Tray>>,
+    tray: Option<control::TrayHandle>,
     /// "Fragen" screen, kept so the conversation survives switching away.
     ask_view: Option<Entity<crate::ask_view::AskView>>,
     /// "Dokumente" screen, kept like the ask view.
@@ -386,12 +386,11 @@ impl MostalgiaApp {
 
     /// The control socket (`mostalgia toggle`) and the tray icon.
     fn start_control(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use ksni::blocking::TrayMethods;
         let (tx, rx) = std::sync::mpsc::channel();
         if let Err(e) = control::listen(tx.clone()) {
             eprintln!("[mostalgia] control socket: {e}");
         }
-        match (control::Tray { tx, recording: false, mic_on: false }).spawn() {
+        match control::TrayHandle::spawn(control::Tray { tx, recording: false, mic_on: false }) {
             Ok(handle) => self.tray = Some(handle),
             Err(e) => eprintln!("[mostalgia] tray icon unavailable: {e}"),
         }
@@ -413,7 +412,7 @@ impl MostalgiaApp {
                         if state != was_recording {
                             was_recording = state;
                             if let Some(tray) = &this.tray {
-                                tray.update(|t| (t.recording, t.mic_on) = state);
+                                tray.set_state(state.0, state.1);
                             }
                         }
                     })

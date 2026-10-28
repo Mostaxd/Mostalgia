@@ -1015,6 +1015,8 @@ mod tests {
 
         assert!(store.delete(id2)?);
         assert!(store.list(10)?.is_empty());
+        // Closed first: Windows can't delete an open database.
+        drop(store);
         std::fs::remove_file(&path)?;
         Ok(())
     }
@@ -1049,6 +1051,8 @@ mod tests {
         store.insert_meeting(&new("/tmp/notes-b"), &[])?;
         let all: i64 = store.conn.query_row("SELECT COUNT(*) FROM notes", [], |r| r.get(0))?;
         assert_eq!(all, 0);
+        // Closed first: Windows can't delete an open database.
+        drop(store);
         std::fs::remove_file(&path)?;
         Ok(())
     }
@@ -1099,6 +1103,8 @@ mod tests {
         let left: i64 = store.conn.query_row("SELECT COUNT(*) FROM notes", [], |r| r.get(0))?;
         let versions: i64 = store.conn.query_row("SELECT COUNT(*) FROM note_versions", [], |r| r.get(0))?;
         assert_eq!((left, versions), (0, 0));
+        // Closed first: Windows can't delete an open database.
+        drop(store);
         std::fs::remove_file(&path)?;
         Ok(())
     }
@@ -1125,6 +1131,8 @@ mod tests {
         store.insert_meeting(&new("/tmp/chat-b"), &[])?;
         let all: i64 = store.conn.query_row("SELECT COUNT(*) FROM companion_chat", [], |r| r.get(0))?;
         assert_eq!(all, 0);
+        // Closed first: Windows can't delete an open database.
+        drop(store);
         std::fs::remove_file(&path)?;
         Ok(())
     }
@@ -1156,6 +1164,8 @@ mod tests {
         for kind in ["", "mic_off", "mic_on", "system_off", "system_on"] {
             assert_eq!(MarkKind::parse(kind).as_str(), kind);
         }
+        // Closed first: Windows can't delete an open database.
+        drop(store);
         std::fs::remove_file(&path)?;
         Ok(())
     }
@@ -1208,6 +1218,8 @@ mod tests {
         assert!(!dir.exists(), "audio folder removed");
         // The other meeting is untouched.
         assert!(!store.search("präsentation", 10)?.is_empty());
+        // Closed first: Windows can't delete an open database.
+        drop(store);
         std::fs::remove_file(&path)?;
         Ok(())
     }

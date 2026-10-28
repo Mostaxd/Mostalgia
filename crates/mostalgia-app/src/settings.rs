@@ -282,7 +282,7 @@ fn read_shortcut() -> Option<String> {
 
 /// Binds Super+Shift+R to `mostalgia toggle` (the CLI next to this app).
 fn install_shortcut() -> anyhow::Result<String> {
-    let cli = std::env::current_exe()?.with_file_name("mostalgia");
+    let cli = std::env::current_exe()?.with_file_name(format!("mostalgia{}", std::env::consts::EXE_SUFFIX));
     anyhow::ensure!(cli.exists(), "{}", trf("mostalgia (CLI) nicht neben der App gefunden: {}", &[&cli.display()]));
     let list = gsettings(&["get", MEDIA_KEYS, "custom-keybindings"]).unwrap_or_default();
     if !list.contains(SHORTCUT_PATH) {
