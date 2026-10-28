@@ -38,6 +38,19 @@ pub struct Note {
     pub created_at: DateTime<Local>,
     /// Pinned by the user during the recording (or later).
     pub pinned: bool,
+    /// "live" (taken during the recording) or "regenerated" (from the
+    /// saved transcript, see `companion::regenerate_notes`).
+    pub origin: String,
+}
+
+/// A set of notes a "regenerate" replaced, kept so it can be restored.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NoteVersion {
+    pub id: i64,
+    pub archived_at: DateTime<Local>,
+    /// The focus the replaced notes were taken with, if any.
+    pub focus: Option<String>,
+    pub notes: Vec<Note>,
 }
 
 /// A question asked to Mori about the meeting while it was recorded, with
@@ -125,7 +138,7 @@ pub struct NewMeeting<'a> {
     pub dir: &'a Path,
 }
 
-const SCHEMA_VERSION: i32 = 8;
+const SCHEMA_VERSION: i32 = 9;
 
 const SCHEMA: &str = "
 CREATE TABLE meetings (
@@ -231,7 +244,33 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX companion_chat_meeting ON companion_chat(meeting_id, id);",
     // 8: all of Mori's live points are kept; the ones the user pinned are marked
     "ALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 1;",
+    // 9: regenerated notes; the sets they replaced stay restorable
+    // (`version_id` set = archived), and the focus notes were taken with
+    "CREATE TABLE note_versions (
+        id          INTEGER PRIMARY KEY,
+        meeting_id  INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        archived_at INTEGER NOT NULL,
+        focus       TEXT
+    );
+    CREATE INDEX note_versions_meeting ON note_versions(meeting_id, id);
+    ALTER TABLE notes ADD COLUMN version_id INTEGER REFERENCES note_versions(id) ON DELETE CASCADE;
+    ALTER TABLE notes ADD COLUMN origin TEXT NOT NULL DEFAULT 'live';
+    ALTER TABLE meetings ADD COLUMN notes_focus TEXT;",
 ];
+
+/// Moves a meeting's current unpinned notes into a new archived version;
+/// returns its id (`None`, and no version, when there are none).
+fn archive_unpinned(tx: &Connection, meeting_id: i64) -> Result<Option<i64>> {
+    let n: i64 = tx.query_row("SELECT COUNT(*) FROM notes WHERE meeting_id = ?1 AND version_id IS NULL AND pinned = 0", [meeting_id], |r| r.get(0))?;
+    if n == 0 {
+        return Ok(None);
+    }
+    let focus: Option<String> = tx.query_row("SELECT notes_focus FROM meetings WHERE id = ?1", [meeting_id], |r| r.get(0)).optional()?.flatten();
+    tx.execute("INSERT INTO note_versions (meeting_id, archived_at, focus) VALUES (?1, ?2, ?3)", params![meeting_id, Local::now().timestamp(), focus])?;
+    let version = tx.last_insert_rowid();
+    tx.execute("UPDATE notes SET version_id = ?2 WHERE meeting_id = ?1 AND version_id IS NULL AND pinned = 0", params![meeting_id, version])?;
+    Ok(Some(version))
+}
 
 fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
     conn.query_row(
@@ -536,12 +575,16 @@ impl Store {
         Ok(())
     }
 
-    /// A meeting's notes, by time.
+    /// A meeting's current notes (not the archived versions), by time.
     pub fn notes(&self, meeting_id: i64) -> Result<Vec<Note>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, kind, text, at_secs, created_at, pinned FROM notes WHERE meeting_id = ?1 ORDER BY at_secs, id")?;
-        let rows = stmt.query_map([meeting_id], |r| {
+        self.notes_where("meeting_id = ?1 AND version_id IS NULL", meeting_id)
+    }
+
+    fn notes_where(&self, condition: &str, value: i64) -> Result<Vec<Note>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT id, kind, text, at_secs, created_at, pinned, origin FROM notes WHERE {condition} ORDER BY at_secs, id"
+        ))?;
+        let rows = stmt.query_map([value], |r| {
             Ok(Note {
                 id: r.get(0)?,
                 kind: r.get(1)?,
@@ -549,9 +592,75 @@ impl Store {
                 at_secs: r.get(3)?,
                 created_at: local(r.get(4)?),
                 pinned: r.get(5)?,
+                origin: r.get(6)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// What Mori was asked to focus on for this meeting's notes, if anything.
+    pub fn notes_focus(&self, meeting_id: i64) -> Result<Option<String>> {
+        let focus: Option<Option<String>> =
+            self.conn.query_row("SELECT notes_focus FROM meetings WHERE id = ?1", [meeting_id], |r| r.get(0)).optional()?;
+        Ok(focus.flatten().filter(|f| !f.trim().is_empty()))
+    }
+
+    pub fn set_notes_focus(&self, meeting_id: i64, focus: Option<&str>) -> Result<()> {
+        let focus = focus.map(str::trim).filter(|f| !f.is_empty());
+        self.conn.execute("UPDATE meetings SET notes_focus = ?2 WHERE id = ?1", params![meeting_id, focus])?;
+        Ok(())
+    }
+
+    /// Replaces a meeting's unpinned notes with `notes` (kind, text,
+    /// seconds; origin "regenerated"), taken with `focus`. Pinned notes
+    /// stay. The replaced ones are archived as a version (restorable with
+    /// [`Store::restore_note_version`]); returns its id (`None` when there
+    /// was nothing to replace).
+    pub fn replace_unpinned_notes(&mut self, meeting_id: i64, notes: &[(&str, &str, f64)], focus: Option<&str>) -> Result<Option<i64>> {
+        let tx = self.conn.transaction()?;
+        let version = archive_unpinned(&tx, meeting_id)?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO notes (meeting_id, kind, text, at_secs, created_at, pinned, origin) VALUES (?1, ?2, ?3, ?4, ?5, 0, 'regenerated')",
+            )?;
+            let now = Local::now().timestamp();
+            for (kind, text, at) in notes {
+                stmt.execute(params![meeting_id, kind, text, at, now])?;
+            }
+        }
+        let focus = focus.map(str::trim).filter(|f| !f.is_empty());
+        tx.execute("UPDATE meetings SET notes_focus = ?2 WHERE id = ?1", params![meeting_id, focus])?;
+        tx.commit()?;
+        Ok(version)
+    }
+
+    /// Brings an archived set of notes back: the current unpinned notes are
+    /// archived in its place (so that can be undone too), and the meeting's
+    /// focus becomes the restored set's. Returns the id of the version the
+    /// current notes went to (`None` if there were none).
+    pub fn restore_note_version(&mut self, meeting_id: i64, version_id: i64) -> Result<Option<i64>> {
+        let tx = self.conn.transaction()?;
+        let focus: Option<Option<String>> = tx
+            .query_row("SELECT focus FROM note_versions WHERE id = ?1 AND meeting_id = ?2", params![version_id, meeting_id], |r| r.get(0))
+            .optional()?;
+        let Some(focus) = focus else { anyhow::bail!("note version {version_id} not found") };
+        let archived = archive_unpinned(&tx, meeting_id)?;
+        tx.execute("UPDATE notes SET version_id = NULL WHERE version_id = ?1", [version_id])?;
+        tx.execute("DELETE FROM note_versions WHERE id = ?1", [version_id])?;
+        tx.execute("UPDATE meetings SET notes_focus = ?2 WHERE id = ?1", params![meeting_id, focus])?;
+        tx.commit()?;
+        Ok(archived)
+    }
+
+    /// The archived sets of a meeting's notes, newest first.
+    pub fn note_versions(&self, meeting_id: i64) -> Result<Vec<NoteVersion>> {
+        let mut stmt = self.conn.prepare("SELECT id, archived_at, focus FROM note_versions WHERE meeting_id = ?1 ORDER BY id DESC")?;
+        let heads: Vec<(i64, i64, Option<String>)> =
+            stmt.query_map([meeting_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        heads
+            .into_iter()
+            .map(|(id, at, focus)| Ok(NoteVersion { id, archived_at: local(at), focus, notes: self.notes_where("version_id = ?1", id)? }))
+            .collect()
     }
 
     /// Saves the chat with Mori from a recording (question, answer) with
@@ -625,7 +734,7 @@ impl Store {
         let tx = self.conn.unchecked_transaction()?;
         // Explicit deletes (not only ON DELETE CASCADE), so the FTS delete
         // triggers run for every row whatever the connection's settings.
-        for table in ["passages", "index_state", "segments", "summaries", "bookmarks", "notes", "companion_chat"] {
+        for table in ["passages", "index_state", "segments", "summaries", "bookmarks", "notes", "note_versions", "companion_chat"] {
             if table_exists(&tx, table)? {
                 tx.execute(&format!("DELETE FROM {table} WHERE meeting_id = ?1"), [meeting_id])?;
             }
@@ -737,6 +846,56 @@ mod tests {
         store.insert_meeting(&new("/tmp/notes-b"), &[])?;
         let all: i64 = store.conn.query_row("SELECT COUNT(*) FROM notes", [], |r| r.get(0))?;
         assert_eq!(all, 0);
+        std::fs::remove_file(&path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn regenerated_notes_replace_unpinned_and_can_be_restored() -> Result<()> {
+        let path = std::env::temp_dir().join(format!("mostalgia-note-versions-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut store = Store::open(&path)?;
+        let a = store.insert_meeting(
+            &NewMeeting { title: "V", started_at: Local::now(), duration_secs: 60.0, language: "en", dir: Path::new("/tmp/versions-a") },
+            &[seg(Source::Mic, 1.0, "Hello")],
+        )?;
+        store.add_note_pinned(a, "decision", "Freeze marketing spend", 27.0, true)?;
+        store.add_note_pinned(a, "fact", "Budget is 10% under plan", 5.0, false)?;
+        store.add_note_pinned(a, "action", "Ben books the room", 40.0, false)?;
+        store.set_notes_focus(a, Some("pricing"))?;
+        let texts = |s: &Store| -> Result<Vec<String>> { Ok(s.notes(a)?.into_iter().map(|n| n.text).collect()) };
+
+        let v1 = store.replace_unpinned_notes(a, &[("action", "Anna sends the Q3 forecast by Friday", 36.0)], Some("  deadlines "))?.unwrap();
+        assert_eq!(texts(&store)?, ["Freeze marketing spend", "Anna sends the Q3 forecast by Friday"]);
+        assert_eq!(store.notes(a)?[1].origin, "regenerated");
+        assert_eq!(store.notes_focus(a)?.as_deref(), Some("deadlines"));
+        let versions = store.note_versions(a)?;
+        assert_eq!(versions.len(), 1);
+        assert_eq!(versions[0].focus.as_deref(), Some("pricing"));
+        assert_eq!(versions[0].notes.iter().map(|n| n.text.as_str()).collect::<Vec<_>>(), ["Budget is 10% under plan", "Ben books the room"]);
+        // The meeting (and search) only sees the current notes.
+        assert_eq!(store.get(a)?.unwrap().notes.len(), 2);
+
+        // Undo: the old set comes back, the regenerated one is archived.
+        let v2 = store.restore_note_version(a, v1)?.unwrap();
+        assert_eq!(texts(&store)?, ["Budget is 10% under plan", "Freeze marketing spend", "Ben books the room"]);
+        assert_eq!(store.notes_focus(a)?.as_deref(), Some("pricing"));
+        let versions = store.note_versions(a)?;
+        assert_eq!((versions.len(), versions[0].id), (1, v2));
+        assert_eq!(versions[0].focus.as_deref(), Some("deadlines"));
+        // Redo.
+        store.restore_note_version(a, v2)?;
+        assert_eq!(texts(&store)?, ["Freeze marketing spend", "Anna sends the Q3 forecast by Friday"]);
+        assert!(store.restore_note_version(a, 9999).is_err());
+        // Nothing unpinned: no empty version.
+        store.set_note_pinned(store.notes(a)?[1].id, true)?;
+        assert_eq!(store.replace_unpinned_notes(a, &[], None)?, None);
+        assert_eq!(store.notes_focus(a)?, None);
+
+        assert!(store.delete_meeting(a, false)?);
+        let left: i64 = store.conn.query_row("SELECT COUNT(*) FROM notes", [], |r| r.get(0))?;
+        let versions: i64 = store.conn.query_row("SELECT COUNT(*) FROM note_versions", [], |r| r.get(0))?;
+        assert_eq!((left, versions), (0, 0));
         std::fs::remove_file(&path)?;
         Ok(())
     }

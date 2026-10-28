@@ -28,7 +28,7 @@ use gpui_kit::*;
 use mostalgia_core::ask::AskEvent;
 use mostalgia_core::companion::{AnswerEvent, Point, PointsReply};
 use mostalgia_core::config::{Config, NotesMode};
-use mostalgia_core::i18n::{self, tr};
+use mostalgia_core::i18n::{self, tr, trf};
 
 use crate::recording::{LiveState, RecordingView};
 use feed::Feed;
@@ -167,6 +167,23 @@ pub struct Companion {
     enabled: bool,
     scale: f32,
     notes_mode: NotesMode,
+    /// As it happens: least seconds between two checks.
+    notes_gap: f64,
+    /// A card shrinks to a line this long after it appeared (`None` = never).
+    card_collapse: Option<Duration>,
+    /// Cards that arrive together appear this far apart.
+    card_stagger: Duration,
+    /// The focus hint from the settings (`Config::companion_notes_focus`).
+    default_focus: String,
+    /// This recording's focus hint (empty = the default), set in her bubble
+    /// or with the record button; saved with the meeting.
+    focus_input: Entity<InputState>,
+    /// The bubble's focus field is open.
+    focus_editing: bool,
+    /// Empty the focus field at the next render (the recording was saved).
+    focus_clear: bool,
+    /// The focus field's placeholder as last set.
+    focus_placeholder: String,
     /// Top-left as fractions of the free room (see `Config::companion_pos`).
     pos: Option<(f32, f32)>,
     reduce_motion: bool,
@@ -253,6 +270,13 @@ impl Companion {
 
     fn build(recording: Feed, desktop_mode: bool, placement: Option<desktop::Placement>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Frag Mori …")));
+        let focus_input = cx.new(|cx| InputState::new(window, cx));
+        let focus_sub = cx.subscribe_in(&focus_input, window, |this, _, event: &InputEvent, _, cx| {
+            if let InputEvent::PressEnter { .. } = event {
+                this.focus_editing = false;
+                cx.notify();
+            }
+        });
         let sub = cx.subscribe_in(&input, window, |this, input, event: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { .. } = event {
                 let q = input.read(cx).value().to_string();
@@ -282,6 +306,14 @@ impl Companion {
             enabled: false,
             scale: 1.,
             notes_mode: NotesMode::Off,
+            notes_gap: mostalgia_core::companion::LIVE_NOTES_GAP,
+            card_collapse: None,
+            card_stagger: Duration::ZERO,
+            default_focus: String::new(),
+            focus_input,
+            focus_editing: false,
+            focus_clear: false,
+            focus_placeholder: String::new(),
             pos: None,
             reduce_motion: false,
             frames: HashMap::new(),
@@ -330,7 +362,7 @@ impl Companion {
             demo_pose: None,
             hidden: false,
             ctl: Default::default(),
-            _subscriptions: vec![sub, escape, unfocus],
+            _subscriptions: vec![sub, focus_sub, escape, unfocus],
         };
         this.reload_config(cx);
         this
@@ -344,6 +376,10 @@ impl Companion {
         self.enabled = self.desktop_mode || config.companion && !config.companion_desktop;
         self.scale = config.companion_scale.clamp(0.5, 2.);
         self.notes_mode = config.notes_mode();
+        self.notes_gap = config.notes_gap() as f64;
+        self.card_collapse = config.card_collapse().map(Duration::from_secs_f32);
+        self.card_stagger = Duration::from_secs_f32(config.card_stagger());
+        self.default_focus = config.companion_notes_focus.trim().to_string();
         self.pos = config.companion_pos;
         self.hidden = config.companion_hidden;
         let size = self.size();
@@ -363,6 +399,13 @@ impl Companion {
             self.load_setup();
         }
         cx.notify();
+    }
+
+    /// What her notes focus on now: this recording's hint, else the
+    /// default from the settings ("" = nothing special).
+    fn notes_focus_in(&self, cx: &App) -> String {
+        let own = self.focus_input.read(cx).value().trim().to_string();
+        if own.is_empty() { self.default_focus.clone() } else { own }
     }
 
     pub fn is_enabled(&self) -> bool {
@@ -743,6 +786,18 @@ impl Companion {
     pub fn save_points(&mut self, meeting_id: i64, cx: &mut Context<Self>) {
         let points: Vec<(Point, bool)> = self.points.iter().map(|p| (p.point.clone(), p.pinned)).collect();
         self.store_points(meeting_id, points.iter().map(|(p, pinned)| (p, *pinned)));
+        // The focus her notes were taken with goes with them (the meeting's
+        // "Regenerate notes" starts from it); the next recording starts
+        // from the default again.
+        let focus = self.notes_focus_in(cx);
+        if self.notes_mode != NotesMode::Off && !focus.is_empty() {
+            let result = mostalgia_core::store::Store::open(&mostalgia_core::paths::database()).and_then(|s| s.set_notes_focus(meeting_id, Some(&focus)));
+            if let Err(e) = result {
+                eprintln!("[mori] saving the notes focus with meeting {meeting_id}: {e:#}");
+            }
+        }
+        self.focus_clear = true;
+        self.focus_editing = false;
         if self.points_rx.is_some() {
             self.late_save = Some(meeting_id);
         }
@@ -855,6 +910,19 @@ impl Render for Companion {
         if self.lang_seen != Some(i18n::lang()) {
             self.lang_seen = Some(i18n::lang());
             self.input.update(cx, |s, cx| s.set_placeholder(tr("Frag Mori …"), window, cx));
+            self.focus_placeholder.clear();
+        }
+        let placeholder = if self.default_focus.is_empty() {
+            tr("z. B. Aufgaben für mich, Preise, Fristen").to_string()
+        } else {
+            trf("Standard: {}", &[&self.default_focus])
+        };
+        if placeholder != self.focus_placeholder {
+            self.focus_input.update(cx, |s, cx| s.set_placeholder(placeholder.clone(), window, cx));
+            self.focus_placeholder = placeholder;
+        }
+        if std::mem::take(&mut self.focus_clear) {
+            self.focus_input.update(cx, |s, cx| s.set_value("", window, cx));
         }
         let vp = window.viewport_size();
         self.viewport = (vp.width.into(), vp.height.into());

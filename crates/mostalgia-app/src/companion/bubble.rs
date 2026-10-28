@@ -348,6 +348,54 @@ impl Companion {
         .text_sm()
     }
 
+    /// This recording's focus hint for her notes: a chip that opens a field.
+    fn render_focus_row(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let own = self.focus_input.read(cx).value().trim().to_string();
+        let row = h_flex().gap_1p5().px_3().pb_2().text_xs();
+        if self.focus_editing {
+            return row
+                .child(Icon::new(IconName::Target).xsmall().text_color(theme.primary))
+                .child(Input::new(&self.focus_input).xsmall().flex_1())
+                .child(Button::new("mori-focus-done").xsmall().ghost().icon(IconName::Check).tooltip(tr("Fertig")).on_click(cx.listener(|this, _, _, cx| {
+                    this.focus_editing = false;
+                    cx.notify();
+                })))
+                .into_any_element();
+        }
+        let (text, custom) = if !own.is_empty() {
+            (own, true)
+        } else if !self.default_focus.is_empty() {
+            (self.default_focus.clone(), false)
+        } else {
+            (tr("nichts Bestimmtes").to_string(), false)
+        };
+        row.child(
+            h_flex()
+                .id("mori-focus")
+                .min_w_0()
+                .gap_1()
+                .px_2()
+                .py_0p5()
+                .rounded_full()
+                .cursor_pointer()
+                .bg(if custom { theme.primary.opacity(0.15) } else { theme.muted })
+                .text_color(if custom { theme.primary } else { theme.muted_foreground })
+                .hover(|s| s.bg(theme.primary.opacity(0.2)))
+                .child(Icon::new(IconName::Target).xsmall())
+                .child(div().min_w_0().truncate().child(trf("Fokus: {}", &[&text])))
+                .tooltip(|window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(tr("Worauf Mori bei den Live-Notizen besonders achtet – gilt für diese Aufnahme und wird mit ihr gespeichert. Den Standard legst du in den Einstellungen fest.")).build(window, cx)
+                })
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.focus_editing = true;
+                    this.focus_input.update(cx, |s, cx| s.focus(window, cx));
+                    cx.notify();
+                })),
+        )
+        .into_any_element()
+    }
+
     /// The bubble shows the Notes tab.
     fn bubble_notes(&self) -> bool {
         self.ctl.notes_tab
@@ -491,6 +539,8 @@ impl Companion {
                     el.child(div().w_full().text_xs().text_color(theme.muted_foreground).truncate().child(title))
                 })
             });
+
+        let focus_row = (recording && self.notes_mode != mostalgia_core::config::NotesMode::Off).then(|| self.render_focus_row(cx));
 
         let mut body: Vec<AnyElement> = Vec::new();
         let rec_error = self.ctl.error.clone().map(|e| {
@@ -652,6 +702,7 @@ impl Companion {
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(header)
                 .child(scope_toggle)
+                .children(focus_row)
                 .children(rec_error)
                 .child(div().flex_1().min_h_0().child(if notes_tab {
                     notes

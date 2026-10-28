@@ -28,15 +28,14 @@ use crate::ui;
 
 /// Cards shown at once; older ones fold into the counter.
 const MAX_VISIBLE: usize = 4;
-/// A card folds into the counter this long after it was first shown.
+/// A card folds into the counter this long after it was first shown (or
+/// a while after it shrank to a line, if that's later; see
+/// `Config::card_collapse`, and `Config::card_stagger` for how far apart
+/// cards that arrive together appear).
 const CARD_FOR: Duration = Duration::from_secs(45);
 /// A card stays at least this long before newer ones push it into the
 /// counter (so a batch of several points all pop up).
 const MIN_SHOW: Duration = Duration::from_secs(8);
-/// A card shrinks to one quiet line this long after it was first shown.
-pub(super) const FRESH_FOR: Duration = Duration::from_secs(7);
-/// Cards that arrive together appear this far apart.
-const STAGGER: Duration = Duration::from_millis(3500);
 const CARD_W: f32 = 280.;
 /// Space between her and the stack.
 pub(super) const STACK_GAP: f32 = 8.;
@@ -157,7 +156,7 @@ impl Companion {
             new_speech: live.speech_secs - self.points_mark,
             waiting: self.notes.waiting_since.map_or(0., |t| t.elapsed().as_secs_f64()),
         };
-        if !companion::notes_due(self.notes_mode, &due) {
+        if !companion::notes_due(self.notes_mode, self.notes_gap, &due) {
             return;
         }
         // On the desktop the speech counter can be ahead of her transcript
@@ -224,8 +223,10 @@ impl Companion {
         let mode = self.notes_mode;
         let (tx, rx) = crossbeam_channel::bounded(1);
         let notes = previous.clone();
+        let focus = self.notes_focus_in(cx);
+        let memory_focus = focus.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(companion::live_points(&message, stable, &notes, mode).map_err(|e| format!("{e:#}")));
+            let _ = tx.send(companion::live_points(&message, stable, &notes, mode, &focus).map_err(|e| format!("{e:#}")));
         });
         self.points_rx = Some(rx);
         // Long meetings: older lines fold into the memory (in the
@@ -239,7 +240,7 @@ impl Companion {
             let (tx, rx) = crossbeam_channel::bounded(1);
             let started = Instant::now();
             std::thread::spawn(move || {
-                let result = companion::meeting_memory(&message).map(|(m, _)| m).map_err(|e| format!("{e:#}"));
+                let result = companion::meeting_memory(&message, &memory_focus).map(|(m, _)| m).map_err(|e| format!("{e:#}"));
                 eprintln!("[mori] meeting memory took {:.1}s", started.elapsed().as_secs_f32());
                 let _ = tx.send((cut, result));
             });
@@ -343,11 +344,11 @@ impl Companion {
         true
     }
 
-    /// Queues new cards: each appears [`STAGGER`] after the one before.
+    /// Queues new cards: each appears `card_stagger` after the one before.
     fn add_points(&mut self, points: Vec<Point>, line_at: Option<Instant>) {
         let now = Instant::now();
         let secs = |t: Instant| if t >= now { (t - now).as_secs_f64() } else { -(now - t).as_secs_f64() };
-        let at = companion::stagger(0., self.notes.last_release.map(secs), points.len(), STAGGER.as_secs_f64());
+        let at = companion::stagger(0., self.notes.last_release.map(secs), points.len(), self.card_stagger.as_secs_f64());
         for (point, at) in points.into_iter().zip(at) {
             let release_at = now + Duration::from_secs_f64(at.max(0.));
             self.notes.last_release = Some(release_at);
@@ -401,7 +402,8 @@ impl Companion {
             return Vec::new();
         }
         let now = Instant::now();
-        let fresh = |p: &LivePoint| p.shown_at.is_none_or(|t| t.elapsed() < CARD_FOR);
+        let card_for = self.card_collapse.map_or(CARD_FOR, |c| CARD_FOR.max(c + Duration::from_secs(10)));
+        let fresh = |p: &LivePoint| p.shown_at.is_none_or(|t| t.elapsed() < card_for);
         let mut out: Vec<usize> =
             (0..self.points.len()).filter(|&i| !self.points[i].dismissed && self.points[i].release_at <= now && (self.expanded || fresh(&self.points[i]))).collect();
         if !self.expanded {
@@ -416,7 +418,7 @@ impl Companion {
     /// unless the full list is open or the mouse is on it.
     pub(super) fn is_compact(&self, i: usize) -> bool {
         let p = &self.points[i];
-        !self.expanded && self.hovered_point != Some(p.id) && p.shown_at.is_some_and(|t| t.elapsed() >= FRESH_FOR)
+        !self.expanded && self.hovered_point != Some(p.id) && self.card_collapse.is_some_and(|after| p.shown_at.is_some_and(|t| t.elapsed() >= after))
     }
 
     /// Starts the fold timer of the cards on screen now.

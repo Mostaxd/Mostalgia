@@ -63,6 +63,8 @@ pub struct SettingsView {
     scroll: ScrollHandle,
     category: Category,
     search: Entity<InputState>,
+    /// Mori's default focus hint for notes.
+    notes_focus: Entity<InputState>,
     query: String,
     /// GNOME shortcut currently bound to `mostalgia toggle`, if any.
     shortcut: Option<String>,
@@ -323,6 +325,20 @@ impl SettingsView {
                 this.apply_custom_model(window, cx);
             }
         });
+        let notes_focus = cx.new(|cx| {
+            let mut s = InputState::new(window, cx).placeholder(tr("z. B. Aufgaben für mich, Preise, Fristen"));
+            s.set_value(Config::load().companion_notes_focus, window, cx);
+            s
+        });
+        let focus_sub = cx.subscribe_in(&notes_focus, window, |this, input, event: &InputEvent, _, cx| {
+            if let InputEvent::Change = event {
+                let value = input.read(cx).value().to_string();
+                if value != this.config.companion_notes_focus {
+                    this.config.companion_notes_focus = value;
+                    this.save(cx);
+                }
+            }
+        });
         let url_sub = cx.subscribe(&form_url, |_, _, event: &InputEvent, cx| {
             if let InputEvent::Change = event {
                 cx.notify();
@@ -353,11 +369,12 @@ impl SettingsView {
             scroll: ScrollHandle::new(),
             category,
             search,
+            notes_focus,
             query: String::new(),
             shortcut: None,
             tray_available: None,
             show_all_devices: false,
-            _subscriptions: vec![sub, custom_sub, url_sub],
+            _subscriptions: vec![sub, custom_sub, url_sub, focus_sub],
         };
         this.load_system_status(cx);
         this.load_keys(cx);
@@ -740,11 +757,56 @@ impl SettingsView {
 
 // ── Darstellung: Mori ──
 
-/// Requests per 10 minutes of talk with live notes "as it happens"
-/// (measured: a replayed 8-minute meeting against DeepSeek).
-const LIVE_NOTES_REQUESTS_PER_10_MIN: u32 = 65;
+/// Choices for Mori's timing (seconds): the least gap between checks as
+/// it happens, the interval, when a card shrinks to a line, and how far
+/// apart cards appear.
+const GAP_STEPS: &[f32] = &[5., 6., 7., 8., 9., 10., 12., 15., 20., 25., 30., 45., 60.];
+const INTERVAL_STEPS: &[f32] = &[30., 45., 60., 90., 120., 150., 180., 240., 300., 360., 450., 600.];
+const COLLAPSE_STEPS: &[f32] = &[3., 5., 7., 10., 15., 20., 30., 45., 60., 90., 120.];
+const STAGGER_STEPS: &[f32] = &[0., 0.5, 1., 1.5, 2., 2.5, 3., 3.5, 4., 5., 6., 8., 10., 15.];
+
+/// The steps before and after `value` in `steps`.
+fn neighbours(steps: &[f32], value: f32) -> (Option<f32>, Option<f32>) {
+    let prev = steps.iter().rev().find(|s| **s < value - 0.01).copied();
+    let next = steps.iter().find(|s| **s > value + 0.01).copied();
+    (prev, next)
+}
+
+/// "9 s", "3,5 s", "2 min", "2 min 30 s".
+fn secs_label(secs: f32) -> String {
+    if secs >= 60. && (secs % 30.).abs() < 0.01 {
+        let (m, s) = ((secs / 60.).floor() as u32, (secs % 60.).round() as u32);
+        return if s == 0 { format!("{m} min") } else { format!("{m} min {s} s") };
+    }
+    let text = if (secs.fract()).abs() < 0.01 { format!("{secs:.0}") } else { format!("{secs:.1}") };
+    let text = if mostalgia_core::i18n::lang() == mostalgia_core::i18n::Lang::De { text.replace('.', ",") } else { text };
+    format!("{text} s")
+}
 
 impl SettingsView {
+    /// − value + : steps through fixed choices; `set` stores one.
+    fn stepper(&self, id: &'static str, label: String, (prev, next): (Option<f32>, Option<f32>), set: fn(&mut Config, f32), cx: &mut Context<Self>) -> AnyElement {
+        let button = |suffix: &str, icon: IconName, to: Option<f32>, cx: &mut Context<Self>| {
+            Button::new(SharedString::from(format!("{id}-{suffix}")))
+                .small()
+                .outline()
+                .icon(icon)
+                .disabled(to.is_none())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(v) = to {
+                        set(&mut this.config, v);
+                        this.save(cx);
+                    }
+                }))
+        };
+        h_flex()
+            .gap_1()
+            .child(button("less", IconName::Minus, prev, cx))
+            .child(div().min_w(px(72.)).text_center().text_sm().font_medium().child(label))
+            .child(button("more", IconName::Plus, next, cx))
+            .into_any_element()
+    }
+
     fn render_mori(&mut self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme().clone();
         let row = |label: &str, hint: Option<&str>, control: AnyElement| settings_row(label, hint, control, &theme);
@@ -764,25 +826,62 @@ impl SettingsView {
                 .into_any_element()
         };
         let notes_mode = self.config.notes_mode();
+        let interval = self.config.notes_interval();
         let mode_button = |mode: NotesMode, label: String, cx: &mut Context<Self>| {
+            let on = std::mem::discriminant(&notes_mode) == std::mem::discriminant(&mode);
             Button::new(SharedString::from(format!("mori-notes-{}", mode.as_config())))
                 .small()
                 .label(label)
-                .when(notes_mode == mode, |b| b.primary())
-                .when(notes_mode != mode, |b| b.ghost())
+                .when(on, |b| b.primary())
+                .when(!on, |b| b.ghost())
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.config.companion_notes_mode = mode.as_config();
+                    this.config.set_notes_mode(mode);
                     this.save(cx);
                 }))
                 .into_any_element()
         };
         let mode_buttons = [
             (NotesMode::Live, tr("Sobald etwas passiert").to_string()),
-            (NotesMode::Every(60), trf("Alle {} s", &[&60])),
-            (NotesMode::Every(120), trf("Alle {} s", &[&120])),
+            (NotesMode::Every(interval), tr("In Abständen").to_string()),
             (NotesMode::Off, tr("Aus").to_string()),
         ]
         .map(|(mode, label)| mode_button(mode, label, cx));
+        let checks = mostalgia_core::companion::checks_per_10_min(notes_mode, self.config.notes_gap() as f64);
+        let timing = match notes_mode {
+            NotesMode::Live => Some((
+                tr("Mindestabstand zwischen Prüfungen"),
+                tr("Mori schaut nach jedem fertigen Satz nach, aber nie öfter als so. Kürzer: Notizen kommen schneller, kosten mehr Anfragen."),
+                self.stepper("mori-gap", secs_label(self.config.notes_gap()), neighbours(GAP_STEPS, self.config.notes_gap()), |c, v| c.companion_notes_gap_secs = v, cx),
+            )),
+            NotesMode::Every(secs) => Some((
+                tr("Abstand"),
+                tr("Mori sucht nach so viel neuer Sprache nach Notizen (Stille zählt nicht)."),
+                self.stepper("mori-interval", secs_label(secs as f32), neighbours(INTERVAL_STEPS, secs as f32), |c, v| c.set_notes_mode(NotesMode::Every(v as u32)), cx),
+            )),
+            NotesMode::Off => None,
+        };
+        let estimate = match notes_mode {
+            NotesMode::Live => trf("Etwa {} Anfragen pro 10 Minuten Gespräch (höchstens eine pro fertigem Satz) – jede sendet das Transkript, mit Prompt-Caching meist günstig.", &[&checks]),
+            _ => trf("Etwa {} Anfragen pro 10 Minuten Gespräch – jede sendet das Transkript.", &[&checks.max(1)]),
+        };
+        let collapse = self.config.card_collapse();
+        let collapse_control = h_flex()
+            .gap_1()
+            .children(collapse.map(|c| self.stepper("mori-collapse", secs_label(c), neighbours(COLLAPSE_STEPS, c), |cfg, v| cfg.companion_card_collapse_secs = v, cx)))
+            .child(
+                Button::new("mori-collapse-never")
+                    .small()
+                    .label(tr("Nie einklappen"))
+                    .when(collapse.is_none(), |b| b.primary())
+                    .when(collapse.is_some(), |b| b.ghost())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.config.companion_card_collapse_secs = if collapse.is_none() { mostalgia_core::config::CARD_COLLAPSE_DEFAULT } else { 0. };
+                        this.save(cx);
+                    })),
+            )
+            .into_any_element();
+        let stagger = self.config.card_stagger();
+        let stagger_control = self.stepper("mori-stagger", secs_label(stagger), neighbours(STAGGER_STEPS, stagger), |c, v| c.companion_card_stagger_secs = v, cx);
         let notes_on = notes_mode != NotesMode::Off;
         // Which connection and model write the notes ("Wie Fragen" = the ask one).
         let notes_picker = notes_on.then(|| {
@@ -876,18 +975,23 @@ impl SettingsView {
                 ))
                 .child(row(
                     tr("Live-Notizen"),
-                    Some(if notes_mode == NotesMode::Live {
-                        tr("Sieht nach jedem fertigen Satz kurz nach – Notizen erscheinen wenige Sekunden, nachdem etwas gesagt wurde.")
-                    } else {
-                        tr("Sucht nach so vielen Sekunden neuer Sprache nach neuen Notizen.")
+                    Some(match notes_mode {
+                        NotesMode::Live => tr("Sieht nach jedem fertigen Satz kurz nach – Notizen erscheinen wenige Sekunden, nachdem etwas gesagt wurde."),
+                        NotesMode::Every(_) => tr("Sucht nach so vielen Sekunden neuer Sprache nach neuen Notizen."),
+                        NotesMode::Off => tr("Mori schreibt während der Aufnahme keine Notizen mit. Fragen kannst du sie trotzdem."),
                     }),
                     h_flex().flex_wrap().gap_1().children(mode_buttons).into_any_element(),
                 ))
-                .when(notes_mode == NotesMode::Live, |el| {
-                    el.child(div().text_xs().text_color(theme.muted_foreground).child(trf(
-                        "„Sobald etwas passiert“ schickt mehr, dafür kleinere Anfragen – etwa {} pro 10 Minuten Gespräch.",
-                        &[&LIVE_NOTES_REQUESTS_PER_10_MIN],
-                    )))
+                .children(timing.map(|(label, hint, control)| row(label, Some(hint), control)))
+                .when(notes_on, |el| {
+                    el.child(div().text_xs().text_color(theme.muted_foreground).child(estimate))
+                        .child(row(
+                            tr("Worauf soll Mori achten?"),
+                            Some(tr("Optional. Mori achtet zuerst darauf, notiert aber weiter klar wichtige Entscheidungen und Aufgaben. Für eine Aufnahme änderst du es in ihrer Sprechblase.")),
+                            div().w(px(280.)).child(Input::new(&self.notes_focus).small()).into_any_element(),
+                        ))
+                        .child(row(tr("Karte einklappen nach"), Some(tr("Danach zeigt eine Notiz-Karte nur noch eine ruhige Zeile.")), collapse_control))
+                        .child(row(tr("Abstand zwischen Karten"), Some(tr("Kommen mehrere Notizen auf einmal, erscheinen sie so weit nacheinander.")), stagger_control))
                 })
                 .children(notes_picker.map(|p| row(tr("Modell für Live-Notizen"), Some(tr("Ein schnelles Modell reicht; gedacht wird dabei so wenig wie möglich.")), p)))
                 .children(notes_custom)
@@ -2422,7 +2526,7 @@ impl Render for SettingsView {
         cards.push(Card {
             category: Category::Darstellung,
             title: "Mori",
-            keywords: "mori companion assistant anime character notes avatar begleiterin figur notizen live punkte points",
+            keywords: "mori companion assistant anime character notes avatar begleiterin figur notizen live punkte points fokus focus abstand intervall interval gap karten cards einklappen collapse",
             wide: false,
             element: self.render_mori(cx).into_any_element(),
         });

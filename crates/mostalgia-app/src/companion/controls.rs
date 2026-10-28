@@ -379,6 +379,10 @@ impl Companion {
                 }))
                 .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Aufnehmen von:")))
                 .child(buttons)
+                .when(self.notes_mode != mostalgia_core::config::NotesMode::Off, |el| {
+                    el.child(div().pt_1().text_xs().text_color(theme.muted_foreground).child(tr("Worauf soll Mori achten? (optional)")))
+                        .child(gpui_kit::component::input::Input::new(&self.focus_input).xsmall().w(px(240.)))
+                })
                 .into_any_element(),
         )
     }

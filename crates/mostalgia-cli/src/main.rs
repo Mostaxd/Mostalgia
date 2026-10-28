@@ -198,6 +198,15 @@ enum Command {
         #[command(flatten)]
         choice: SummaryChoice,
     },
+    /// Write a meeting's notes again from its transcript with Mori's notes
+    /// model (pinned notes stay; the replaced ones can be restored in the app)
+    Notes {
+        id: i64,
+        /// What to focus on, e.g. "action items for me, pricing"
+        /// [default: the meeting's last focus, else the one in the settings]
+        #[arg(long)]
+        focus: Option<String>,
+    },
     /// Export a meeting (summary + transcript) as Markdown, text, SRT or Word
     Export {
         id: i64,
@@ -428,6 +437,7 @@ fn main() -> Result<()> {
             index_for_ask(id);
             Ok(())
         }
+        Command::Notes { id, focus } => regenerate_notes(id, focus),
         Command::Export { id, format, output } => export(id, format.as_deref(), output),
         Command::Delete { id, keep_audio } => {
             anyhow::ensure!(open_store()?.delete_meeting(id, !keep_audio)?, "{}", trf("Keine Besprechung #{}", &[&id]));
@@ -449,6 +459,30 @@ fn main() -> Result<()> {
         Command::Devices => list_devices(),
         Command::Transcribe { file, models } => transcribe_file(&file, &models),
     }
+}
+
+fn regenerate_notes(id: i64, focus: Option<String>) -> Result<()> {
+    use mostalgia_core::companion;
+    let focus = match focus {
+        Some(f) => f,
+        None => open_store()?.notes_focus(id)?.unwrap_or_else(|| Config::load().companion_notes_focus),
+    };
+    let req = Config::load().notes_request()?;
+    eprintln!("[mostalgia] {}", trf("Mori liest die Besprechung mit {} · {} …", &[&req.connection.name, &req.model]));
+    let done = companion::regenerate_notes(id, &focus, &mut |part, parts| {
+        if parts > 1 {
+            eprintln!("[mostalgia] {}", trf("Teil {} von {}", &[&part, &parts]));
+        }
+    })?;
+    for n in open_store()?.notes(id)? {
+        let kind = companion::PointKind::parse(&n.kind).map_or(n.kind.clone(), |k| k.label().to_string());
+        println!("[{}] {}{}: {}", format_ts(n.at_secs), kind, if n.pinned { " *" } else { "" }, n.text);
+    }
+    eprintln!(
+        "[mostalgia] {}",
+        trf("{} neue Notizen, {} angeheftete behalten, {} Wiederholungen weggelassen ({} · {})", &[&done.added, &done.kept, &done.repeats, &done.provider, &done.model])
+    );
+    Ok(())
 }
 
 fn open_store() -> Result<Store> {

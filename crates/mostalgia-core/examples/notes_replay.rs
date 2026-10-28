@@ -11,6 +11,8 @@
 //! latency is not scaled, so keep it at 1 for latency numbers). START=<s>
 //! begins there, as if everything before had been looked at already.
 //! MEMORY_PROBE=<s> makes one meeting-memory update for the lines up to then.
+//! GAP=<s> sets the least time between checks (as it happens), FOCUS=<text>
+//! the focus hint (default: the configured ones).
 
 use std::sync::mpsc;
 use std::time::Instant;
@@ -63,7 +65,11 @@ fn main() {
             Some(Line { start: ts(a), end: ts(b), speaker: speaker.into(), text: text.into() })
         })
         .collect();
-    let req = mostalgia_core::config::Config::load().notes_request().unwrap();
+    let config = mostalgia_core::config::Config::load();
+    let req = config.notes_request().unwrap();
+    // GAP=<s> overrides the configured gap, FOCUS=<text> the focus hint.
+    let gap: f64 = std::env::var("GAP").ok().and_then(|s| s.parse().ok()).unwrap_or(config.notes_gap() as f64);
+    let focus = std::env::var("FOCUS").unwrap_or_else(|_| config.companion_notes_focus.clone());
     println!("# {} lines, {:.0} s, mode {mode:?}, {} · {}", lines.len(), lines.last().unwrap().end, req.connection.name, req.model);
     let finalized_at = |i: usize| lines[i].end + FINALIZE_DELAY;
     let context = |i: usize| ContextLine { at_secs: lines[i].start, speaker: lines[i].speaker.clone(), text: lines[i].text.clone(), interim: false };
@@ -72,7 +78,7 @@ fn main() {
     if let Some(until) = std::env::var("MEMORY_PROBE").ok().and_then(|s| s.parse::<f64>().ok()) {
         let fold: Vec<ContextLine> = (0..lines.len()).filter(|&i| lines[i].start < until).map(context).collect();
         let t = Instant::now();
-        let r = companion::meeting_memory(&companion::memory_message(None, &fold, &[]));
+        let r = companion::meeting_memory(&companion::memory_message(None, &fold, &[]), &focus);
         println!("memory of {} lines in {:.2}s: {r:?}", fold.len(), t.elapsed().as_secs_f32());
         return;
     }
@@ -165,9 +171,9 @@ fn main() {
             memory_busy = true;
             let fold: Vec<ContextLine> = verbatim.iter().filter(|l| l.at_secs < cut).cloned().collect();
             let msg = companion::memory_message(memory.as_deref(), &fold, &notes);
-            let (mtx, started) = (mtx.clone(), t);
+            let (mtx, started, focus) = (mtx.clone(), t, focus.clone());
             std::thread::spawn(move || {
-                let r = companion::meeting_memory(&msg).map(|(m, _)| m).map_err(|e| format!("{e:#}"));
+                let r = companion::meeting_memory(&msg, &focus).map(|(m, _)| m).map_err(|e| format!("{e:#}"));
                 let _ = mtx.send((cut, r, start + t0.elapsed().as_secs_f64() * speed - started));
             });
         }
@@ -180,7 +186,7 @@ fn main() {
             new_speech: new.iter().map(|&i| lines[i].end - lines[i].start).sum(),
             waiting: new.first().map_or(0., |&i| t - finalized_at(i)),
         };
-        if companion::notes_due(mode, &clock) {
+        if companion::notes_due(mode, gap, &clock) {
             runs += 1;
             let input = NotesInput { memory: memory.as_deref(), lines: &verbatim, new_after, notes: &notes };
             let (msg, stable) = companion::notes_message(&input, CONTEXT_CHARS);
@@ -188,9 +194,9 @@ fn main() {
             last_start = Some(t);
             seen = done;
             new_after = lines[done - 1].start;
-            let (tx, previous, n) = (tx.clone(), notes.clone(), runs);
+            let (tx, previous, n, focus) = (tx.clone(), notes.clone(), runs, focus.clone());
             std::thread::spawn(move || {
-                let r = companion::live_points(&msg, stable, &previous, mode).map_err(|e| format!("{e:#}"));
+                let r = companion::live_points(&msg, stable, &previous, mode, &focus).map_err(|e| format!("{e:#}"));
                 let _ = tx.send((n, r, start + t0.elapsed().as_secs_f64() * speed));
             });
         }

@@ -81,10 +81,24 @@ pub struct Config {
     /// Ask for new live points after this much new speech (0 = off). Only
     /// read while `companion_notes_mode` is empty (older configs).
     pub companion_points_interval_secs: u32,
-    /// Mori's live notes: "live" (as it happens), "60" / "120" (after so
-    /// many seconds of new speech) or "off"; "" = from
+    /// Mori's live notes: "live" (as it happens), "interval" (after
+    /// `companion_notes_interval_secs` of new speech) or "off"; older
+    /// configs: a number of seconds, or "" = from
     /// `companion_points_interval_secs`. See [`Config::notes_mode`].
     pub companion_notes_mode: String,
+    /// As it happens: the least time between two checks (seconds, 5–60).
+    pub companion_notes_gap_secs: f32,
+    /// Interval mode: seconds of new speech per check (30–600; 0 = from
+    /// the older settings, see [`Config::notes_interval`]).
+    pub companion_notes_interval_secs: u32,
+    /// What Mori should look out for in her notes ("" = nothing special);
+    /// a recording can override it from her bubble.
+    pub companion_notes_focus: String,
+    /// A note card shrinks to one quiet line this long after it appeared
+    /// (seconds; 0 = never).
+    pub companion_card_collapse_secs: f32,
+    /// Cards that arrive together appear this far apart (seconds).
+    pub companion_card_stagger_secs: f32,
     /// Connection for live notes ("" = the "ask" connection).
     pub companion_notes_provider: String,
     /// Model for live notes ("" = the "ask" model when it's the same
@@ -117,14 +131,32 @@ pub enum NotesMode {
 }
 
 impl NotesMode {
-    /// The value stored in `companion_notes_mode`.
-    pub fn as_config(self) -> String {
+    /// The value stored in `companion_notes_mode` (the interval itself
+    /// goes to `companion_notes_interval_secs`, see [`Config::set_notes_mode`]).
+    pub fn as_config(self) -> &'static str {
         match self {
-            NotesMode::Live => "live".into(),
-            NotesMode::Every(secs) => secs.to_string(),
-            NotesMode::Off => "off".into(),
+            NotesMode::Live => "live",
+            NotesMode::Every(_) => "interval",
+            NotesMode::Off => "off",
         }
     }
+}
+
+/// As it happens: the least seconds between two checks, settable…
+pub const NOTES_GAP_RANGE: (f32, f32) = (5., 60.);
+pub const NOTES_GAP_DEFAULT: f32 = 9.;
+/// …and the interval mode's seconds of speech per check.
+pub const NOTES_INTERVAL_RANGE: (u32, u32) = (30, 600);
+pub const NOTES_INTERVAL_DEFAULT: u32 = 60;
+/// Note cards: seconds until one shrinks to a line (0 = never), up to…
+pub const CARD_COLLAPSE_DEFAULT: f32 = 7.;
+pub const CARD_COLLAPSE_MAX: f32 = 120.;
+/// …and seconds between cards that arrive together.
+pub const CARD_STAGGER_DEFAULT: f32 = 3.5;
+pub const CARD_STAGGER_MAX: f32 = 15.;
+
+fn clamp_or(v: f32, (lo, hi): (f32, f32), default: f32) -> f32 {
+    if v.is_finite() && v > 0. { v.clamp(lo, hi) } else { default }
 }
 
 /// Which speech-to-text engine to use: local Whisper (`connection` empty)
@@ -206,6 +238,11 @@ impl Default for Config {
             companion_scale: 1.0,
             companion_points_interval_secs: 90,
             companion_notes_mode: String::new(),
+            companion_notes_gap_secs: NOTES_GAP_DEFAULT,
+            companion_notes_interval_secs: 0,
+            companion_notes_focus: String::new(),
+            companion_card_collapse_secs: CARD_COLLAPSE_DEFAULT,
+            companion_card_stagger_secs: CARD_STAGGER_DEFAULT,
             companion_notes_provider: String::new(),
             companion_notes_model: String::new(),
             companion_pos: None,
@@ -253,23 +290,63 @@ impl Config {
         Ok(crate::summary::SummaryRequest { connection, model, language: self.summary_language_code(), effort })
     }
 
-    /// When Mori looks for live notes. Older configs only have the
-    /// interval: 0 → off, up to 60 s → every 60 s, the old default 90 s →
-    /// as it happens, 120 s and more → every 120 s.
+    /// When Mori looks for live notes. Older configs: a number of seconds in
+    /// `companion_notes_mode` (→ that interval), or only
+    /// `companion_points_interval_secs`: 0 → off, the old default 90 s (61–119)
+    /// → as it happens, anything else → that interval.
     pub fn notes_mode(&self) -> NotesMode {
         match self.companion_notes_mode.trim() {
             "live" => NotesMode::Live,
             "off" | "0" => NotesMode::Off,
-            s => match s.parse::<u32>() {
-                Ok(secs) => NotesMode::Every(secs.max(10)),
-                Err(_) => match self.companion_points_interval_secs {
-                    0 => NotesMode::Off,
-                    1..=60 => NotesMode::Every(60),
-                    61..=119 => NotesMode::Live,
-                    _ => NotesMode::Every(120),
-                },
+            "interval" => NotesMode::Every(self.notes_interval()),
+            s if s.parse::<u32>().is_ok() => NotesMode::Every(self.notes_interval()),
+            _ => match self.companion_points_interval_secs {
+                0 => NotesMode::Off,
+                61..=119 => NotesMode::Live,
+                _ => NotesMode::Every(self.notes_interval()),
             },
         }
+    }
+
+    /// The interval mode's seconds of speech per check (also remembered
+    /// while another mode is chosen), from the newest setting that has one.
+    pub fn notes_interval(&self) -> u32 {
+        let (lo, hi) = NOTES_INTERVAL_RANGE;
+        let legacy = self.companion_notes_mode.trim().parse::<u32>().ok().filter(|s| *s > 0);
+        let old = Some(self.companion_points_interval_secs).filter(|s| *s > 0 && !(61..=119).contains(s));
+        let secs = Some(self.companion_notes_interval_secs).filter(|s| *s > 0).or(legacy).or(old).unwrap_or(NOTES_INTERVAL_DEFAULT);
+        secs.clamp(lo, hi)
+    }
+
+    /// Chooses the live-notes mode (an interval is remembered with it).
+    pub fn set_notes_mode(&mut self, mode: NotesMode) {
+        if let NotesMode::Every(secs) = mode {
+            self.companion_notes_interval_secs = secs.clamp(NOTES_INTERVAL_RANGE.0, NOTES_INTERVAL_RANGE.1);
+        } else if self.companion_notes_interval_secs == 0 {
+            // Keep an older config's interval for when it's chosen again.
+            self.companion_notes_interval_secs = self.notes_interval();
+        }
+        self.companion_notes_mode = mode.as_config().into();
+    }
+
+    /// As it happens: the least seconds between two checks.
+    pub fn notes_gap(&self) -> f32 {
+        clamp_or(self.companion_notes_gap_secs, NOTES_GAP_RANGE, NOTES_GAP_DEFAULT)
+    }
+
+    /// Seconds until a note card shrinks to one line (`None` = never).
+    pub fn card_collapse(&self) -> Option<f32> {
+        let s = self.companion_card_collapse_secs;
+        if !s.is_finite() || s < 0. {
+            return Some(CARD_COLLAPSE_DEFAULT);
+        }
+        (s > 0.).then(|| s.clamp(1., CARD_COLLAPSE_MAX))
+    }
+
+    /// Seconds between cards that arrive together.
+    pub fn card_stagger(&self) -> f32 {
+        let s = self.companion_card_stagger_secs;
+        if s.is_finite() && s >= 0. { s.min(CARD_STAGGER_MAX) } else { CARD_STAGGER_DEFAULT }
     }
 
     /// Connection and model for live notes (the thinking level is left to
@@ -399,23 +476,45 @@ mod tests {
 
     #[test]
     fn notes_mode_migrates_the_old_interval() {
-        let with = |interval: u32, mode: &str| Config { companion_points_interval_secs: interval, companion_notes_mode: mode.into(), ..Config::default() }.notes_mode();
+        let with = |interval: u32, mode: &str| Config { companion_points_interval_secs: interval, companion_notes_mode: mode.into(), ..Config::default() };
         assert_eq!(Config::default().notes_mode(), NotesMode::Live);
-        assert_eq!(with(0, ""), NotesMode::Off);
-        assert_eq!(with(60, ""), NotesMode::Every(60));
-        assert_eq!(with(90, ""), NotesMode::Live);
-        assert_eq!(with(120, ""), NotesMode::Every(120));
-        assert_eq!(with(180, ""), NotesMode::Every(120));
-        // The new field wins once it's set.
-        assert_eq!(with(60, "live"), NotesMode::Live);
-        assert_eq!(with(90, "off"), NotesMode::Off);
-        assert_eq!(with(90, "120"), NotesMode::Every(120));
-        for m in [NotesMode::Live, NotesMode::Every(60), NotesMode::Off] {
-            assert_eq!(with(90, &m.as_config()), m);
-        }
-        // An old config file without the new fields.
-        let old: Config = serde_json::from_str(r#"{"companion_points_interval_secs": 180}"#).unwrap();
-        assert_eq!(old.notes_mode(), NotesMode::Every(120));
+        assert_eq!(with(0, "").notes_mode(), NotesMode::Off);
+        assert_eq!(with(60, "").notes_mode(), NotesMode::Every(60));
+        assert_eq!(with(45, "").notes_mode(), NotesMode::Every(45));
+        assert_eq!(with(90, "").notes_mode(), NotesMode::Live);
+        assert_eq!(with(120, "").notes_mode(), NotesMode::Every(120));
+        assert_eq!(with(180, "").notes_mode(), NotesMode::Every(180));
+        assert_eq!(with(5000, "").notes_mode(), NotesMode::Every(600));
+        // The newer field wins once it's set; old numeric values still read.
+        assert_eq!(with(60, "live").notes_mode(), NotesMode::Live);
+        assert_eq!(with(90, "off").notes_mode(), NotesMode::Off);
+        assert_eq!(with(90, "120").notes_mode(), NotesMode::Every(120));
+        assert_eq!(with(90, "interval").notes_mode(), NotesMode::Every(60));
+        // An old config file without the new fields (the user's: interval 60).
+        let old: Config = serde_json::from_str(r#"{"companion_points_interval_secs": 60, "companion_notes_mode": ""}"#).unwrap();
+        assert_eq!(old.notes_mode(), NotesMode::Every(60));
+        assert_eq!((old.notes_gap(), old.card_collapse(), old.card_stagger()), (9., Some(7.), 3.5));
+        assert_eq!(old.companion_notes_focus, "");
+        // Choosing a mode remembers the interval across the others.
+        let mut c = old.clone();
+        c.set_notes_mode(NotesMode::Live);
+        assert_eq!((c.notes_mode(), c.notes_interval()), (NotesMode::Live, 60));
+        c.set_notes_mode(NotesMode::Every(c.notes_interval()));
+        assert_eq!(c.notes_mode(), NotesMode::Every(60));
+        c.set_notes_mode(NotesMode::Every(10));
+        assert_eq!(c.notes_mode(), NotesMode::Every(30));
+        c.set_notes_mode(NotesMode::Every(275));
+        c.set_notes_mode(NotesMode::Off);
+        assert_eq!(c.notes_mode(), NotesMode::Off);
+        c.set_notes_mode(NotesMode::Every(c.notes_interval()));
+        assert_eq!(c.notes_mode(), NotesMode::Every(275));
+        let saved: Config = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        assert_eq!(saved.notes_mode(), NotesMode::Every(275));
+        // Timing values are kept in range.
+        let t = Config { companion_notes_gap_secs: 1., companion_card_collapse_secs: 0., companion_card_stagger_secs: 99., ..Config::default() };
+        assert_eq!((t.notes_gap(), t.card_collapse(), t.card_stagger()), (5., None, CARD_STAGGER_MAX));
+        let t = Config { companion_notes_gap_secs: 0., companion_card_collapse_secs: -1., companion_card_stagger_secs: 0., ..Config::default() };
+        assert_eq!((t.notes_gap(), t.card_collapse(), t.card_stagger()), (9., Some(7.), 0.));
     }
 
     #[test]

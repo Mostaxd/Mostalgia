@@ -349,6 +349,16 @@ fn main() {
                 std::thread::sleep(std::time::Duration::from_millis(if tab == 3 { 800 } else { 400 }));
                 shot(name, &mut cx);
             }
+            // "Regenerate notes": the panel, its progress, the result.
+            for (stage, name) in [(0, "5c-notes-regenerate"), (1, "5d-notes-regenerating"), (2, "5e-notes-regenerated")] {
+                cx.update_window(handle, |_, window, cx| {
+                    if let Some(m) = view.read(cx).meeting_view() {
+                        m.update(cx, |m, cx| m.demo_regenerate(stage, window, cx));
+                    }
+                })
+                .unwrap();
+                shot(name, &mut cx);
+            }
             // Mori without a recording: the record button's source choice, a
             // failed start, the open meeting's saved notes, the bar's choice.
             if cx.update(|cx| view.read(cx).companion_view().read(cx).is_enabled()) {

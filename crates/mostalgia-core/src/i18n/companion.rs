@@ -124,4 +124,13 @@ pub const EN: &[(&str, &str)] = &[
     ("Mori liest die Besprechung …", "Mori is reading the meeting …"),
     ("Frag mich zur geöffneten Besprechung – ich kenne Transkript, Zusammenfassung und Notizen und zeige dir die Stellen.", "Ask me about the open meeting – I know its transcript, summary and notes and point you to the moments."),
     ("Der Chat konnte nicht gespeichert werden: {}", "Couldn't save the chat: {}"),
+    ("Diese Besprechung hat kein Transkript – es gibt nichts zu lesen.", "This meeting has no transcript – there's nothing to read."),
+    ("Notizen mit {} neu erstellen", "Regenerating notes with {}"),
+    ("z. B. Aufgaben für mich, Preise, Fristen", "e.g. action items for me, pricing, deadlines"),
+    ("Standard: {}", "Default: {}"),
+    ("Fertig", "Done"),
+    ("nichts Bestimmtes", "nothing in particular"),
+    ("Fokus: {}", "Focus: {}"),
+    ("Worauf soll Mori achten? (optional)", "What should Mori focus on? (optional)"),
+    ("Worauf Mori bei den Live-Notizen besonders achtet – gilt für diese Aufnahme und wird mit ihr gespeichert. Den Standard legst du in den Einstellungen fest.", "What Mori looks out for in her live notes – for this recording, and saved with it. Set the default in Settings."),
 ];

@@ -18,7 +18,7 @@ use mostalgia_core::config::{Config, SttChoice};
 use mostalgia_core::playback::{self, Player};
 use mostalgia_core::store::{Meeting, Store};
 use mostalgia_core::i18n::{self, tr, trf};
-use mostalgia_core::{Source, cloud_stt, finalize, paths, summary};
+use mostalgia_core::{Source, cloud_stt, companion, finalize, paths, summary};
 
 use crate::recording::SharedEngine;
 use crate::ui;
@@ -92,6 +92,21 @@ pub struct MeetingView {
     chat_folded: bool,
     /// Notes tab: grouped by kind (else by time).
     notes_grouped: bool,
+    /// "Regenerate notes": its focus field while the panel is open.
+    regen_panel: Option<Entity<InputState>>,
+    /// Regenerating: "provider · model", and (part, parts) being read.
+    regenerating: Option<(SharedString, (usize, usize))>,
+    regen_error: Option<SharedString>,
+    /// The last regenerate's result line and the archived version it
+    /// replaced (its Undo).
+    regen_done: Option<(SharedString, Option<i64>)>,
+    /// The focus used for this meeting in this session (prefills the panel).
+    regen_focus: Option<String>,
+    /// The focus the meeting's notes were taken with (stored with it).
+    notes_focus: Option<String>,
+    /// Earlier sets of notes a regenerate replaced.
+    note_versions: Vec<mostalgia_core::store::NoteVersion>,
+    versions_open: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -117,6 +132,14 @@ impl MeetingView {
             transcribe_error: None,
             chat_folded: false,
             notes_grouped: true,
+            regen_panel: None,
+            regenerating: None,
+            regen_error: None,
+            regen_done: None,
+            regen_focus: None,
+            notes_focus: None,
+            note_versions: Vec::new(),
+            versions_open: false,
             _subscriptions: Vec::new(),
         };
         this.reload(cx);
@@ -139,11 +162,165 @@ impl MeetingView {
     }
 
     pub fn reload(&mut self, cx: &mut Context<Self>) {
-        match Store::open(&paths::database()).and_then(|s| s.get(self.id)) {
-            Ok(m) => self.meeting = m,
+        let loaded = Store::open(&paths::database()).and_then(|s| Ok((s.get(self.id)?, s.notes_focus(self.id)?, s.note_versions(self.id)?)));
+        match loaded {
+            Ok((m, focus, versions)) => {
+                self.meeting = m;
+                self.notes_focus = focus;
+                self.note_versions = versions;
+            }
             Err(e) => self.error = Some(format!("{e:#}").into()),
         }
         cx.notify();
+    }
+
+    /// Opens the "Regenerate notes" panel, its focus prefilled with the one
+    /// used last (this session, else saved with the meeting, else the
+    /// default from the settings).
+    fn open_regenerate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let focus = self.regen_focus.clone().or_else(|| self.notes_focus.clone()).unwrap_or_else(|| Config::load().companion_notes_focus);
+        let input = cx.new(|cx| {
+            let mut s = InputState::new(window, cx).placeholder(tr("z. B. Aufgaben für mich, Preise, Fristen"));
+            s.set_value(focus, window, cx);
+            s
+        });
+        let sub = cx.subscribe(&input, |this: &mut Self, _, event: &InputEvent, cx| {
+            if let InputEvent::PressEnter { .. } = event {
+                this.start_regenerate(cx);
+            }
+        });
+        self._subscriptions.push(sub);
+        input.update(cx, |s, cx| s.focus(window, cx));
+        self.regen_panel = Some(input);
+        self.regen_error = None;
+        cx.notify();
+    }
+
+    /// Writes the notes again from the saved transcript (see
+    /// `companion::regenerate_notes`), in the background.
+    fn start_regenerate(&mut self, cx: &mut Context<Self>) {
+        if self.regenerating.is_some() {
+            return;
+        }
+        let Some(input) = self.regen_panel.take() else { return };
+        let focus = input.read(cx).value().trim().to_string();
+        self.regen_focus = Some(focus.clone());
+        let req = match Config::load().notes_request().and_then(|req| req.connection.require_key().map(|_| req)) {
+            Ok(req) => req,
+            Err(e) => {
+                self.regen_error = Some(format!("{e:#}").into());
+                cx.notify();
+                return;
+            }
+        };
+        let provider = req.connection.name.clone();
+        self.regenerating = Some((format!("{} · {}", req.connection.name, req.model).into(), (1, 1)));
+        self.regen_error = None;
+        self.regen_done = None;
+        cx.notify();
+        let id = self.id;
+        let (tx, rx) = crossbeam_channel::unbounded::<Result<(usize, usize), Result<companion::Regenerated, String>>>();
+        std::thread::spawn(move || {
+            let progress_tx = tx.clone();
+            let result = companion::regenerate_notes(id, &focus, &mut |part, parts| {
+                let _ = progress_tx.send(Ok((part, parts)));
+            });
+            let _ = tx.send(Err(result.map_err(|e| format!("{e:#}"))));
+        });
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_millis(250)).await;
+                let mut finished = None;
+                let mut progress = None;
+                loop {
+                    match rx.try_recv() {
+                        Ok(Ok(p)) => progress = Some(p),
+                        Ok(Err(result)) => finished = Some(result),
+                        Err(crossbeam_channel::TryRecvError::Empty) => break,
+                        Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                            finished.get_or_insert(Err(tr("Die Anfrage ist abgebrochen").to_string()));
+                            break;
+                        }
+                    }
+                }
+                let done = finished.is_some();
+                let alive = this
+                    .update(cx, |this, cx| {
+                        if let (Some(p), Some((_, at))) = (progress, this.regenerating.as_mut()) {
+                            *at = p;
+                            cx.notify();
+                        }
+                        let Some(result) = finished else { return };
+                        this.regenerating = None;
+                        match result {
+                            Ok(r) => {
+                                let line = if r.kept > 0 {
+                                    trf("{} neue Notizen von Mori ({} angeheftete behalten).", &[&r.added, &r.kept])
+                                } else {
+                                    trf("{} neue Notizen von Mori.", &[&r.added])
+                                };
+                                eprintln!("[mostalgia] regenerated notes of meeting {}: {} new, {} kept, {} repeats left out, {} part(s), {} · {}", this.id, r.added, r.kept, r.repeats, r.parts, r.provider, r.model);
+                                this.regen_done = Some((line.into(), r.version));
+                            }
+                            Err(e) => this.regen_error = Some(trf("Notizen mit {} neu erstellen fehlgeschlagen: {}", &[&provider, &e]).into()),
+                        }
+                        this.reload(cx);
+                        cx.emit(MeetingEvent::Changed);
+                    })
+                    .is_ok();
+                if done || !alive {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Screenshots: the regenerate panel (0), its progress (1), or its
+    /// result with Undo and the earlier versions open (2).
+    #[doc(hidden)]
+    pub fn demo_regenerate(&mut self, stage: u8, window: &mut Window, cx: &mut Context<Self>) {
+        self.tab = 2;
+        match stage {
+            0 => self.open_regenerate(window, cx),
+            1 => {
+                self.regen_panel = None;
+                self.regenerating = Some(("DeepSeek · deepseek-flash".into(), (2, 3)));
+            }
+            _ => {
+                self.regenerating = None;
+                let version = self.note_versions.first().map(|v| v.id);
+                let n = self.meeting.as_ref().map_or(0, |m| m.notes.iter().filter(|n| !n.pinned).count());
+                let kept = self.meeting.as_ref().map_or(0, |m| m.notes.iter().filter(|n| n.pinned).count());
+                self.regen_done = Some((trf("{} neue Notizen von Mori ({} angeheftete behalten).", &[&n, &kept]).into(), version));
+                self.versions_open = true;
+            }
+        }
+        cx.notify();
+    }
+
+    /// Brings back an earlier set of notes (the current unpinned ones are
+    /// archived in its place).
+    fn restore_notes(&mut self, version: i64, cx: &mut Context<Self>) {
+        let id = self.id;
+        match Store::open(&paths::database()).and_then(|mut s| s.restore_note_version(id, version)) {
+            Ok(_) => {
+                self.regen_done = None;
+                self.notice = Some(tr("Frühere Notizen wiederhergestellt.").into());
+                cx.background_spawn(async move {
+                    if let Err(e) = mostalgia_core::ask::index_meeting(id) {
+                        eprintln!("[mostalgia] search index: {e:#}");
+                    }
+                })
+                .detach();
+                self.reload(cx);
+                cx.emit(MeetingEvent::Changed);
+            }
+            Err(e) => {
+                self.error = Some(format!("{e:#}").into());
+                cx.notify();
+            }
+        }
     }
 
     /// Summarize now if that's configured and possible (after a recording).
@@ -789,18 +966,44 @@ impl MeetingView {
     }
 
     /// Everything Mori produced: her notes (grouped by kind or by time,
-    /// pinned first within a group) and the chat from the recording.
+    /// pinned first within a group), "Regenerate notes" with its earlier
+    /// versions, and the chat from the recording.
     fn render_notes_tab(&mut self, m: &Meeting, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
+        let can_regenerate = !m.segments.is_empty() && self.retranscribing.is_none();
+        let regen = self.render_regenerate(m, cx);
+        let versions = self.render_note_versions(cx);
         if m.notes.is_empty() && m.chat.is_empty() {
             return v_flex()
-                .pt_16()
-                .items_center()
-                .gap_2()
-                .text_color(theme.muted_foreground)
-                .child(Icon::new(IconName::FileText).large())
-                .child(div().font_medium().child(tr("Keine Notizen für diese Besprechung")))
-                .child(div().text_sm().child(tr("Mori war bei dieser Aufnahme nicht dabei. Schalte sie unter Einstellungen → Darstellung → Mori ein.")))
+                .gap_6()
+                .children(regen)
+                .when(self.regen_panel.is_none() && self.regenerating.is_none(), |el| {
+                    el.child(
+                        v_flex()
+                            .pt_12()
+                            .items_center()
+                            .gap_2()
+                            .text_color(theme.muted_foreground)
+                            .child(Icon::new(IconName::FileText).large())
+                            .child(div().font_medium().child(tr("Keine Notizen für diese Besprechung")))
+                            .child(div().text_sm().text_center().child(if can_regenerate {
+                                tr("Mori war bei dieser Aufnahme nicht dabei – sie kann die Notizen aber jetzt aus dem Transkript schreiben.")
+                            } else {
+                                tr("Mori war bei dieser Aufnahme nicht dabei. Schalte sie unter Einstellungen → Darstellung → Mori ein.")
+                            }))
+                            .when(can_regenerate, |el| {
+                                el.child(
+                                    Button::new("notes-regenerate-empty")
+                                        .small()
+                                        .primary()
+                                        .icon(IconName::WandSparkles)
+                                        .label(tr("Notizen erstellen"))
+                                        .on_click(cx.listener(|this, _, window, cx| this.open_regenerate(window, cx))),
+                                )
+                            }),
+                    )
+                })
+                .children(versions)
                 .into_any_element();
         }
         let grouped = self.notes_grouped;
@@ -828,11 +1031,227 @@ impl MeetingView {
                         cx.notify();
                     })),
             );
+        let busy = self.regen_panel.is_some() || self.regenerating.is_some();
+        let toolbar = h_flex()
+            .gap_2()
+            .when(can_regenerate, |el| {
+                el.child(
+                    Button::new("notes-regenerate")
+                        .xsmall()
+                        .outline()
+                        .icon(IconName::WandSparkles)
+                        .label(tr("Notizen neu erstellen"))
+                        .disabled(busy)
+                        .tooltip(tr("Mori liest das ganze Transkript noch einmal und schreibt die Notizen neu – angeheftete bleiben"))
+                        .on_click(cx.listener(|this, _, window, cx| this.open_regenerate(window, cx))),
+                )
+            })
+            .when_some(self.notes_focus.clone().filter(|_| !m.notes.is_empty()), |el, focus| {
+                el.child(
+                    h_flex()
+                        .min_w_0()
+                        .gap_1()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(Icon::new(IconName::Target).xsmall())
+                        .child(div().truncate().child(trf("Fokus: {}", &[&focus]))),
+                )
+            })
+            .child(div().flex_1())
+            .when(!m.notes.is_empty(), |el| el.child(toggle));
         v_flex()
             .gap_6()
-            .when(!m.notes.is_empty(), |el| el.child(h_flex().justify_end().child(toggle)).child(self.render_notes(m, cx)))
+            .child(toolbar)
+            .children(regen)
+            .when(!m.notes.is_empty(), |el| el.child(self.render_notes(m, cx)))
+            .children(versions)
             .when(!m.chat.is_empty(), |el| el.child(self.render_chat(m, cx)))
             .into_any_element()
+    }
+
+    /// The "Regenerate notes" panel, its progress, result (with Undo) or error.
+    fn render_regenerate(&mut self, m: &Meeting, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let theme = cx.theme().clone();
+        if let Some((which, (part, parts))) = self.regenerating.clone() {
+            return Some(
+                h_flex()
+                    .p_3()
+                    .gap_3()
+                    .rounded(theme.radius)
+                    .bg(theme.muted)
+                    .text_sm()
+                    .child(gpui_kit::component::spinner::Spinner::new().small())
+                    .child(
+                        v_flex()
+                            .child(div().font_medium().child(if parts > 1 {
+                                trf("Mori liest die Besprechung … (Teil {} von {})", &[&part, &parts])
+                            } else {
+                                tr("Mori liest die Besprechung …").to_string()
+                            }))
+                            .child(div().text_xs().text_color(theme.muted_foreground).child(which)),
+                    )
+                    .into_any_element(),
+            );
+        }
+        if let Some(input) = self.regen_panel.clone() {
+            let target = match Config::load().notes_request() {
+                Ok(req) => Ok(format!("{} · {}", req.connection.name, req.model)),
+                Err(e) => Err(format!("{e:#}")),
+            };
+            let reads = if m.summary.is_some() { tr("das ganze Transkript und die Zusammenfassung") } else { tr("das ganze Transkript") };
+            let pinned = m.notes.iter().filter(|n| n.pinned).count();
+            return Some(
+                v_flex()
+                    .p_4()
+                    .gap_3()
+                    .rounded(theme.radius_lg)
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.secondary)
+                    .child(h_flex().gap_2().child(Icon::new(IconName::WandSparkles).small().text_color(theme.primary)).child(div().font_semibold().child(tr("Notizen neu erstellen"))))
+                    .child(div().text_sm().text_color(theme.muted_foreground).child(trf(
+                        "Mori liest {} noch einmal und schreibt die Notizen neu, mit Zeitstempeln. Angeheftete Notizen ({}) bleiben, die übrigen werden ersetzt – rückgängig machbar.",
+                        &[&reads, &pinned],
+                    )))
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(div().text_sm().font_medium().child(tr("Worauf soll Mori achten? (optional)")))
+                            .child(Input::new(&input).small()),
+                    )
+                    .child(match &target {
+                        Ok(t) => div().text_xs().text_color(theme.muted_foreground).child(trf("Sendet das Transkript an {}.", &[t])),
+                        Err(e) => div().text_xs().text_color(theme.danger).child(e.clone()),
+                    })
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .justify_end()
+                            .child(Button::new("regen-cancel").small().ghost().label(tr("Abbrechen")).on_click(cx.listener(|this, _, _, cx| {
+                                this.regen_panel = None;
+                                cx.notify();
+                            })))
+                            .child(
+                                Button::new("regen-start")
+                                    .small()
+                                    .primary()
+                                    .icon(IconName::WandSparkles)
+                                    .label(tr("Neu erstellen"))
+                                    .disabled(target.is_err())
+                                    .on_click(cx.listener(|this, _, _, cx| this.start_regenerate(cx))),
+                            ),
+                    )
+                    .into_any_element(),
+            );
+        }
+        if let Some(e) = self.regen_error.clone() {
+            return Some(
+                h_flex()
+                    .p_3()
+                    .gap_2()
+                    .items_start()
+                    .rounded(theme.radius)
+                    .bg(theme.danger.opacity(0.1))
+                    .text_color(theme.danger)
+                    .text_sm()
+                    .child(Icon::new(IconName::TriangleAlert).small().mt_0p5())
+                    .child(div().flex_1().child(e))
+                    .child(Button::new("regen-retry").xsmall().outline().label(tr("Erneut versuchen")).on_click(cx.listener(|this, _, window, cx| this.open_regenerate(window, cx))))
+                    .child(Button::new("regen-error-close").xsmall().ghost().icon(IconName::X).on_click(cx.listener(|this, _, _, cx| {
+                        this.regen_error = None;
+                        cx.notify();
+                    })))
+                    .into_any_element(),
+            );
+        }
+        let (line, version) = self.regen_done.clone()?;
+        Some(
+            h_flex()
+                .p_3()
+                .gap_2()
+                .rounded(theme.radius)
+                .bg(theme.success.opacity(0.12))
+                .text_sm()
+                .child(Icon::new(IconName::Check).small().text_color(theme.success))
+                .child(div().flex_1().child(line))
+                .when_some(version, |el, v| {
+                    el.child(
+                        Button::new("regen-undo")
+                            .xsmall()
+                            .outline()
+                            .icon(IconName::Undo2)
+                            .label(tr("Rückgängig"))
+                            .tooltip(tr("Stellt die vorherigen Notizen wieder her"))
+                            .on_click(cx.listener(move |this, _, _, cx| this.restore_notes(v, cx))),
+                    )
+                })
+                .child(Button::new("regen-done-close").xsmall().ghost().icon(IconName::X).on_click(cx.listener(|this, _, _, cx| {
+                    this.regen_done = None;
+                    cx.notify();
+                })))
+                .into_any_element(),
+        )
+    }
+
+    /// Earlier sets of notes (replaced by a regenerate), restorable.
+    fn render_note_versions(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.note_versions.is_empty() {
+            return None;
+        }
+        let theme = cx.theme().clone();
+        let open = self.versions_open;
+        let header = h_flex()
+            .id("note-versions-toggle")
+            .gap_1p5()
+            .cursor_pointer()
+            .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).xsmall().text_color(theme.muted_foreground))
+            .child(ui::section_title(tr("FRÜHERE NOTIZEN"), cx))
+            .child(div().text_xs().text_color(theme.muted_foreground).child(format!("({})", self.note_versions.len())))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.versions_open = !this.versions_open;
+                cx.notify();
+            }));
+        let rows: Vec<AnyElement> = self
+            .note_versions
+            .iter()
+            .map(|v| {
+                let id = v.id;
+                let live = v.notes.iter().all(|n| n.origin == "live");
+                let what = if live { tr("Live mitgeschrieben") } else { tr("Neu erstellt") };
+                let preview = v.notes.iter().take(3).map(|n| n.text.as_str()).collect::<Vec<_>>().join(" · ");
+                h_flex()
+                    .pl_5()
+                    .gap_3()
+                    .items_start()
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_0p5()
+                            .child(
+                                div().text_sm().font_medium().child(format!(
+                                    "{} · {} · {}",
+                                    what,
+                                    if v.notes.len() == 1 { tr("1 Notiz").to_string() } else { trf("{} Notizen", &[&v.notes.len()]) },
+                                    trf("ersetzt {}", &[&i18n::date_time(&v.archived_at)])
+                                )),
+                            )
+                            .when_some(v.focus.clone(), |el, f| el.child(div().text_xs().text_color(theme.muted_foreground).child(trf("Fokus: {}", &[&f]))))
+                            .child(div().text_xs().text_color(theme.muted_foreground).truncate().child(preview)),
+                    )
+                    .child(
+                        Button::new(("note-version-restore", id as usize))
+                            .xsmall()
+                            .outline()
+                            .icon(IconName::RotateCcw)
+                            .label(tr("Wiederherstellen"))
+                            .tooltip(tr("Holt diese Notizen zurück; die jetzigen (außer angehefteten) kommen in die Liste"))
+                            .on_click(cx.listener(move |this, _, _, cx| this.restore_notes(id, cx))),
+                    )
+                    .into_any_element()
+            })
+            .collect();
+        Some(v_flex().gap_3().child(header).when(open, |el| el.children(rows)).into_any_element())
     }
 
     /// The questions asked to Mori during the recording, with her answers;
