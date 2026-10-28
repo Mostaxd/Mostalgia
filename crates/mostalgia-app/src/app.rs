@@ -114,6 +114,8 @@ impl MostalgiaApp {
                         s.update(cx, |s, cx| s.show_category("ki", cx));
                     }
                 }
+                MoriEvent::PopOut => this.set_mori_desktop(true, cx),
+                MoriEvent::BackToApp => this.set_mori_desktop(false, cx),
             }),
         ];
         let mut this = Self {
@@ -244,6 +246,25 @@ impl MostalgiaApp {
         .detach();
     }
 
+    /// Moves Mori between the app window and the desktop (dragged out, or
+    /// "back into the app"), the same as the setting.
+    fn set_mori_desktop(&mut self, desktop: bool, cx: &mut Context<Self>) {
+        let mut config = mostalgia_core::config::Config::load();
+        if config.companion_desktop == desktop {
+            return;
+        }
+        config.companion_desktop = desktop;
+        if let Err(e) = config.save() {
+            eprintln!("[mostalgia] saving settings: {e:#}");
+        }
+        if let Some(s) = self.settings_view() {
+            s.update(cx, |s, cx| s.set_companion_desktop(desktop, cx));
+        }
+        self.companion.update(cx, |c, cx| c.reload_config(cx));
+        self.sync_mori(true);
+        cx.notify();
+    }
+
     /// Starts or ends Mori's desktop process to match the settings.
     fn sync_mori(&mut self, settings_changed: bool) {
         let config = mostalgia_core::config::Config::load();
@@ -280,6 +301,10 @@ impl MostalgiaApp {
                     if let Some(s) = self.settings_view() {
                         s.update(cx, |s, cx| s.show_category("ki", cx));
                     }
+                    window.activate_window();
+                }
+                FromMori::BackToApp => {
+                    self.set_mori_desktop(false, cx);
                     window.activate_window();
                 }
                 FromMori::NotesSaved { meeting_id } => {

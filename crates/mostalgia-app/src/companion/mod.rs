@@ -36,6 +36,10 @@ pub enum MoriEvent {
     OpenCitation { meeting_id: i64, secs: f64 },
     /// Open Settings → AI & transcription (no connection set up).
     OpenSettings,
+    /// She was dragged out of the app window: move her to the desktop.
+    PopOut,
+    /// "Back into the app" on the desktop.
+    BackToApp,
 }
 
 impl EventEmitter<MoriEvent> for Companion {}
@@ -47,6 +51,8 @@ const MARGIN: f32 = 16.;
 /// Default distance from the window top: below the title bar and the
 /// recording header, so she doesn't cover its buttons.
 const DEFAULT_TOP: f32 = 132.;
+/// How far past the window edge a drag pops her out to the desktop.
+const POP_OUT_MARGIN: f32 = 12.;
 /// Mouse travel (px) after which a press is a drag, not a click.
 const DRAG_THRESHOLD: f32 = 4.;
 /// Upper bound for the animation timer, whatever the art asks for.
@@ -367,9 +373,26 @@ impl Companion {
             }
             return;
         }
+        // Dragged past the window edge: she moves to the desktop.
+        let (vw, vh) = self.viewport;
+        let outside = x < -POP_OUT_MARGIN || y < -POP_OUT_MARGIN || x > vw + POP_OUT_MARGIN || y > vh + POP_OUT_MARGIN;
+        // Not every compositor reports motion outside the window: reaching
+        // the very edge counts as well.
+        let at_edge = x <= 1. || y <= 1. || x >= vw - 1. || y >= vh - 1.;
+        if vw > 0. && (outside || at_edge) {
+            self.drag = None;
+            cx.emit(MoriEvent::PopOut);
+            cx.notify();
+            return;
+        }
         let (ox, oy) = (drag.origin.x + dx, drag.origin.y + dy);
         self.set_origin(ox, oy);
         cx.notify();
+    }
+
+    /// Whether she runs in her own desktop window.
+    pub fn is_desktop(&self) -> bool {
+        self.desktop.is_some()
     }
 
     fn mouse_up(&mut self, cx: &mut Context<Self>) {
@@ -741,7 +764,20 @@ impl Render for Companion {
                         .when(dragging, |el| el.cursor_grabbing())
                         .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, window, cx| this.mouse_move(ev, window, cx)))
                         .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _, cx| this.mouse_up(cx)))
-                        .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _, cx| this.mouse_up(cx))),
+                        .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _, cx| this.mouse_up(cx)))
+                        // Pointer motion outside the window (during the
+                        // press) doesn't hit any element; listen window-wide.
+                        .when(self.desktop.is_none(), |el| {
+                            let this = cx.entity().downgrade();
+                            el.child(canvas(|_, _, _| {}, move |_, _, window, _| {
+                                let this = this.clone();
+                                window.on_mouse_event(move |ev: &MouseMoveEvent, phase, window, cx| {
+                                    if phase == DispatchPhase::Capture {
+                                        this.update(cx, |this, cx| this.mouse_move(ev, window, cx)).ok();
+                                    }
+                                });
+                            }).absolute().size_full())
+                        }),
                 )
             })
             .into_any_element()

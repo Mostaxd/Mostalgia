@@ -423,6 +423,12 @@ impl SettingsView {
         .detach();
     }
 
+    /// Mori was moved between window and desktop outside the settings.
+    pub fn set_companion_desktop(&mut self, desktop: bool, cx: &mut Context<Self>) {
+        self.config.companion_desktop = desktop;
+        cx.notify();
+    }
+
     fn save(&mut self, cx: &mut Context<Self>) {
         // Dragging Mori stores her position while this screen is open.
         let disk = Config::load();
@@ -907,9 +913,13 @@ impl SettingsView {
                     .text_color(theme.muted_foreground)
                     .child(Icon::new(IconName::Info).xsmall().mt(px(2.)).flex_none())
                     .child(div().flex_1().min_w_0().child(if self.config.companion_desktop {
-                        tr("Auf dem Desktop läuft Mori als kleines eigenes Fenster über XWayland: Unter GNOME Wayland dürfen nur solche Fenster im Vordergrund bleiben und frei platziert werden. Klicks neben ihr gehen an das Fenster darunter.")
+                        tr("Auf dem Desktop läuft Mori als kleines eigenes Fenster über XWayland: Unter GNOME Wayland dürfen nur solche Fenster im Vordergrund bleiben und frei platziert werden. Klicks neben ihr gehen an das Fenster darunter.").to_string()
                     } else {
-                        tr("Mori lebt im Mostalgia-Fenster. Damit sie über anderen Fenstern steht, wähle „Auf dem Desktop“.")
+                        format!(
+                            "{} {}",
+                            tr("Mori lebt im Mostalgia-Fenster. Damit sie über anderen Fenstern steht, wähle „Auf dem Desktop“."),
+                            tr("Aus dem Fenster ziehen bringt Mori auf den Desktop.")
+                        )
                     })),
             )
     }

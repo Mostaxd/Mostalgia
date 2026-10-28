@@ -80,4 +80,6 @@ pub const EN: &[(&str, &str)] = &[
     ("Mori kann nicht auf den Desktop: XWayland ist nicht verfügbar (DISPLAY ist nicht gesetzt).", "Mori can't go on the desktop: XWayland isn't available (DISPLAY is not set)."),
     ("Mori konnte nicht gestartet werden: {}", "Couldn't start Mori: {}"),
     ("Mori ist auf dem Desktop mehrmals abgestürzt ({}). Schalte sie in den Einstellungen aus und wieder ein, um es erneut zu versuchen.", "Mori crashed several times on the desktop ({}). Turn her off and on again in Settings to retry."),
+    ("Zurück ins Mostalgia-Fenster", "Back into the Mostalgia window"),
+    ("Aus dem Fenster ziehen bringt Mori auf den Desktop.", "Drag Mori out of the window to put her on the desktop."),
 ];

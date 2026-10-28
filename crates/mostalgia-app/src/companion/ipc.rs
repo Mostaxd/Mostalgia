@@ -67,6 +67,8 @@ pub enum FromMori {
     OpenSettings,
     /// Pinned points (and the chat) were stored with this meeting.
     NotesSaved { meeting_id: i64 },
+    /// The user wants her back inside the app window.
+    BackToApp,
 }
 
 pub fn encode<T: Serialize>(msg: &T) -> String {

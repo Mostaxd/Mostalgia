@@ -375,6 +375,19 @@ impl Companion {
                         .on_click(cx.listener(|this, _, _, cx| this.new_chat(cx))),
                 )
             })
+            .when(self.is_desktop(), |el| {
+                el.child(
+                    Button::new("mori-back-to-app")
+                        .xsmall()
+                        .ghost()
+                        .icon(IconName::ArrowDown)
+                        .tooltip(tr("Zurück ins Mostalgia-Fenster"))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.open = false;
+                            cx.emit(super::MoriEvent::BackToApp);
+                        })),
+                )
+            })
             .child(Button::new("mori-close").xsmall().ghost().icon(IconName::X).on_click(cx.listener(|this, _, _, cx| {
                 this.open = false;
                 cx.notify();

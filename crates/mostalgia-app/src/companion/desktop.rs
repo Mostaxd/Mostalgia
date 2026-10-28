@@ -245,6 +245,8 @@ impl DesktopMori {
         let sub = cx.subscribe(&companion, |_, _, event: &MoriEvent, _| match event {
             MoriEvent::OpenCitation { meeting_id, secs } => send(&FromMori::OpenMeeting { meeting_id: *meeting_id, secs: *secs }),
             MoriEvent::OpenSettings => send(&FromMori::OpenSettings),
+            MoriEvent::BackToApp => send(&FromMori::BackToApp),
+            MoriEvent::PopOut => {}
         });
         let moment = cx.subscribe(&companion, |_, _, event: &super::ShowLiveMoment, _| send(&FromMori::ShowLiveMoment { secs: event.secs }));
         cx.observe_window_appearance(window, |_, window, cx| ui::apply_theme(window, cx)).detach();
