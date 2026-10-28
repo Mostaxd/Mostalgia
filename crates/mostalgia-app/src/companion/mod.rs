@@ -867,6 +867,14 @@ impl Companion {
     /// them. A request still running saves its points there when it returns.
     pub fn save_points(&mut self, meeting_id: i64, cx: &mut Context<Self>) {
         let points: Vec<(Point, bool)> = self.points.iter().map(|p| (p.point.clone(), p.pinned)).collect();
+        // Who took them, for the meeting's Notes tab and exports.
+        let had_chat = self.turns.iter().any(|t| t.done);
+        if !points.is_empty() || had_chat {
+            let character = self.character.id();
+            if let Err(e) = mostalgia_core::store::Store::open(&mostalgia_core::paths::database()).and_then(|s| s.set_companion(meeting_id, character)) {
+                eprintln!("[mori] saving the companion with meeting {meeting_id}: {e:#}");
+            }
+        }
         self.store_points(meeting_id, points.iter().map(|(p, pinned)| (p, *pinned)));
         // The focus her notes were taken with goes with them (the meeting's
         // "Regenerate notes" starts from it); the next recording starts

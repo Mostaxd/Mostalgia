@@ -81,6 +81,8 @@ pub struct Meeting {
     pub transcript_engine: Option<String>,
     /// Why the transcript is incomplete (the engine failed), if it is.
     pub transcript_error: Option<String>,
+    /// Id of the companion who took the notes and chat ("mori", "tsumugi", "hoshi").
+    pub companion: String,
 }
 
 impl Meeting {
@@ -138,7 +140,7 @@ pub struct NewMeeting<'a> {
     pub dir: &'a Path,
 }
 
-const SCHEMA_VERSION: i32 = 9;
+const SCHEMA_VERSION: i32 = 10;
 
 const SCHEMA: &str = "
 CREATE TABLE meetings (
@@ -256,6 +258,8 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE notes ADD COLUMN version_id INTEGER REFERENCES note_versions(id) ON DELETE CASCADE;
     ALTER TABLE notes ADD COLUMN origin TEXT NOT NULL DEFAULT 'live';
     ALTER TABLE meetings ADD COLUMN notes_focus TEXT;",
+    // 10: which companion took the notes and the chat (older meetings: Mori)
+    "ALTER TABLE meetings ADD COLUMN companion TEXT;",
 ];
 
 /// Moves a meeting's current unpinned notes into a new archived version;
@@ -398,7 +402,7 @@ impl Store {
         let head = self
             .conn
             .query_row(
-                "SELECT title, started_at, duration_secs, language, dir, transcript_engine, transcript_error FROM meetings WHERE id = ?1",
+                "SELECT title, started_at, duration_secs, language, dir, transcript_engine, transcript_error, companion FROM meetings WHERE id = ?1",
                 [id],
                 |r| {
                     Ok((
@@ -409,11 +413,12 @@ impl Store {
                         r.get::<_, String>(4)?,
                         r.get::<_, Option<String>>(5)?,
                         r.get::<_, Option<String>>(6)?,
+                        r.get::<_, Option<String>>(7)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((title, started_at, duration_secs, language, dir, transcript_engine, transcript_error)) = head else {
+        let Some((title, started_at, duration_secs, language, dir, transcript_engine, transcript_error, companion)) = head else {
             return Ok(None);
         };
         let mut stmt = self.conn.prepare(
@@ -475,6 +480,7 @@ impl Store {
             summary,
             transcript_engine,
             transcript_error,
+            companion: companion.filter(|c| !c.is_empty()).unwrap_or_else(|| "mori".into()),
         }))
     }
 
@@ -603,6 +609,12 @@ impl Store {
         let focus: Option<Option<String>> =
             self.conn.query_row("SELECT notes_focus FROM meetings WHERE id = ?1", [meeting_id], |r| r.get(0)).optional()?;
         Ok(focus.flatten().filter(|f| !f.trim().is_empty()))
+    }
+
+    /// Records which companion took a meeting's notes and chat.
+    pub fn set_companion(&self, meeting_id: i64, companion: &str) -> Result<()> {
+        self.conn.execute("UPDATE meetings SET companion = ?2 WHERE id = ?1", params![meeting_id, companion])?;
+        Ok(())
     }
 
     pub fn set_notes_focus(&self, meeting_id: i64, focus: Option<&str>) -> Result<()> {

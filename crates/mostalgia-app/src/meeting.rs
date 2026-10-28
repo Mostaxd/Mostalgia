@@ -1264,7 +1264,7 @@ impl MeetingView {
             .gap_1p5()
             .cursor_pointer()
             .child(Icon::new(if folded { IconName::ChevronRight } else { IconName::ChevronDown }).xsmall().text_color(theme.muted_foreground))
-            .child(ui::section_title(tr("CHAT MIT MORI"), cx))
+            .child(ui::section_title(trf("CHAT MIT {}", &[&meeting_companion(m).to_uppercase()]), cx))
             .child(div().text_xs().text_color(theme.muted_foreground).child(format!("({})", m.chat.len())))
             .on_click(cx.listener(|this, _, _, cx| {
                 this.chat_folded = !this.chat_folded;
@@ -1398,7 +1398,7 @@ impl MeetingView {
                 }
             }
         } else {
-            out = out.child(ui::section_title(tr("NOTIZEN VON MORI"), cx).pb_1());
+            out = out.child(ui::section_title(trf("NOTIZEN VON {}", &[&meeting_companion(m).to_uppercase()]), cx).pb_1());
             for n in &m.notes {
                 out = out.child(row(n, cx));
             }
@@ -1862,6 +1862,11 @@ fn summary_language(m: &Meeting) -> String {
 }
 
 /// The chosen companion's name (who writes and regenerates the notes).
+/// The companion who took this meeting's notes and chat.
+fn meeting_companion(m: &Meeting) -> &'static str {
+    mostalgia_core::companion::Character::parse(&m.companion).unwrap_or(mostalgia_core::companion::Character::Mori).name()
+}
+
 fn companion_name() -> &'static str {
     Config::load().companion_character().name()
 }

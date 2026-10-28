@@ -109,7 +109,7 @@ app included) and can be dragged anywhere across your monitors.
   local or a cloud model (hover for which one). Without one she tells you to set it up, and
   when a provider fails she says so (with a worried face), instead of
   pretending.
-- Off by default: *Settings → Appearance → Mori*, with placement (app window
+- Off by default: *Settings → Companion*, with placement (app window
   or desktop), size and how often she takes notes. On GNOME Wayland the desktop Mori
   runs as a small XWayland window — that's what lets her stay on top. She idles, listens, writes, thinks, talks, dozes off when you
   pause, and looks worried when something breaks:
@@ -120,6 +120,19 @@ app included) and can be dragged anywhere across your monitors.
 |---|---|
 | ![Mori writing along](docs/screenshots/mori-writing.png) **Writing along** while people talk | ![Live notes](docs/screenshots/mori-points.png) **Live notes** — pin what matters |
 | ![Ask Mori](docs/screenshots/mori-chat.png) **Ask her** about this meeting or all of them | <p align="center"><img src="docs/screenshots/mori/desktop.png" alt="Mori on the desktop with live notes" height="320"> <img src="docs/screenshots/mori/mori.gif" alt="Mori's animations" height="320"></p> **On the desktop** — transparent, always on top |
+
+### Meet the companions
+
+Mori isn't the only note-taker. In *Settings → Companion* you pick who keeps
+you company — each with her own look, her own way of showing a new note and
+her own (honest, concise) personality in the chat:
+
+| | | |
+|---|---|---|
+| **Mori** takes notes on her notepad | **Tsumugi** weaves the notes into her scarf | **Hoshi** charts the notes as constellations |
+| ![Mori](docs/screenshots/mori-points.png) | ![Tsumugi](docs/screenshots/companion-tsumugi.png) | ![Hoshi](docs/screenshots/companion-hoshi.png) |
+
+![Companion settings](docs/screenshots/settings-companion.png)
 
 ## Gallery
 

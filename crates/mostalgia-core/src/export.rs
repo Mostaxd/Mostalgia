@@ -105,14 +105,14 @@ pub fn markdown(m: &Meeting) -> String {
         out.push_str("\n\n");
     }
     if !m.notes.is_empty() {
-        out.push_str(&format!("## {}\n\n", tr("Notizen von Mori")));
+        out.push_str(&format!("## {}\n\n", &trf("Notizen von {}", &[&companion_of(m)])));
         for line in note_lines(m) {
             out.push_str(&format!("- {line}\n"));
         }
         out.push('\n');
     }
     if !m.chat.is_empty() {
-        out.push_str(&format!("## {}\n\n", tr("Chat mit Mori")));
+        out.push_str(&format!("## {}\n\n", &trf("Chat mit {}", &[&companion_of(m)])));
         for (q, a) in chat_turns(m) {
             out.push_str(&format!("**{q}**\n\n{a}\n\n"));
         }
@@ -135,14 +135,14 @@ pub fn text(m: &Meeting) -> String {
         out.push('\n');
     }
     if !m.notes.is_empty() {
-        out.push_str(&format!("{}\n", tr("Notizen von Mori")));
+        out.push_str(&format!("{}\n", &trf("Notizen von {}", &[&companion_of(m)])));
         for line in note_lines(m) {
             out.push_str(&format!("- {line}\n"));
         }
         out.push('\n');
     }
     if !m.chat.is_empty() {
-        out.push_str(&format!("{}\n", tr("Chat mit Mori")));
+        out.push_str(&format!("{}\n", &trf("Chat mit {}", &[&companion_of(m)])));
         for (q, a) in chat_turns(m) {
             out.push_str(&format!("> {q}\n{a}\n\n"));
         }
@@ -201,13 +201,13 @@ pub fn docx(m: &Meeting, path: &Path) -> Result<()> {
         }
     }
     if !m.notes.is_empty() {
-        doc = doc.add_paragraph(Paragraph::new().add_run(Run::new().add_text(tr("Notizen von Mori")).bold().size(28)));
+        doc = doc.add_paragraph(Paragraph::new().add_run(Run::new().add_text(&trf("Notizen von {}", &[&companion_of(m)])).bold().size(28)));
         for line in note_lines(m) {
             doc = doc.add_paragraph(para(vec![Run::new().add_text("• ").size(22), Run::new().add_text(line).size(22)]));
         }
     }
     if !m.chat.is_empty() {
-        doc = doc.add_paragraph(Paragraph::new().add_run(Run::new().add_text(tr("Chat mit Mori")).bold().size(28)));
+        doc = doc.add_paragraph(Paragraph::new().add_run(Run::new().add_text(&trf("Chat mit {}", &[&companion_of(m)])).bold().size(28)));
         for (q, a) in chat_turns(m) {
             doc = doc.add_paragraph(Paragraph::new().add_run(Run::new().add_text(q).bold().size(22)));
             for line in a.lines().filter(|l| !l.trim().is_empty()) {
@@ -227,4 +227,9 @@ pub fn docx(m: &Meeting, path: &Path) -> Result<()> {
     let file = std::fs::File::create(path)?;
     doc.build().pack(file)?;
     Ok(())
+}
+
+/// The companion who took the meeting's notes and chat.
+fn companion_of(m: &Meeting) -> &'static str {
+    crate::companion::Character::parse(&m.companion).unwrap_or(crate::companion::Character::Mori).name()
 }

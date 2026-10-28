@@ -985,6 +985,7 @@ pub fn regenerate_notes(meeting_id: i64, focus: &str, progress: &mut dyn FnMut(u
     let rows: Vec<(&str, &str, f64)> = new.iter().map(|p| (p.kind.as_str(), p.text.as_str(), p.at_secs)).collect();
     let focus = Some(focus.trim()).filter(|f| !f.is_empty());
     let version = store.replace_unpinned_notes(meeting_id, &rows, focus)?;
+    store.set_companion(meeting_id, Config::load().companion_character().id())?;
     drop(store);
     if let Err(e) = crate::ask::index_meeting(meeting_id) {
         eprintln!("[mostalgia] search index after regenerating notes: {e:#}");

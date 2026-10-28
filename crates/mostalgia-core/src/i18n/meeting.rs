@@ -92,4 +92,8 @@ pub const EN: &[(&str, &str)] = &[
     ("Holt diese Notizen zurück; die jetzigen (außer angehefteten) kommen in die Liste", "Brings these notes back; the current ones (except pinned) go to this list"),
     ("Neu erstellen", "Regenerate"),
     ("1 Notiz", "1 note"),
+    ("Notizen von {}", "Notes from {}"),
+    ("Chat mit {}", "Chat with {}"),
+    ("NOTIZEN VON {}", "NOTES FROM {}"),
+    ("CHAT MIT {}", "CHAT WITH {}"),
 ];
