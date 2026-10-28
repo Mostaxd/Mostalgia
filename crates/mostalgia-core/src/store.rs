@@ -235,7 +235,7 @@ pub struct NewMeeting<'a> {
     pub dir: &'a Path,
 }
 
-const SCHEMA_VERSION: i32 = 11;
+const SCHEMA_VERSION: i32 = 12;
 
 const SCHEMA: &str = "
 CREATE TABLE meetings (
@@ -390,6 +390,8 @@ const MIGRATIONS: &[&str] = &[
     CREATE TRIGGER doc_chunks_ad AFTER DELETE ON doc_chunks BEGIN
         INSERT INTO doc_chunks_fts(doc_chunks_fts, rowid, heading, text) VALUES ('delete', old.id, old.heading, old.text);
     END;",
+    // 12: documents can be switched off for answers (kept, not searched)
+    "ALTER TABLE documents ADD COLUMN active INTEGER NOT NULL DEFAULT 1;",
 ];
 
 /// Moves a meeting's current unpinned notes into a new archived version;

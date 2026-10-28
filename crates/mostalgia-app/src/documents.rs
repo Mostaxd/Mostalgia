@@ -13,7 +13,7 @@ use crossbeam_channel::{Receiver, Sender};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{ActiveTheme, Icon, Sizable, StyledExt, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, Icon, Sizable, StyledExt, h_flex, switch::Switch, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use mostalgia_core::docs::{self, Chunk, DocHit, Document, Kind};
@@ -125,7 +125,7 @@ impl DocumentsView {
 
     fn run_search(&mut self, cx: &mut Context<Self>) {
         let q = self.query.trim();
-        self.hits = if q.is_empty() { Vec::new() } else { docs::search(q, None, 20).unwrap_or_default() };
+        self.hits = if q.is_empty() { Vec::new() } else { docs::search_drive(q, 20).unwrap_or_default() };
         cx.notify();
     }
 
@@ -280,6 +280,23 @@ impl DocumentsView {
         true
     }
 
+    /// Switches a document on or off for answers.
+    fn set_active(&mut self, id: i64, active: bool, cx: &mut Context<Self>) {
+        if let Err(e) = docs::set_active(id, active) {
+            self.errors.push(format!("{e:#}"));
+        }
+        self.reload(cx);
+    }
+
+    fn active_switch(&self, key: &str, d: &Document, cx: &mut Context<Self>) -> Switch {
+        let id = d.id;
+        Switch::new(SharedString::from(format!("{key}-{id}")))
+            .small()
+            .checked(d.active)
+            .tooltip(if d.active { tr("Wird für Antworten genutzt – klicken zum Ausschalten") } else { tr("Ausgeschaltet – Antworten nutzen dieses Dokument nicht") })
+            .on_change(cx.listener(move |this, on: &bool, _, cx| this.set_active(id, *on, cx)))
+    }
+
     fn delete(&mut self, id: i64, cx: &mut Context<Self>) {
         if self.confirm_delete != Some(id) {
             self.confirm_delete = Some(id);
@@ -373,6 +390,8 @@ impl DocumentsView {
             let failed = d.error.is_some() && !self.busy.contains(&id);
             let meta = if failed { d.error.clone().unwrap_or_default() } else { self.meta(d) };
             let busy = self.busy.contains(&id) || d.indexed_at.is_none() && d.error.is_none();
+            let meta = if d.active || failed { meta } else { format!("{} · {meta}", tr("Aus")) };
+            let switch = self.active_switch("doc-active", d, cx);
             items.push(
                 h_flex()
                     .id(("doc", id as usize))
@@ -384,11 +403,12 @@ impl DocumentsView {
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.muted))
                     .when(self.selected == Some(id), |el| el.bg(theme.accent))
-                    .child(Self::kind_badge(d.kind, cx).mt(px(2.)))
+                    .child(Self::kind_badge(d.kind, cx).mt(px(2.)).when(!d.active, |el| el.opacity(0.5)))
                     .child(
                         v_flex()
                             .flex_1()
                             .min_w_0()
+                            .when(!d.active, |el| el.opacity(0.55))
                             .child(div().text_sm().font_medium().truncate().child(d.title.clone()))
                             .child(
                                 h_flex()
@@ -399,6 +419,7 @@ impl DocumentsView {
                                     .child(div().truncate().child(meta)),
                             ),
                     )
+                    .child(div().flex_none().mt(px(2.)).child(switch))
                     .on_click(cx.listener(move |this, _, _, cx| this.open(id, None, cx)))
                     .into_any_element(),
             );
@@ -457,6 +478,15 @@ impl DocumentsView {
                     .gap_2()
                     .child(Self::kind_badge(doc.kind, cx))
                     .child(div().flex_1().min_w_0().text_lg().font_semibold().truncate().child(doc.title.clone()))
+                    .child(
+                        h_flex()
+                            .gap_1p5()
+                            .mr_2()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(if doc.active { tr("Für Antworten") } else { tr("Aus") })
+                            .child(self.active_switch("doc-active-reader", &doc, cx)),
+                    )
                     .child(
                         Button::new("doc-open-file")
                             .small()

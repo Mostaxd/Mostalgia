@@ -58,6 +58,9 @@ pub struct Document {
     /// Its chunks have embeddings (meaning search); without the model
     /// only keyword search finds it.
     pub embedded: bool,
+    /// Answers (Ask, the chat, live suggestions) search it; switched off,
+    /// it stays in the drive but isn't used.
+    pub active: bool,
 }
 
 impl Document {
@@ -283,7 +286,8 @@ pub fn index_pending(cancel: &std::sync::atomic::AtomicBool) -> Result<usize> {
 
 const SELECT: &str = "SELECT d.id, d.title, d.file_name, d.path, d.kind, d.language, d.size_bytes, d.pages, d.added_at, d.indexed_at, d.error,
     (SELECT COUNT(*) FROM doc_chunks c WHERE c.document_id = d.id),
-    EXISTS (SELECT 1 FROM doc_chunks c WHERE c.document_id = d.id AND c.embedding IS NOT NULL)
+    EXISTS (SELECT 1 FROM doc_chunks c WHERE c.document_id = d.id AND c.embedding IS NOT NULL),
+    d.active
     FROM documents d";
 
 fn row(r: &rusqlite::Row) -> rusqlite::Result<Document> {
@@ -301,6 +305,7 @@ fn row(r: &rusqlite::Row) -> rusqlite::Result<Document> {
         error: r.get(10)?,
         chunks: r.get::<_, i64>(11)? as usize,
         embedded: r.get(12)?,
+        active: r.get(13)?,
     })
 }
 
@@ -322,7 +327,9 @@ pub fn get(id: i64) -> Result<Option<Document>> {
 /// Whether the drive has any readable documents.
 pub fn any() -> bool {
     Store::open(&paths::database())
-        .and_then(|s| Ok(s.conn().query_row("SELECT EXISTS (SELECT 1 FROM doc_chunks)", [], |r| r.get::<_, bool>(0))?))
+        .and_then(|s| {
+            Ok(s.conn().query_row("SELECT EXISTS (SELECT 1 FROM doc_chunks c JOIN documents d ON d.id = c.document_id WHERE d.active)", [], |r| r.get::<_, bool>(0))?)
+        })
         .unwrap_or(false)
 }
 
@@ -381,13 +388,32 @@ fn fts_query(query: &str) -> Option<String> {
 }
 
 /// Hybrid search over the drive (keywords + meaning, fused like the
-/// meeting search). `only` limits it to one document.
+/// meeting search), for answers: switched-off documents are left out.
+/// `only` limits it to one document.
 pub fn search(query: &str, only: Option<i64>, limit: usize) -> Result<Vec<DocHit>> {
+    search_in(query, only, false, limit)
+}
+
+/// Like [`search`], over every document in the drive (switched off too),
+/// for the Documents screen.
+pub fn search_drive(query: &str, limit: usize) -> Result<Vec<DocHit>> {
+    search_in(query, None, true, limit)
+}
+
+/// Switches a document on or off for answers.
+pub fn set_active(id: i64, active: bool) -> Result<()> {
+    Store::open(&paths::database())?.conn().execute("UPDATE documents SET active = ?2 WHERE id = ?1", params![id, active])?;
+    Ok(())
+}
+
+fn search_in(query: &str, only: Option<i64>, inactive_too: bool, limit: usize) -> Result<Vec<DocHit>> {
     let store = Store::open(&paths::database())?;
     let conn = store.conn();
     let allowed: HashSet<i64> = {
-        let mut stmt = conn.prepare("SELECT id FROM doc_chunks WHERE (?1 IS NULL OR document_id = ?1)")?;
-        stmt.query_map(params![only], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+        let mut stmt = conn.prepare(
+            "SELECT c.id FROM doc_chunks c JOIN documents d ON d.id = c.document_id WHERE (?1 IS NULL OR c.document_id = ?1) AND (?2 OR d.active)",
+        )?;
+        stmt.query_map(params![only, inactive_too], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
     };
     if allowed.is_empty() {
         return Ok(Vec::new());
@@ -399,6 +425,7 @@ pub fn search(query: &str, only: Option<i64>, limit: usize) -> Result<Vec<DocHit
              WHERE doc_chunks_fts MATCH ?1 AND (?2 IS NULL OR c.document_id = ?2) ORDER BY rank LIMIT ?3",
         )?;
         bm25 = stmt.query_map(params![q, only, CANDIDATES as i64], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        bm25.retain(|id| allowed.contains(id));
     }
     let mut semantic: Vec<i64> = Vec::new();
     if let Some(qv) = embed::embed(&[format!("query: {query}")])?.and_then(|mut v| v.pop()) {
@@ -491,6 +518,13 @@ mod tests {
         assert_eq!((doc.title.as_str(), doc.kind, doc.chunks), ("Onboarding Guide", Kind::Markdown, 2));
         let hits = search("VPN password rotation", None, 5).unwrap();
         assert_eq!(hits[0].heading, "Onboarding › VPN");
+        set_active(id, false).unwrap();
+        assert!(!get(id).unwrap().unwrap().active);
+        assert!(search("VPN", None, 5).unwrap().is_empty());
+        assert!(!any());
+        assert_eq!(search_drive("VPN", 5).unwrap().len(), 1);
+        set_active(id, true).unwrap();
+        assert_eq!(search("VPN", None, 5).unwrap().len(), 1);
         assert!(delete(id).unwrap());
         assert!(search("VPN", None, 5).unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
