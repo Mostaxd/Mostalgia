@@ -138,6 +138,13 @@ pub struct Config {
     /// Extra size for the transcript and notes (1.0 = 100 %, on top of
     /// `ui_scale`), see [`Config::transcript_scale`].
     pub transcript_scale: f32,
+    /// Live answer helper: when someone asks the user a question during a
+    /// recording, the companion suggests an answer from past meetings
+    /// and/or documents, with sources.
+    pub companion_answers: bool,
+    /// Where suggested answers come from: "meetings", "documents" or
+    /// "both" (see [`Config::answer_sources`]).
+    pub companion_answer_sources: String,
 }
 
 /// When Mori looks for live notes during a recording.
@@ -293,6 +300,8 @@ impl Default for Config {
             companion_bar_indicator: "sparkles".into(),
             ui_scale: 1.0,
             transcript_scale: 1.0,
+            companion_answers: false,
+            companion_answer_sources: crate::assist::Sources::Both.id().into(),
         }
     }
 }
@@ -441,6 +450,11 @@ impl Config {
         };
         req.effort = None;
         Ok(req)
+    }
+
+    /// Where the live answer helper looks (unknown values: both).
+    pub fn answer_sources(&self) -> crate::assist::Sources {
+        crate::assist::Sources::parse(&self.companion_answer_sources).unwrap_or_default()
     }
 
     /// The fixed summary language, if one is set ("app" resolves to the UI language).

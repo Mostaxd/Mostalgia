@@ -1,6 +1,7 @@
 //! Citations in answers, turned into numbered markers plus a source list.
 //!
-//! Models cite as `[[m:ID@SECS]]` (library answers) or `[[t:SECS]]` /
+//! Models cite as `[[m:ID@SECS]]` (library answers), `[[d:ID@LOC]]`
+//! (a document's page or section) or `[[t:SECS]]` /
 //! `[[t:hh:mm:ss]]` (live answers), but also slip in raw times like
 //! `[00:01:00]`, `[1:02]`, ranges `[00:01:00–00:01:02]` or lists
 //! `[00:01:00, 00:01:17]`. [`parse`] removes all of them from the text and
@@ -15,6 +16,8 @@ pub enum Target {
     Time { secs: f64, end: Option<f64> },
     /// A moment in a saved meeting.
     Meeting { meeting_id: i64, secs: f64 },
+    /// A page (PDF) or section of a document in the documents drive.
+    Document { doc_id: i64, loc: u32 },
 }
 
 impl Target {
@@ -22,14 +25,17 @@ impl Target {
     pub fn secs(&self) -> f64 {
         match *self {
             Target::Time { secs, .. } | Target::Meeting { secs, .. } => secs,
+            Target::Document { .. } => 0.,
         }
     }
 
-    /// Short time label: "0:42", "1:00–1:02", "1:02:03".
+    /// Short time label: "0:42", "1:00–1:02", "1:02:03" (a document's
+    /// location as "#4"; the app labels it "p. 4" or "§4").
     pub fn time_label(&self) -> String {
         match *self {
             Target::Time { secs, end: Some(end) } => format!("{}–{}", short_time(secs), short_time(end)),
             Target::Time { secs, .. } | Target::Meeting { secs, .. } => short_time(secs),
+            Target::Document { loc, .. } => format!("#{loc}"),
         }
     }
 
@@ -37,6 +43,7 @@ impl Target {
         match *self {
             Target::Time { secs, end } => (-1, secs.round() as i64, end.map_or(-1, |e| e.round() as i64)),
             Target::Meeting { meeting_id, secs } => (meeting_id, secs.round() as i64, -1),
+            Target::Document { doc_id, loc } => (-2 - doc_id, loc as i64, -2),
         }
     }
 }
@@ -179,6 +186,13 @@ fn parse_double(inner: &str) -> Option<Vec<Target>> {
             let (id, secs) = item.split_once('@')?;
             let secs = parse_span(secs, parse_secs)?.secs();
             out.push(Target::Meeting { meeting_id: id.trim().parse().ok()?, secs });
+        }
+    } else if let Some(rest) = inner.strip_prefix("d:") {
+        for item in list(rest) {
+            let item = item.strip_prefix("d:").unwrap_or(item);
+            let (id, loc) = item.split_once('@').unwrap_or((item, "1"));
+            let loc = loc.trim().trim_start_matches(['p', 'S', '§', '#', '.', ' ']).parse::<u32>().ok().or_else(|| loc.trim().parse::<f64>().ok().map(|f| f as u32))?;
+            out.push(Target::Document { doc_id: id.trim().parse().ok()?, loc: loc.max(1) });
         }
     } else if let Some(rest) = inner.strip_prefix("t:") {
         for item in list(rest) {
@@ -340,6 +354,16 @@ mod tests {
         assert_eq!(c.sources[2], Target::Meeting { meeting_id: 2, secs: 40. });
         assert_eq!(c.lines().len(), 2);
         assert_eq!(c.lines()[1], vec![Mark::Text("- Agreed".into()), Mark::Cite { index: 1, target: Target::Meeting { meeting_id: 1, secs: 27. } }]);
+    }
+
+    #[test]
+    fn document_markers() {
+        let c = parse("VPN rotates [[d:3@12]]. Laptops [[d:3@12, d:4@1]], also [[m:1@5]] and [[d:5]].");
+        assert_eq!(render(&c), "VPN rotates^1. Laptops^1^2, also^3 and^4.");
+        assert_eq!(c.sources[1], Target::Document { doc_id: 4, loc: 1 });
+        assert_eq!(c.sources[3], Target::Document { doc_id: 5, loc: 1 });
+        assert_eq!(parse("[[d:3@p. 7]]").sources, vec![Target::Document { doc_id: 3, loc: 7 }]);
+        assert_eq!(render(&parse("Bad [[d:x@1]]")), "Bad [[d:x@1]]");
     }
 
     #[test]
