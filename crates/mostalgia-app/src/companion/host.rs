@@ -72,7 +72,7 @@ impl DesktopHost {
         if self.running.is_some() || self.problem.is_some() {
             return;
         }
-        if std::env::var_os("DISPLAY").is_none_or(|d| d.is_empty()) {
+        if cfg!(target_os = "linux") && std::env::var_os("DISPLAY").is_none_or(|d| d.is_empty()) {
             self.problem = Some(trf("{} kann nicht auf den Desktop: XWayland ist nicht verfügbar (DISPLAY ist nicht gesetzt).", &[&self.who()]));
             return;
         }

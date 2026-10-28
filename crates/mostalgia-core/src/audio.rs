@@ -5,9 +5,13 @@ use std::thread::JoinHandle;
 
 use anyhow::{Context, Result};
 use crossbeam_channel::Sender;
+#[cfg(target_os = "linux")]
 use libpulse_binding::def::BufferAttr;
+#[cfg(target_os = "linux")]
 use libpulse_binding::sample::{Format, Spec};
+#[cfg(target_os = "linux")]
 use libpulse_binding::stream::Direction;
+#[cfg(target_os = "linux")]
 use libpulse_simple_binding::Simple;
 
 use crate::{BLOCK_SAMPLES, SAMPLE_RATE};
@@ -165,6 +169,7 @@ impl TrackWriter {
 /// Capture one Pulse/PipeWire source at 16 kHz mono f32, archive it to a WAV
 /// file, and stream fixed-size blocks to the live transcriber. Pulse does the
 /// resampling from the device's native rate for us.
+#[cfg(target_os = "linux")]
 pub fn spawn_capture(
     source: Source,
     device: Option<String>,
@@ -234,6 +239,17 @@ pub fn spawn_capture(
     }))
 }
 
+#[cfg(not(target_os = "linux"))]
+pub fn spawn_capture(
+    _source: Source,
+    _device: Option<String>,
+    _wav_path: PathBuf,
+    _tx: Sender<Block>,
+    _ctl: CaptureCtl,
+) -> Result<JoinHandle<Result<()>>> {
+    anyhow::bail!("{}", crate::i18n::tr("Audioaufnahme ist auf diesem System noch nicht verfügbar"))
+}
+
 /// Hands a capture's blocks to the live transcriber without ever waiting
 /// for it: the track on disk is written first, so when the transcriber
 /// falls behind (its queue is full) the live path just skips audio. What
@@ -296,6 +312,7 @@ pub struct SourceInfo {
 
 /// A short German name for a capture source: the port for built-in sound
 /// cards (where every port shares one long card name), the card otherwise.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn friendly_label(name: &str, description: &str, port: Option<(&str, &str)>) -> String {
     let card = description.trim_start_matches("Monitor of ").trim();
     let (port_name, port_desc) = port.unwrap_or(("", ""));
@@ -336,6 +353,7 @@ fn friendly_label(name: &str, description: &str, port: Option<(&str, &str)>) -> 
 
 /// Lists Pulse/PipeWire capture sources, marking the default mic and the
 /// monitor of the default output.
+#[cfg(target_os = "linux")]
 pub fn list_sources() -> Result<Vec<SourceInfo>> {
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -444,8 +462,14 @@ pub fn list_sources() -> Result<Vec<SourceInfo>> {
     Ok(sources.take())
 }
 
+#[cfg(not(target_os = "linux"))]
+pub fn list_sources() -> Result<Vec<SourceInfo>> {
+    anyhow::bail!("{}", crate::i18n::tr("Audioaufnahme ist auf diesem System noch nicht verfügbar"))
+}
+
 /// Records `secs` from a source (without saving) and returns the loudest
 /// 100 ms RMS — for a "test device" button.
+#[cfg(target_os = "linux")]
 pub fn measure_level(device: Option<&str>, secs: f32) -> Result<f32> {
     let spec = Spec {
         format: Format::FLOAT32NE,
@@ -465,6 +489,11 @@ pub fn measure_level(device: Option<&str>, secs: f32) -> Result<f32> {
         peak = peak.max(crate::vad::rms(&samples));
     }
     Ok(peak)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn measure_level(_device: Option<&str>, _secs: f32) -> Result<f32> {
+    anyhow::bail!("{}", crate::i18n::tr("Audioaufnahme ist auf diesem System noch nicht verfügbar"))
 }
 
 #[cfg(test)]

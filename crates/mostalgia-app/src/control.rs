@@ -3,7 +3,9 @@
 //! let apps grab global hotkeys) and a tray icon (StatusNotifierItem; GNOME
 //! shows it with the AppIndicator extension Ubuntu ships).
 
+#[cfg(unix)]
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc::Sender;
 
@@ -39,6 +41,7 @@ impl Command {
 
 /// Listens on the control socket on a background thread. Fails if another
 /// instance already owns it.
+#[cfg(unix)]
 pub fn listen(tx: Sender<Command>) -> std::io::Result<()> {
     let path = paths::control_socket();
     if path.exists() {
@@ -68,6 +71,11 @@ pub fn listen(tx: Sender<Command>) -> std::io::Result<()> {
     Ok(())
 }
 
+#[cfg(not(unix))]
+pub fn listen(_tx: Sender<Command>) -> std::io::Result<()> {
+    Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "no control channel on this system yet"))
+}
+
 pub fn cleanup() {
     let _ = std::fs::remove_file(paths::control_socket());
 }
@@ -79,6 +87,7 @@ pub struct Tray {
     pub mic_on: bool,
 }
 
+#[cfg(target_os = "linux")]
 impl ksni::Tray for Tray {
     fn id(&self) -> String {
         "mostalgia".into()
@@ -155,5 +164,36 @@ impl ksni::Tray for Tray {
             item(tr("Mostalgia beenden"), "application-exit", Command::Quit),
         ]);
         items
+    }
+}
+
+/// The running tray icon.
+#[cfg(target_os = "linux")]
+pub struct TrayHandle(ksni::blocking::Handle<Tray>);
+
+#[cfg(target_os = "linux")]
+impl TrayHandle {
+    pub fn spawn(tray: Tray) -> anyhow::Result<Self> {
+        use ksni::blocking::TrayMethods;
+        Ok(Self(tray.spawn()?))
+    }
+
+    pub fn set_state(&self, recording: bool, mic_on: bool) {
+        self.0.update(|t| (t.recording, t.mic_on) = (recording, mic_on));
+    }
+}
+
+/// No tray icon on this system yet.
+#[cfg(not(target_os = "linux"))]
+pub struct TrayHandle(std::convert::Infallible);
+
+#[cfg(not(target_os = "linux"))]
+impl TrayHandle {
+    pub fn spawn(_tray: Tray) -> anyhow::Result<Self> {
+        anyhow::bail!("no tray icon on this system yet")
+    }
+
+    pub fn set_state(&self, _recording: bool, _mic_on: bool) {
+        match self.0 {}
     }
 }

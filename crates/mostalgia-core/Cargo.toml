@@ -17,8 +17,6 @@ dirs = "7.0.0"
 docx-rs = "0.4.22"
 hound = "3.5.1"
 keyring = "4.2.0"
-libpulse-binding = "2.30.1"
-libpulse-simple-binding = "2.29.0"
 pdf-extract = "0.12.1"
 nnnoiseless = { version = "0.5.2", default-features = false }
 reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "json", "multipart", "rustls"] }
@@ -35,6 +33,11 @@ whisper-rs-sys = "0.15.0"
 # .docx / .odt text for the documents drive (docx-rs already pulls it in).
 zip = { version = "8", default-features = false, features = ["deflate"] }
 
+
+# PulseAudio / PipeWire: capture, playback and call detection on Linux.
+[target.'cfg(target_os = "linux")'.dependencies]
+libpulse-binding = "2.30.1"
+libpulse-simple-binding = "2.29.0"
 
 [features]
 default = ["diarization"]

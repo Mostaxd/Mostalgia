@@ -12,6 +12,8 @@ pub const EN: &[(&str, &str)] = &[
     ("Laptop-Lautsprecher", "Laptop speakers"),
     ("Kopfhörer (Klinke)", "Headphones (jack)"),
     ("Grafikkarte HDMI{}", "Graphics card HDMI{}"),
+    ("Audioaufnahme ist auf diesem System noch nicht verfügbar", "Audio recording is not available on this system yet"),
+    ("Wiedergabe ist auf diesem System noch nicht verfügbar", "Playback is not available on this system yet"),
     ("Browser-Anruf ({})", "Browser call ({})"),
     // Export
     ("Transkript", "Transcript"),

@@ -4,14 +4,22 @@
 //! input shape so clicks on her transparent surroundings reach the windows
 //! below. All coordinates here are X11 root-window pixels.
 
+#[cfg(target_os = "linux")]
 use anyhow::{Context, Result};
+#[cfg(target_os = "linux")]
 use x11rb::connection::{Connection, RequestConnection};
+#[cfg(target_os = "linux")]
 use x11rb::protocol::randr::ConnectionExt as _;
+#[cfg(target_os = "linux")]
 use x11rb::protocol::shape::{self, ConnectionExt as _};
+#[cfg(target_os = "linux")]
 use x11rb::protocol::xproto::{self, AtomEnum, ClientMessageEvent, ConfigureWindowAux, ConnectionExt as _, EventMask, PropMode};
+#[cfg(target_os = "linux")]
 use x11rb::rust_connection::RustConnection;
+#[cfg(target_os = "linux")]
 use x11rb::wrapper::ConnectionExt as _;
 
+#[cfg(target_os = "linux")]
 x11rb::atom_manager! {
     Atoms: AtomsCookie {
         _NET_WM_STATE,
@@ -54,6 +62,7 @@ pub struct Monitor {
     pub primary: bool,
 }
 
+#[cfg(target_os = "linux")]
 pub struct X11 {
     conn: RustConnection,
     root: xproto::Window,
@@ -62,6 +71,7 @@ pub struct X11 {
     shape: bool,
 }
 
+#[cfg(target_os = "linux")]
 impl X11 {
     /// Connects to `$DISPLAY` (the XWayland server Mori's window lives on).
     pub fn connect(window: u32) -> Result<Self> {
@@ -171,5 +181,45 @@ impl X11 {
             out.push(Monitor { rect: Rect { x: 0, y: 0, w: s.width_in_pixels as i32, h: s.height_in_pixels as i32 }, primary: true });
         }
         out
+    }
+}
+
+/// No X11 here: `connect` always fails, so callers take their "not an X11
+/// window" path (the window stays an ordinary one).
+#[cfg(not(target_os = "linux"))]
+pub struct X11 {
+    pub window: u32,
+    never: std::convert::Infallible,
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(clippy::unused_self)]
+impl X11 {
+    pub fn connect(_window: u32) -> anyhow::Result<Self> {
+        anyhow::bail!("X11 is not available on this system")
+    }
+    pub fn setup_window(&self) -> anyhow::Result<()> {
+        match self.never {}
+    }
+    pub fn no_input_focus(&self) -> anyhow::Result<()> {
+        match self.never {}
+    }
+    pub fn position(&self) -> anyhow::Result<(i32, i32)> {
+        match self.never {}
+    }
+    pub fn move_resize(&self, _r: Rect) -> anyhow::Result<()> {
+        match self.never {}
+    }
+    pub fn set_input_rects(&self, _rects: &[Rect]) -> anyhow::Result<()> {
+        match self.never {}
+    }
+    pub fn pointer(&self) -> anyhow::Result<(i32, i32, bool)> {
+        match self.never {}
+    }
+    pub fn work_area(&self) -> Option<Rect> {
+        match self.never {}
+    }
+    pub fn monitors(&self) -> Vec<Monitor> {
+        match self.never {}
     }
 }

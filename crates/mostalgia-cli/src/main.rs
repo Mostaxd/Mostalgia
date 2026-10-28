@@ -1100,9 +1100,9 @@ fn export(id: i64, format: Option<&str>, output: Option<PathBuf>) -> Result<()> 
 
 /// Sends a command to the running app, or launches it.
 fn control(cmd: &str, launch_args: &[&str]) -> Result<()> {
-    use std::io::{Read, Write};
-    let socket = paths::control_socket();
-    if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&socket) {
+    #[cfg(unix)]
+    if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(paths::control_socket()) {
+        use std::io::{Read, Write};
         stream.write_all(format!("{cmd}\n").as_bytes())?;
         let mut reply = String::new();
         let _ = stream.read_to_string(&mut reply);
@@ -1110,7 +1110,7 @@ fn control(cmd: &str, launch_args: &[&str]) -> Result<()> {
         return Ok(());
     }
     // Not running: start the app (next to this binary, else from PATH).
-    let beside = std::env::current_exe()?.with_file_name("mostalgia-app");
+    let beside = std::env::current_exe()?.with_file_name(format!("mostalgia-app{}", std::env::consts::EXE_SUFFIX));
     let app = if beside.exists() { beside } else { PathBuf::from("mostalgia-app") };
     std::process::Command::new(&app)
         .args(launch_args)

@@ -12,10 +12,15 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
 use crossbeam_channel::Sender;
+#[cfg(target_os = "linux")]
 use libpulse_binding::callbacks::ListResult;
+#[cfg(target_os = "linux")]
 use libpulse_binding::context::{Context as PaContext, FlagSet, State};
+#[cfg(target_os = "linux")]
 use libpulse_binding::mainloop::standard::{IterateResult, Mainloop};
+#[cfg(target_os = "linux")]
 use libpulse_binding::operation::{Operation, State as OpState};
+#[cfg(target_os = "linux")]
 use libpulse_binding::proplist::properties;
 
 /// How often the stream list is checked.
@@ -89,11 +94,13 @@ pub fn classify(s: &CaptureStream) -> Option<String> {
 }
 
 /// A Pulse connection kept open for polling.
+#[cfg(target_os = "linux")]
 struct Pulse {
     ml: Mainloop,
     ctx: PaContext,
 }
 
+#[cfg(target_os = "linux")]
 impl Pulse {
     fn connect() -> Result<Self> {
         let mut ml = Mainloop::new().context("creating Pulse mainloop")?;
@@ -156,6 +163,22 @@ impl Pulse {
             self.wait(op)?;
         }
         Ok(streams.take())
+    }
+}
+
+/// No call detection here yet: connecting always fails, so the watcher
+/// just keeps waiting.
+#[cfg(not(target_os = "linux"))]
+struct Pulse;
+
+#[cfg(not(target_os = "linux"))]
+impl Pulse {
+    fn connect() -> Result<Self> {
+        anyhow::bail!("call detection is not available on this system yet")
+    }
+
+    fn capture_streams(&mut self) -> Result<Vec<CaptureStream>> {
+        Ok(Vec::new())
     }
 }
 
