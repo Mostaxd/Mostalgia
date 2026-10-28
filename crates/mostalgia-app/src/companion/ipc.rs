@@ -64,6 +64,8 @@ pub enum ToMori {
     ReloadConfig,
     /// The recording she asked for (`FromMori::StartRecording`) didn't start.
     StartFailed { message: String },
+    /// The live transcriber is stuck for `secs` (`None`: working).
+    Stalled { secs: Option<u64> },
     Quit,
 }
 
@@ -103,6 +105,10 @@ pub enum FromMori {
     SetSource { source: String, on: bool },
     /// Open Settings → Appearance (her options).
     OpenMoriSettings,
+    /// The live captions flagged the line spoken at `secs` (a bookmark).
+    Flag { secs: f64 },
+    /// Bring the Mostalgia window to the front.
+    ShowApp,
 }
 
 pub fn encode<T: Serialize>(msg: &T) -> String {

@@ -61,6 +61,9 @@ pub struct MostalgiaApp {
     confirm_delete: Option<Vec<i64>>,
     /// Audio the cleanup would delete, waiting for the user's first yes.
     confirm_cleanup: Option<Vec<mostalgia_core::cleanup::Candidate>>,
+    /// The live-caption window's process, and the stall it was last told.
+    caption_host: crate::companion::host::DesktopHost,
+    captions_stalled: Option<Option<u64>>,
     /// "Import recording…": the file, its title and date being edited.
     import: Option<ImportDialog>,
     /// The `audio_keep_days` the last cleanup ran with.
@@ -185,6 +188,8 @@ impl MostalgiaApp {
             anchor: None,
             confirm_delete: None,
             confirm_cleanup: None,
+            caption_host: crate::companion::host::DesktopHost::captions(),
+            captions_stalled: None,
             import: None,
             cleanup_days: None,
             delete_audio: true,
@@ -238,6 +243,7 @@ impl MostalgiaApp {
         .detach();
         cx.on_app_quit(|this, _| {
             this.mori_host.stop();
+            this.caption_host.stop();
             async {}
         })
         .detach();
@@ -513,6 +519,8 @@ impl MostalgiaApp {
                     self.open_mori_settings(window, cx);
                     window.activate_window();
                 }
+                FromMori::Flag { secs } => self.recording.update(cx, |r, cx| r.flag_at(secs, cx)),
+                FromMori::ShowApp => window.activate_window(),
                 FromMori::NotesSaved { meeting_id } => {
                     if let Some(m) = self.meeting_view().filter(|m| m.read(cx).id == meeting_id) {
                         m.update(cx, |m, cx| m.reload(cx));
@@ -525,6 +533,51 @@ impl MostalgiaApp {
         }
         let recording = self.recording.read(cx);
         self.mori_host.feed(recording);
+        self.captions_tick(window, cx);
+    }
+
+    /// The live-caption window: up while a recording runs (if switched
+    /// on), fed like Mori, and what it asks for.
+    fn captions_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::companion::ipc::{FromMori, ToMori};
+        let recording = self.recording.read(cx);
+        let wanted = recording.live_state().is_some() && mostalgia_core::config::Config::load().live_captions;
+        if !wanted {
+            if self.caption_host.is_running() {
+                self.caption_host.stop();
+            }
+            self.caption_host.problem = None;
+            self.captions_stalled = None;
+            return;
+        }
+        if !self.caption_host.is_running() {
+            self.caption_host.start(false);
+            self.captions_stalled = None;
+        }
+        let stalled = recording.stalled_secs();
+        self.caption_host.feed(recording);
+        if self.captions_stalled != Some(stalled) {
+            self.captions_stalled = Some(stalled);
+            self.caption_host.send(&ToMori::Stalled { secs: stalled });
+        }
+        for event in self.caption_host.poll() {
+            match event {
+                FromMori::Ready => self.captions_stalled = None,
+                FromMori::Flag { secs } => self.recording.update(cx, |r, cx| r.flag_at(secs, cx)),
+                FromMori::ShowApp => {
+                    self.screen = Screen::Recording;
+                    window.activate_window();
+                    cx.notify();
+                }
+                FromMori::PauseRecording { paused } => self.recording.update(cx, |r, cx| r.set_paused(paused, cx)),
+                FromMori::SetSource { source, on } => {
+                    if let Some(source) = mostalgia_core::Source::parse(&source) {
+                        self.recording.update(cx, |r, cx| r.set_source(source, on, cx));
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Why Mori isn't on the desktop although she should be.

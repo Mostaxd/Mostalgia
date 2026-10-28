@@ -32,15 +32,32 @@ struct Running {
     transcript_at: Instant,
 }
 
-#[derive(Default)]
 pub struct DesktopHost {
+    /// The process's flag: `--mori` (her) or `--captions` (live captions).
+    arg: &'static str,
     running: Option<Running>,
     restarts: Vec<Instant>,
     /// Why she isn't running although she should (shown in the app).
     pub problem: Option<String>,
 }
 
+impl Default for DesktopHost {
+    fn default() -> Self {
+        Self { arg: "--mori", running: None, restarts: Vec::new(), problem: None }
+    }
+}
+
 impl DesktopHost {
+    /// The live-caption window's process (`mostalgia-app --captions`).
+    pub fn captions() -> Self {
+        Self { arg: "--captions", running: None, restarts: Vec::new(), problem: None }
+    }
+
+    /// Who the process is, for messages about it.
+    fn who(&self) -> String {
+        if self.arg == "--captions" { mostalgia_core::i18n::tr("Live-Untertitel").to_string() } else { her_name().to_string() }
+    }
+
     pub fn is_running(&self) -> bool {
         self.running.is_some()
     }
@@ -56,12 +73,12 @@ impl DesktopHost {
             return;
         }
         if std::env::var_os("DISPLAY").is_none_or(|d| d.is_empty()) {
-            self.problem = Some(trf("{} kann nicht auf den Desktop: XWayland ist nicht verfügbar (DISPLAY ist nicht gesetzt).", &[&her_name()]));
+            self.problem = Some(trf("{} kann nicht auf den Desktop: XWayland ist nicht verfügbar (DISPLAY ist nicht gesetzt).", &[&self.who()]));
             return;
         }
-        match spawn() {
+        match spawn(self.arg) {
             Ok(r) => self.running = Some(r),
-            Err(e) => self.problem = Some(trf("{} konnte nicht gestartet werden: {}", &[&her_name(), &format!("{e:#}")]).to_string()),
+            Err(e) => self.problem = Some(trf("{} konnte nicht gestartet werden: {}", &[&self.who(), &format!("{e:#}")]).to_string()),
         }
     }
 
@@ -87,7 +104,7 @@ impl DesktopHost {
             && (r.stdin.write_all(ipc::encode(msg).as_bytes()).is_err() || r.stdin.flush().is_err())
         {
             // A dead pipe: `poll` notices the exit and restarts her.
-            eprintln!("[mostalgia] Mori's process isn't listening");
+            eprintln!("[mostalgia] the {} process isn't listening", self.arg);
         }
     }
 
@@ -96,12 +113,12 @@ impl DesktopHost {
         let Some(r) = &mut self.running else { return Vec::new() };
         let events: Vec<FromMori> = r.rx.try_iter().collect();
         if let Ok(Some(status)) = r.child.try_wait() {
-            eprintln!("[mostalgia] Mori's desktop process ended: {status}");
+            eprintln!("[mostalgia] the {} process ended: {status}", self.arg);
             self.running = None;
             let now = Instant::now();
             self.restarts.retain(|t| now - *t < RESTART_WINDOW);
             if self.restarts.len() >= MAX_RESTARTS {
-                self.problem = Some(trf("{} ist auf dem Desktop mehrmals abgestürzt ({}). Schalte sie in den Einstellungen aus und wieder ein, um es erneut zu versuchen.", &[&her_name(), &status]).to_string());
+                self.problem = Some(trf("{} ist auf dem Desktop mehrmals abgestürzt ({}). Schalte sie in den Einstellungen aus und wieder ein, um es erneut zu versuchen.", &[&self.who(), &status]).to_string());
             } else {
                 self.restarts.push(now);
                 self.start(false);
@@ -169,10 +186,10 @@ impl Drop for DesktopHost {
     }
 }
 
-fn spawn() -> anyhow::Result<Running> {
+fn spawn(arg: &str) -> anyhow::Result<Running> {
     let exe = std::env::current_exe()?;
     let mut child = Command::new(exe)
-        .arg("--mori")
+        .arg(arg)
         // GPUI takes Wayland when it can; she needs X11 (XWayland).
         .env_remove("WAYLAND_DISPLAY")
         .stdin(Stdio::piped())

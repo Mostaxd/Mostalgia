@@ -85,7 +85,7 @@ impl BarIndicator {
 /// Three small sparkles twinkling one after another (`motion`), or
 /// resting dimmed while the recording is paused; one still sparkle when
 /// motion is reduced.
-fn sparkles(color: Hsla, motion: bool, paused: bool) -> AnyElement {
+pub(crate) fn sparkles(color: Hsla, motion: bool, paused: bool) -> AnyElement {
     if !motion || paused {
         return Icon::new(IconName::Sparkles)
             .xsmall()

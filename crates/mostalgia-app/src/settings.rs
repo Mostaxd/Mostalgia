@@ -2868,6 +2868,13 @@ impl Render for SettingsView {
             element: speakers.into_any_element(),
         });
 
+        cards.push(Card {
+            category: Category::Aufnahme,
+            title: "Live-Untertitel",
+            keywords: "live untertitel captions fenster schwebend floating overlay teams zoom markieren flag",
+            wide: false,
+            element: self.render_live_captions(cx).into_any_element(),
+        });
         // ── KI & Transkription ──
         cards.push(Card {
             category: Category::Ki,
@@ -3381,6 +3388,23 @@ fn theme_name(id: &str, name: &str) -> String {
 /// "1 Tag" / "7 Tage".
 fn days_label(n: u32) -> String {
     if n == 1 { tr("1 Tag").to_string() } else { trf("{} Tage", &[&n]) }
+}
+
+// ── Aufnahme: the floating live captions ──
+impl SettingsView {
+    fn render_live_captions(&mut self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
+        let switch = Switch::new("set-live-captions").checked(self.config.live_captions).on_change(cx.listener(|this, v: &bool, _, cx| {
+            this.config.live_captions = *v;
+            this.save(cx);
+        }));
+        ui::card(cx).child(div().font_semibold().child(tr("Live-Untertitel"))).child(settings_row(
+            tr("Schwebendes Untertitel-Fenster"),
+            Some(tr("Während einer Aufnahme ein kleines Fenster über allen anderen (auch über Teams oder Zoom) mit den letzten Zeilen. Zeilen per Lesezeichen markieren, Mikrofon und Pause schalten – ohne den Fokus wegzunehmen. Verschiebbar an der oberen Leiste, Größe an der Ecke.")),
+            switch.into_any_element(),
+            &theme,
+        ))
+    }
 }
 
 // ── KI: the decision log ──
