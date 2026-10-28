@@ -3,6 +3,8 @@ name = "mostalgia-app"
 description = "Mostalgia desktop app"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "mostalgia-app"
