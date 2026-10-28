@@ -39,3 +39,7 @@ screenshots = ["dep:gpui-pre", "gpui-pre/test-support", "dep:gpui_platform", "gp
 [[example]]
 name = "screenshots"
 required-features = ["screenshots"]
+
+[[example]]
+name = "docs_screenshots"
+required-features = ["screenshots"]
