@@ -684,8 +684,22 @@ pub fn meeting_memory(message: &str, focus: &str) -> Result<(String, Option<llm:
 pub fn filter_points(points: Vec<Point>, previous: &[Point], limit: usize) -> PointsReply {
     let mut reply = PointsReply::default();
     for p in points {
-        if previous.iter().chain(&reply.points).any(|q| same_note(&q.text, &p.text)) {
+        if previous.iter().any(|q| same_note(&q.text, &p.text)) {
             reply.duplicates += 1;
+        } else if let Some(i) = reply.points.iter().position(|q| same_note(&q.text, &p.text)) {
+            // A repeat within the same reply: keep the better of the two
+            // (a figure as a fact over a key point, else the fuller text).
+            reply.duplicates += 1;
+            let q = &reply.points[i];
+            let words = |t: &str| t.split_whitespace().count();
+            let better = match (p.kind == PointKind::Fact, q.kind == PointKind::Fact) {
+                (true, false) => true,
+                (false, true) => false,
+                _ => words(&p.text) > words(&q.text),
+            };
+            if better {
+                reply.points[i] = p;
+            }
         } else if reply.points.len() >= limit {
             reply.over_limit += 1;
         } else {
@@ -707,7 +721,20 @@ pub fn same_note(a: &str, b: &str) -> bool {
     }
     let common = a.intersection(&b).count() as f64;
     let union = a.union(&b).count() as f64;
-    a == b || a.len().min(b.len()) >= 3 && common / union >= 0.75
+    if a == b || a.len().min(b.len()) >= 3 && common / union >= 0.75 {
+        return true;
+    }
+    // The same figures about the same thing in other words ("10,000 steps
+    // burn about 300 to 500 calories" twice, phrased differently).
+    let numbers = |w: &std::collections::BTreeSet<String>| -> std::collections::BTreeSet<String> {
+        w.iter().filter(|x| x.chars().any(|c| c.is_ascii_digit())).cloned().collect()
+    };
+    let (na, nb) = (numbers(&a), numbers(&b));
+    let content = |w: &std::collections::BTreeSet<String>| -> std::collections::BTreeSet<String> {
+        w.iter().filter(|x| x.chars().count() > 3 && !x.chars().any(|c| c.is_ascii_digit())).cloned().collect()
+    };
+    let shared_words = content(&a).intersection(&content(&b)).count();
+    na.len() >= 2 && na == nb && shared_words >= 2
 }
 
 /// What a [`live_points`] request brought: the new points, how many the
@@ -1297,6 +1324,16 @@ mod tests {
         assert!(same_note("Anna sends the revised Q3 forecast by Friday", "By Friday Anna sends the revised Q3 forecast to us"));
         assert!(!same_note("Anna sends the Q3 forecast by Friday", "Ben books the room for Tuesday"));
         assert!(!same_note("Ship Friday", "Ship Monday"));
+        // The repeat from the 10,000-steps meeting: same figures, other words.
+        let a = "Walking can be done in beautiful areas, and 10,000 steps burns about 300 to 500 calories.";
+        let b = "10,000 steps burns roughly 300 to 500 calories, which is substantial for weight loss.";
+        assert!(same_note(a, b));
+        assert!(!same_note(b, "10,000 steps take about an hour and a half per day."));
+        assert!(!same_note("Budget 2026 is 300 euros for travel", "Budget 2027 is 500 euros for travel"));
+        let note = |kind, text: &str, at| Point { kind, text: text.into(), at_secs: at };
+        let kept = filter_points(vec![note(PointKind::Point, a, 95.), note(PointKind::Fact, b, 99.)], &[], 9).points;
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].text, b);
         let previous = vec![p("Anna sends the Q3 forecast by Friday")];
         let reply = filter_points(
             vec![p("Anna sends the Q3 forecast by Friday."), p("Ben books the room for Tuesday"), p("Ben books the room for Tuesday!"), p("Chris updates the onboarding emails"), p("Dana writes the report")],
