@@ -157,10 +157,9 @@ pub const EN: &[(&str, &str)] = &[
     // Bar indicator (figure hidden)
     ("Funkeln", "Sparkles"),
     ("Kreisel", "Spinner"),
-    ("Aufnahmepunkt", "Recording dot"),
     ("Leiste", "Bar"),
     ("Anzeige während der Aufnahme", "While recording"),
-    ("Wenn die Figur ausgeblendet ist: wie ihre Leiste zeigt, dass aufgenommen wird. Das Aufnahmefenster und das Tray-Symbol zeigen immer den roten Punkt.", "When the figure is hidden: how her bar shows that a recording is running. The recording screen and the tray icon always show the red dot."),
+    ("Wie ihre Sprechblase und ihre Leiste eine laufende Aufnahme zeigen. Das Aufnahmefenster und das Tray-Symbol zeigen den roten Punkt.", "How her speech bubble and her bar show a running recording. The recording screen and the tray icon show the red dot."),
     ("Serviert jede Notiz wie eine Tasse Tee", "Serves each note like a cup of tea"),
     ("Schneidet jede Notiz auf einen Papierstreifen", "Cuts each note onto a paper strip"),
     ("Personen im Gespräch (mit dir):", "People in the call (including you):"),

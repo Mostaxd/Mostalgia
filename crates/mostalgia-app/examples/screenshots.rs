@@ -392,7 +392,7 @@ fn main() {
                     rec.update(cx, |r, cx| r.set_paused(false, cx));
                 })
                 .unwrap();
-                for (name, indicator) in [("2d4-mori-bar-spinner", mostalgia_app::companion::BarIndicator::Spinner), ("2d5-mori-bar-dot", mostalgia_app::companion::BarIndicator::Dot)] {
+                for (name, indicator) in [("2d4-mori-bar-spinner", mostalgia_app::companion::BarIndicator::Spinner), ("2d5-mori-bar-sparkles", mostalgia_app::companion::BarIndicator::Sparkles)] {
                     cx.update_window(handle, |_, _, cx| {
                         let c = view.read(cx).companion_view();
                         c.update(cx, |c, cx| c.demo_bar_indicator(indicator, cx));
