@@ -71,6 +71,30 @@ pub enum Event {
     /// is unreachable). Recording continues to disk; the chunk's text is
     /// missing until the meeting is transcribed again.
     EngineError { engine: String, message: String },
+    /// The live transcriber has been stuck on one piece of audio for
+    /// `secs` seconds (sent about every second while it lasts); `secs` 0
+    /// means it is working again. Recording to disk is not affected.
+    Stalled { secs: u64 },
+}
+
+/// Seconds the live transcriber may spend on one block before the
+/// recording shows it as stalled.
+pub const STALL_SECS: u64 = 20;
+
+/// What the watchdog reports at `now_ms`, given when the worker started on
+/// its current block (`busy_ms`, 0 while it waits for audio; times are
+/// milliseconds + 1 since the recording started) and whether a stall is
+/// being shown: `Some(secs)` while stalled, `Some(0)` once when it ends.
+fn watch(busy_ms: u64, now_ms: u64, shown: &mut bool) -> Option<u64> {
+    let stuck = if busy_ms == 0 { 0 } else { now_ms.saturating_sub(busy_ms - 1) / 1000 };
+    if stuck >= STALL_SECS {
+        *shown = true;
+        Some(stuck)
+    } else if std::mem::take(shown) {
+        Some(0)
+    } else {
+        None
+    }
 }
 
 /// A finished recording on disk.
@@ -238,7 +262,27 @@ impl Recorder {
         let interim = cfg.interim;
         let worker_dir = dir.clone();
         let worker_shared = shared.clone();
+        // The watchdog: notices a live transcriber stuck on one block
+        // (a hung GPU call, an unanswered cloud request) and says so; it
+        // ends with the worker (its clone of `busy` dropped).
+        let origin = std::time::Instant::now();
+        let busy = Arc::new(AtomicU64::new(0));
+        {
+            let busy = busy.clone();
+            let events = events.clone();
+            std::thread::spawn(move || {
+                let mut shown = false;
+                while Arc::strong_count(&busy) > 1 {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    let now = origin.elapsed().as_millis() as u64 + 1;
+                    if let Some(secs) = watch(busy.load(Ordering::SeqCst), now, &mut shown) {
+                        let _ = events.send(Event::Stalled { secs });
+                    }
+                }
+            });
+        }
         let worker = std::thread::spawn(move || -> Result<(Recording, Engine)> {
+            let busy_since = |b: &AtomicU64| b.store(origin.elapsed().as_millis() as u64 + 1, Ordering::SeqCst);
             let mut engine = engine;
             let mut live = [mic_live, sys_live];
             // A source that joins mid-recording gets its live path then.
@@ -318,7 +362,10 @@ impl Recorder {
             let mut interim_at = [std::time::Instant::now(); 2];
             let mut interim_len = [0usize; 2];
             let mut interim_text: [String; 2] = Default::default();
-            for block in block_rx.iter() {
+            loop {
+                busy.store(0, Ordering::SeqCst);
+                let Ok(block) = block_rx.recv() else { break };
+                busy_since(&busy);
                 let i = idx(block.source);
                 samples_seen[i] += (block.samples.len() + block.silence) as u64;
                 let _ = events.send(Event::Level {
@@ -408,6 +455,7 @@ impl Recorder {
                 }
             }
             // Capture ended: flush each source's last partial utterance.
+            busy_since(&busy);
             for (i, source) in [(0, Source::Mic), (1, Source::System)] {
                 if let Some(track) = live[i].take() {
                     run(&mut engine, &mut speakers, &mut locks, source, track.finish());
@@ -546,6 +594,18 @@ fn open_capture(shared: &Shared, ctl: &mut Ctl, dir: &std::path::Path, source: S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn watchdog_reports_a_stall_and_its_end() {
+        let mut shown = false;
+        let s = 1000 + 1; // busy since 1 s in
+        assert_eq!(watch(0, 60_000, &mut shown), None, "waiting for audio is fine");
+        assert_eq!(watch(s, 1000 + 19_999, &mut shown), None);
+        assert_eq!(watch(s, 1000 + STALL_SECS * 1000, &mut shown), Some(STALL_SECS));
+        assert_eq!(watch(s, 1000 + 45_500, &mut shown), Some(45));
+        assert_eq!(watch(0, 50_000, &mut shown), Some(0), "working again");
+        assert_eq!(watch(0, 51_000, &mut shown), None);
+    }
 
     fn track(denoise: bool) -> LiveTrack {
         LiveTrack {

@@ -660,6 +660,11 @@ fn start(models: &ModelArgs, sum: &SummaryArgs, cfg: RecordConfig, speakers: boo
                 clear_interim(&mut interim_shown);
                 eprintln!("[mostalgia] {}", trf("Transkription mit {} fehlgeschlagen (Aufnahme läuft weiter): {}", &[&engine, &message]));
             }
+            Event::Stalled { secs: 0 } => eprintln!("[mostalgia] {}", tr("Live-Transkription läuft wieder")),
+            Event::Stalled { secs } if secs % 10 == 0 || secs == mostalgia_core::recorder::STALL_SECS => {
+                eprintln!("[mostalgia] {}", trf("Live-Transkription hängt seit {} s (Aufnahme läuft weiter)", &[&secs]))
+            }
+            Event::Stalled { .. } => {}
             Event::Level { .. } => {}
             Event::Language { source, status } => {
                 let how = if status.manual { tr("gewählt") } else if status.locked { tr("fest") } else { tr("vorläufig") };

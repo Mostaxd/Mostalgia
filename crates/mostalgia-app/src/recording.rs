@@ -94,6 +94,8 @@ struct Live {
     /// Latest live engine failure (engine, message) and how many chunks failed.
     engine_error: Option<(SharedString, SharedString)>,
     failed_chunks: usize,
+    /// Seconds the live transcriber has been stuck (watchdog), while it is.
+    stalled_secs: Option<u64>,
     /// Recorder warnings (deduplicated) still shown.
     warnings: Vec<SharedString>,
     /// Noise floor per source on the meter scale, for the speech gate.
@@ -130,6 +132,7 @@ impl Live {
             choice,
             engine_error: None,
             failed_chunks: 0,
+            stalled_secs: None,
             warnings: Vec::new(),
             floor: [1.; 2],
             speech_at: None,
@@ -718,6 +721,12 @@ impl RecordingView {
                     eprintln!("[mostalgia] {engine}: {message}");
                     live.engine_error = Some((engine.into(), message.into()));
                     live.failed_chunks += 1;
+                }
+                Event::Stalled { secs } => {
+                    if secs == 0 || live.stalled_secs.is_none() {
+                        eprintln!("[mostalgia] live transcription {}", if secs == 0 { "working again".to_string() } else { format!("stalled for {secs} s") });
+                    }
+                    live.stalled_secs = (secs > 0).then_some(secs);
                 }
             }
         }
@@ -1310,6 +1319,27 @@ impl RecordingView {
         v_flex()
             .size_full()
             .child(header)
+            .when_some(live.stalled_secs, |el, secs| {
+                el.child(
+                    h_flex()
+                        .px_6()
+                        .py_2()
+                        .gap_2()
+                        .items_start()
+                        .bg(cx.theme().warning.opacity(0.12))
+                        .text_sm()
+                        .child(Icon::new(IconName::TriangleAlert).small().text_color(cx.theme().warning).mt(px(2.)))
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .child(div().font_medium().child(trf("Die Live-Transkription hängt seit {} s", &[&secs])))
+                                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(tr(
+                                    "Die Aufnahme läuft weiter und wird vollständig gespeichert; der fehlende Live-Text kommt mit der Transkription nach dem Ende.",
+                                ))),
+                        ),
+                )
+            })
             .when_some(live.engine_error.clone(), |el, (engine, message)| {
                 el.child(
                     h_flex()

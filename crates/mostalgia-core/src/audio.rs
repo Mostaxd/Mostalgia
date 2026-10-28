@@ -194,6 +194,7 @@ pub fn spawn_capture(
 
     Ok(std::thread::spawn(move || -> Result<()> {
         let mut buf = vec![0u8; BLOCK_SAMPLES * 4];
+        let mut feeder = Feeder::new(source, tx);
         while !ctl.stop.load(Ordering::SeqCst) {
             pulse.read(&mut buf).context("reading from Pulse stream")?;
             // Keep draining the stream while paused, but record nothing:
@@ -206,12 +207,58 @@ pub fn spawn_capture(
                 .map(|b| f32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
                 .collect();
             for block in track.push(samples, ctl.muted.load(Ordering::SeqCst))? {
-                // The receiver going away just means we stop transcribing live.
-                let _ = tx.send(block);
+                feeder.offer(block);
             }
         }
         track.finalize()
     }))
+}
+
+/// Hands a capture's blocks to the live transcriber without ever waiting
+/// for it: the track on disk is written first, so when the transcriber
+/// falls behind (its queue is full) the live path just skips audio. What
+/// it skipped arrives as one silent block once there is room again, so
+/// its clock stays on the recording's timeline; the final pass reads the
+/// track and misses nothing.
+pub struct Feeder {
+    source: Source,
+    tx: Sender<Block>,
+    /// Samples not handed over yet (sent as a silent block).
+    skipped: usize,
+    /// Samples skipped over the whole recording.
+    pub skipped_total: u64,
+}
+
+impl Feeder {
+    pub fn new(source: Source, tx: Sender<Block>) -> Self {
+        Self { source, tx, skipped: 0, skipped_total: 0 }
+    }
+
+    /// Queues `block`, or skips it if the transcriber's queue is full.
+    /// Never blocks. The receiver going away just means no live text.
+    pub fn offer(&mut self, block: Block) {
+        use crossbeam_channel::TrySendError;
+        let len = block.samples.len() + block.silence;
+        if self.skipped > 0 {
+            let gap = Block { source: self.source, samples: Vec::new(), silence: self.skipped };
+            match self.tx.try_send(gap) {
+                Ok(()) => self.skipped = 0,
+                Err(TrySendError::Full(_)) => {
+                    self.skip(len);
+                    return;
+                }
+                Err(TrySendError::Disconnected(_)) => return,
+            }
+        }
+        if let Err(TrySendError::Full(_)) = self.tx.try_send(block) {
+            self.skip(len);
+        }
+    }
+
+    fn skip(&mut self, len: usize) {
+        self.skipped += len;
+        self.skipped_total += len as u64;
+    }
 }
 
 pub struct SourceInfo {
@@ -405,6 +452,39 @@ mod tests {
     use super::*;
 
     const B: usize = BLOCK_SAMPLES;
+
+    /// A transcriber stuck for 50 blocks (5 s): capture never waits, and
+    /// once it catches up the skipped audio arrives as silence, so its
+    /// clock still covers every sample.
+    #[test]
+    fn stalled_transcriber_never_blocks_capture() {
+        let (tx, rx) = crossbeam_channel::bounded::<Block>(4);
+        let mut feeder = Feeder::new(Source::System, tx);
+        let t = std::time::Instant::now();
+        for _ in 0..50 {
+            feeder.offer(Block { source: Source::System, samples: vec![0.1; B], silence: 0 });
+        }
+        assert!(t.elapsed() < std::time::Duration::from_millis(100), "capture waited on the transcriber");
+        assert_eq!(rx.len(), 4);
+        assert_eq!(feeder.skipped_total, 46 * B as u64);
+        // Unstuck: it drains, then the next block brings the gap first.
+        let mut live = 0;
+        let mut silent = 0;
+        let mut take = |rx: &crossbeam_channel::Receiver<Block>| {
+            for b in rx.try_iter() {
+                live += b.samples.len();
+                silent += b.silence;
+            }
+        };
+        take(&rx);
+        feeder.offer(Block { source: Source::System, samples: vec![0.1; B], silence: 0 });
+        take(&rx);
+        assert_eq!(live + silent, 51 * B);
+        assert_eq!(silent, 46 * B);
+        // A transcriber that went away doesn't stop the capture either.
+        drop(rx);
+        feeder.offer(Block { source: Source::System, samples: vec![0.1; B], silence: 0 });
+    }
 
     fn tone(n: usize) -> Vec<f32> {
         (0..n).map(|i| 0.3 * (i as f32 * 0.05).sin() + 0.01).collect()
