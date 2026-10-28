@@ -67,6 +67,8 @@ pub const EN: &[(&str, &str)] = &[
     ("AUFGABEN", "ACTION ITEMS"),
     ("OFFENE FRAGEN", "OPEN QUESTIONS"),
     ("ZAHLEN & FAKTEN", "NUMBERS & FACTS"),
+    ("KERNPUNKTE", "KEY POINTS"),
+    ("Notizstil", "Note style"),
     ("Angeheftet – lösen", "Pinned – unpin"),
     ("Anheften", "Pin"),
     ("Die Anfrage ist abgebrochen", "The request was cut off"),

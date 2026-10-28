@@ -394,7 +394,41 @@ impl Companion {
                     cx.notify();
                 })),
         )
+        .child(self.render_style_chip(cx))
         .into_any_element()
+    }
+
+    /// This recording's note style: a chip that switches between the two
+    /// (the default comes from the settings).
+    fn render_style_chip(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        use mostalgia_core::companion::NoteStyle;
+        let theme = cx.theme().clone();
+        let style = self.notes_style_now();
+        let custom = self.style_override.is_some_and(|s| s != self.default_style);
+        let tip: SharedString = trf("Notizstil für diese Aufnahme: {} – {} Klicken zum Wechseln; den Standard legst du in den Einstellungen fest.", &[&style.label(), &style.hint()]).into();
+        h_flex()
+            .id("mori-style")
+            .flex_none()
+            .gap_1()
+            .px_2()
+            .py_0p5()
+            .rounded_full()
+            .cursor_pointer()
+            .bg(if custom { theme.primary.opacity(0.15) } else { theme.muted })
+            .text_color(if custom { theme.primary } else { theme.muted_foreground })
+            .hover(|s| s.bg(theme.primary.opacity(0.2)))
+            .child(Icon::new(IconName::StickyNote).xsmall())
+            .child(style.label())
+            .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx))
+            .on_click(cx.listener(|this, _, _, cx| {
+                let next = match this.notes_style_now() {
+                    NoteStyle::Default => NoteStyle::Modern,
+                    NoteStyle::Modern => NoteStyle::Default,
+                };
+                this.style_override = (next != this.default_style).then_some(next);
+                cx.notify();
+            }))
+            .into_any_element()
     }
 
     /// The bubble shows the Notes tab.

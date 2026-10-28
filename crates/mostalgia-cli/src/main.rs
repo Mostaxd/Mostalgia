@@ -206,6 +206,11 @@ enum Command {
         /// [default: the meeting's last focus, else the one in the settings]
         #[arg(long)]
         focus: Option<String>,
+        /// Note style: "default" (decisions, action items, questions,
+        /// figures) or "modern" (also key points; more notes)
+        /// [default: the one in the settings]
+        #[arg(long)]
+        style: Option<String>,
     },
     /// Export a meeting (summary + transcript) as Markdown, text, SRT or Word
     Export {
@@ -437,7 +442,7 @@ fn main() -> Result<()> {
             index_for_ask(id);
             Ok(())
         }
-        Command::Notes { id, focus } => regenerate_notes(id, focus),
+        Command::Notes { id, focus, style } => regenerate_notes(id, focus, style),
         Command::Export { id, format, output } => export(id, format.as_deref(), output),
         Command::Delete { id, keep_audio } => {
             anyhow::ensure!(open_store()?.delete_meeting(id, !keep_audio)?, "{}", trf("Keine Besprechung #{}", &[&id]));
@@ -461,16 +466,20 @@ fn main() -> Result<()> {
     }
 }
 
-fn regenerate_notes(id: i64, focus: Option<String>) -> Result<()> {
+fn regenerate_notes(id: i64, focus: Option<String>, style: Option<String>) -> Result<()> {
     use mostalgia_core::companion;
     let focus = match focus {
         Some(f) => f,
         None => open_store()?.notes_focus(id)?.unwrap_or_else(|| Config::load().companion_notes_focus),
     };
     let config = Config::load();
+    let style = match style {
+        Some(s) => companion::NoteStyle::parse(&s).with_context(|| trf("Unbekannter Notizstil: {} (default oder modern)", &[&s]))?,
+        None => config.notes_style(),
+    };
     let req = config.notes_request()?;
     eprintln!("[mostalgia] {}", trf("{} liest die Besprechung mit {} · {} …", &[&config.companion_character().name(), &req.connection.name, &req.model]));
-    let done = companion::regenerate_notes(id, &focus, &mut |part, parts| {
+    let done = companion::regenerate_notes(id, style, &focus, &mut |part, parts| {
         if parts > 1 {
             eprintln!("[mostalgia] {}", trf("Teil {} von {}", &[&part, &parts]));
         }

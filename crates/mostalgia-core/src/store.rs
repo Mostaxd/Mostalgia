@@ -31,7 +31,7 @@ pub struct Bookmark {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Note {
     pub id: i64,
-    /// "decision", "action", "question" or "fact".
+    /// "decision", "action", "question", "fact" or "point" (a key point).
     pub kind: String,
     pub text: String,
     pub at_secs: f64,

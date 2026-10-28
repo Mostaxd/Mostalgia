@@ -12,7 +12,8 @@
 //! begins there, as if everything before had been looked at already.
 //! MEMORY_PROBE=<s> makes one meeting-memory update for the lines up to then.
 //! GAP=<s> sets the least time between checks (as it happens), FOCUS=<text>
-//! the focus hint (default: the configured ones).
+//! the focus hint, STYLE=default|modern the note style (default: the
+//! configured ones).
 
 use std::sync::mpsc;
 use std::time::Instant;
@@ -70,7 +71,8 @@ fn main() {
     // GAP=<s> overrides the configured gap, FOCUS=<text> the focus hint.
     let gap: f64 = std::env::var("GAP").ok().and_then(|s| s.parse().ok()).unwrap_or(config.notes_gap() as f64);
     let focus = std::env::var("FOCUS").unwrap_or_else(|_| config.companion_notes_focus.clone());
-    println!("# {} lines, {:.0} s, mode {mode:?}, {} · {}", lines.len(), lines.last().unwrap().end, req.connection.name, req.model);
+    let style = std::env::var("STYLE").ok().and_then(|s| companion::NoteStyle::parse(&s)).unwrap_or_else(|| config.notes_style());
+    println!("# {} lines, {:.0} s, mode {mode:?}, style {}, focus {focus:?}, {} · {}", lines.len(), lines.last().unwrap().end, style.id(), req.connection.name, req.model);
     let finalized_at = |i: usize| lines[i].end + FINALIZE_DELAY;
     let context = |i: usize| ContextLine { at_secs: lines[i].start, speaker: lines[i].speaker.clone(), text: lines[i].text.clone(), interim: false };
 
@@ -196,7 +198,7 @@ fn main() {
             new_after = lines[done - 1].start;
             let (tx, previous, n, focus) = (tx.clone(), notes.clone(), runs, focus.clone());
             std::thread::spawn(move || {
-                let r = companion::live_points(&msg, stable, &previous, mode, &focus).map_err(|e| format!("{e:#}"));
+                let r = companion::live_points(&msg, stable, &previous, mode, style, &focus).map_err(|e| format!("{e:#}"));
                 let _ = tx.send((n, r, start + t0.elapsed().as_secs_f64() * speed));
             });
         }

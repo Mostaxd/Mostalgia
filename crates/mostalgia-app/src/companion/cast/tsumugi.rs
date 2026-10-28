@@ -1477,11 +1477,13 @@ fn kind_colors(kind: PointKind) -> (&'static str, &'static str) {
         PointKind::Action => (TERRA, CREAM),
         PointKind::Question => (AMBER, PLUM),
         PointKind::Fact => (PLUM, CREAM),
+        PointKind::Point => (SAGE_DEEP, CREAM),
     }
 }
 
 /// One woven band: the kind's colour with its motif in a row across it:
-/// diamonds (decision), chevrons (action), rings (question), blocks (fact).
+/// diamonds (decision), chevrons (action), rings (question), blocks (fact
+/// and key point).
 fn band(s: &mut String, kind: PointKind, x: f32, y: f32, w: f32, h: f32) {
     let (bg, fg) = kind_colors(kind);
     let _ = write!(
@@ -1534,7 +1536,7 @@ fn band(s: &mut String, kind: PointKind, x: f32, y: f32, w: f32, h: f32) {
                 n(r * 0.62),
                 n((m * 0.18).max(1.2))
             ),
-            PointKind::Fact => {
+            PointKind::Fact | PointKind::Point => {
                 let q = r * 0.62;
                 write!(
                     s,

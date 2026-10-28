@@ -102,6 +102,9 @@ pub struct MeetingView {
     regen_done: Option<(SharedString, Option<i64>)>,
     /// The focus used for this meeting in this session (prefills the panel).
     regen_focus: Option<String>,
+    /// The note style chosen in the panel (from the settings when it opens,
+    /// unless chosen this session).
+    regen_style: Option<companion::NoteStyle>,
     /// The focus the meeting's notes were taken with (stored with it).
     notes_focus: Option<String>,
     /// Earlier sets of notes a regenerate replaced.
@@ -137,6 +140,7 @@ impl MeetingView {
             regen_error: None,
             regen_done: None,
             regen_focus: None,
+            regen_style: None,
             notes_focus: None,
             note_versions: Vec::new(),
             versions_open: false,
@@ -205,6 +209,8 @@ impl MeetingView {
         let Some(input) = self.regen_panel.take() else { return };
         let focus = input.read(cx).value().trim().to_string();
         self.regen_focus = Some(focus.clone());
+        let style = self.regen_style.unwrap_or_else(|| Config::load().notes_style());
+        self.regen_style = Some(style);
         let req = match Config::load().notes_request().and_then(|req| req.connection.require_key().map(|_| req)) {
             Ok(req) => req,
             Err(e) => {
@@ -222,7 +228,7 @@ impl MeetingView {
         let (tx, rx) = crossbeam_channel::unbounded::<Result<(usize, usize), Result<companion::Regenerated, String>>>();
         std::thread::spawn(move || {
             let progress_tx = tx.clone();
-            let result = companion::regenerate_notes(id, &focus, &mut |part, parts| {
+            let result = companion::regenerate_notes(id, style, &focus, &mut |part, parts| {
                 let _ = progress_tx.send(Ok((part, parts)));
             });
             let _ = tx.send(Err(result.map_err(|e| format!("{e:#}"))));
@@ -1119,6 +1125,25 @@ impl MeetingView {
                             .child(div().text_sm().font_medium().child(trf("Worauf soll {} achten? (optional)", &[&companion_name()])))
                             .child(Input::new(&input).small()),
                     )
+                    .child({
+                        let now = self.regen_style.unwrap_or_else(|| Config::load().notes_style());
+                        v_flex()
+                            .gap_1()
+                            .child(div().text_sm().font_medium().child(tr("Notizstil")))
+                            .child(h_flex().flex_wrap().gap_1().children(companion::NoteStyle::ALL.map(|style| {
+                                let on = style == now;
+                                Button::new(SharedString::from(format!("regen-style-{}", style.id())))
+                                    .small()
+                                    .label(style.label())
+                                    .when(on, |b| b.primary())
+                                    .when(!on, |b| b.ghost())
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.regen_style = Some(style);
+                                        cx.notify();
+                                    }))
+                            })))
+                            .child(div().text_xs().text_color(theme.muted_foreground).child(now.hint()))
+                    })
                     .child(match &target {
                         Ok(t) => div().text_xs().text_color(theme.muted_foreground).child(trf("Sendet das Transkript an {}.", &[t])),
                         Err(e) => div().text_xs().text_color(theme.danger).child(e.clone()),
@@ -1303,6 +1328,7 @@ impl MeetingView {
                 Some(PointKind::Decision) => theme.success,
                 Some(PointKind::Action) => theme.primary,
                 Some(PointKind::Question) => theme.warning,
+                Some(PointKind::Point) => theme.magenta,
                 _ => theme.info,
             };
             h_flex()
@@ -1383,6 +1409,7 @@ impl MeetingView {
                 (PointKind::Decision, tr("ENTSCHEIDUNGEN")),
                 (PointKind::Action, tr("AUFGABEN")),
                 (PointKind::Question, tr("OFFENE FRAGEN")),
+                (PointKind::Point, tr("KERNPUNKTE")),
                 (PointKind::Fact, tr("ZAHLEN & FAKTEN")),
             ];
             for (kind, title) in groups {

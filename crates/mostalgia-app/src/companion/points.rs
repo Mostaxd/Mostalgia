@@ -61,6 +61,7 @@ pub(super) fn kind_color(kind: PointKind, theme: &gpui_kit::component::Theme) ->
         PointKind::Action => theme.primary,
         PointKind::Question => theme.warning,
         PointKind::Fact => theme.info,
+        PointKind::Point => theme.magenta,
     }
 }
 
@@ -106,6 +107,8 @@ pub(crate) struct NotesState {
     memory_rx: Option<Receiver<(f64, Result<String, String>)>>,
     /// When the latest card appears (or appeared).
     last_release: Option<Instant>,
+    /// The style and focus logged last (logged again when they change).
+    style_seen: Option<(companion::NoteStyle, String)>,
 }
 
 /// Where the stack goes: `anchor` is the y of its edge nearest to her
@@ -224,9 +227,15 @@ impl Companion {
         let (tx, rx) = crossbeam_channel::bounded(1);
         let notes = previous.clone();
         let focus = self.notes_focus_in(cx);
+        let style = self.notes_style_now();
+        if self.notes.style_seen != Some((style, focus.clone())) {
+            let wide = if companion::focus_widens(&focus) { " (the focus asks for more: room for more notes per check)" } else { "" };
+            eprintln!("[mori] {} live notes: style {}, focus {focus:?}{wide}", clock(), style.id());
+            self.notes.style_seen = Some((style, focus.clone()));
+        }
         let memory_focus = focus.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(companion::live_points(&message, stable, &notes, mode, &focus).map_err(|e| format!("{e:#}")));
+            let _ = tx.send(companion::live_points(&message, stable, &notes, mode, style, &focus).map_err(|e| format!("{e:#}")));
         });
         self.points_rx = Some(rx);
         // Long meetings: older lines fold into the memory (in the

@@ -97,6 +97,11 @@ pub struct Config {
     /// What Mori should look out for in her notes ("" = nothing special);
     /// a recording can override it from her bubble.
     pub companion_notes_focus: String,
+    /// How much her notes cover: "default" (decisions, action items, open
+    /// questions, key figures) or "modern" (also the key points of talks,
+    /// lectures and videos; more notes). See [`Config::notes_style`]; a
+    /// recording or a regenerate can choose another.
+    pub companion_notes_style: String,
     /// A note card shrinks to one quiet line this long after it appeared
     /// (seconds; 0 = never).
     pub companion_card_collapse_secs: f32,
@@ -245,6 +250,7 @@ impl Default for Config {
             companion_notes_gap_secs: NOTES_GAP_DEFAULT,
             companion_notes_interval_secs: 0,
             companion_notes_focus: String::new(),
+            companion_notes_style: crate::companion::NoteStyle::Default.id().into(),
             companion_card_collapse_secs: CARD_COLLAPSE_DEFAULT,
             companion_card_stagger_secs: CARD_STAGGER_DEFAULT,
             companion_notes_provider: String::new(),
@@ -447,6 +453,11 @@ impl Config {
     }
 
     /// The chosen companion (also while turned off: names in the settings).
+    /// Her note style (unknown values: the default one).
+    pub fn notes_style(&self) -> crate::companion::NoteStyle {
+        crate::companion::NoteStyle::parse(&self.companion_notes_style).unwrap_or_default()
+    }
+
     pub fn companion_character(&self) -> crate::companion::Character {
         crate::companion::Character::parse(&self.companion_character).unwrap_or(crate::companion::Character::Mori)
     }
@@ -551,6 +562,8 @@ mod tests {
         assert_eq!(old.notes_mode(), NotesMode::Every(60));
         assert_eq!((old.notes_gap(), old.card_collapse(), old.card_stagger()), (9., Some(7.), 3.5));
         assert_eq!(old.companion_notes_focus, "");
+        assert_eq!((old.companion_notes_style.as_str(), old.notes_style()), ("default", crate::companion::NoteStyle::Default));
+        assert_eq!(Config::default().notes_style(), crate::companion::NoteStyle::Default);
         // Choosing a mode remembers the interval across the others.
         let mut c = old.clone();
         c.set_notes_mode(NotesMode::Live);

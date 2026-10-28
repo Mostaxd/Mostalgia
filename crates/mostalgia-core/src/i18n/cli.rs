@@ -39,6 +39,7 @@ pub const EN: &[(&str, &str)] = &[
     ("Unbekanntes Format {} (md, txt, srt, docx)", "Unknown format {} (md, txt, srt, docx)"),
     ("Unbekannter Anbieter {} (claude, deepseek)", "Unknown provider {} (claude, deepseek)"),
     ("Unbekannter Anbieter {}", "Unknown provider {}"),
+    ("Unbekannter Notizstil: {} (default oder modern)", "Unknown note style: {} (default or modern)"),
     ("Unbekannte Denktiefe {} (low, medium, high, xhigh, max)", "Unknown thinking level {} (low, medium, high, xhigh, max)"),
     ("{} konnte nicht gestartet werden", "Could not start {}"),
     ("Suchindex: {} Abschnitte in {} s", "Search index: {} passages in {} s"),

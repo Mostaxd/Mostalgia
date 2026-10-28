@@ -1164,6 +1164,21 @@ impl SettingsView {
         let stagger = self.config.card_stagger();
         let stagger_control = self.stepper("mori-stagger", secs_label(stagger), neighbours(STAGGER_STEPS, stagger), |c, v| c.companion_card_stagger_secs = v, cx);
         let notes_on = notes_mode != NotesMode::Off;
+        let style_now = self.config.notes_style();
+        let style_buttons = mostalgia_core::companion::NoteStyle::ALL.map(|style| {
+            let on = style == style_now;
+            Button::new(SharedString::from(format!("mori-style-{}", style.id())))
+                .small()
+                .label(style.label())
+                .when(on, |b| b.primary())
+                .when(!on, |b| b.ghost())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.config.companion_notes_style = style.id().into();
+                    this.save(cx);
+                }))
+                .into_any_element()
+        });
+        let style_hint = format!("{} {}", style_now.hint(), trf("Für eine Aufnahme änderst du ihn in der Sprechblase von {}.", &[&name]));
         // Which connection and model write the notes ("Wie Fragen" = the ask one).
         let notes_picker = notes_on.then(|| {
             let separate = !self.config.companion_notes_provider.is_empty();
@@ -1197,9 +1212,10 @@ impl SettingsView {
                 el.child(div().text_xs().text_color(theme.muted_foreground).child(estimate))
                     .child(row(tr("Karte einklappen nach"), Some(tr("Danach zeigt eine Notiz-Karte nur noch eine ruhige Zeile.")), collapse_control))
                     .child(row(tr("Abstand zwischen Karten"), Some(tr("Kommen mehrere Notizen auf einmal, erscheinen sie so weit nacheinander.")), stagger_control))
+                    .child(row(tr("Notizstil"), Some(&style_hint), h_flex().flex_wrap().gap_1().children(style_buttons).into_any_element()))
                     .child(row(
                         &trf("Worauf soll {} achten?", &[&name]),
-                        Some(&trf("Optional. {} achtet zuerst darauf, notiert aber weiter klar wichtige Entscheidungen und Aufgaben. Für eine Aufnahme änderst du es in ihrer Sprechblase.", &[&name])),
+                        Some(&trf("Optional, und wichtiger als der Notizstil: {} achtet zuerst darauf. Verlangst du mehr (z. B. „jede Kleinigkeit“), notiert sie mehr; erfunden wird nie etwas. Für eine Aufnahme änderst du es in ihrer Sprechblase.", &[&name])),
                         div().w(px(280.)).child(Input::new(&self.notes_focus).small()).into_any_element(),
                     ))
             })

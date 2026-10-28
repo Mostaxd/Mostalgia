@@ -1318,13 +1318,15 @@ const SKY: (f32, f32, f32, f32) = (14.0, 14.0, 226.0, 126.0);
 /// Star colour per kind, close to the card colours of the dark theme
 /// (but every kind also has its own shape: a five-pointed star for a
 /// decision, a four-pointed sparkle for an action item, a ringed planet for
-/// an open question, a round steady light for a fact).
+/// an open question, a round steady light for a fact or a key point, the
+/// key point in its own blue).
 fn kind_hex(kind: PointKind) -> &'static str {
     match kind {
         PointKind::Decision => "#FFD27A",
         PointKind::Action => "#F59B7B",
         PointKind::Question => "#D2B0E8",
         PointKind::Fact => "#8FD3D4",
+        PointKind::Point => "#A9C4FF",
     }
 }
 
@@ -1372,7 +1374,7 @@ fn sky_star(s: &mut String, kind: PointKind, c: P, r: f32, glow: f32) {
                 n(r * 0.17)
             );
         }
-        PointKind::Fact => {
+        PointKind::Fact | PointKind::Point => {
             let g = r * 1.45;
             let _ = write!(
                 s,

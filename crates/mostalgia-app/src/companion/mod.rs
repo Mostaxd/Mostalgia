@@ -29,7 +29,7 @@ use gpui_kit::component::{ActiveTheme, StyledExt, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use mostalgia_core::ask::AskEvent;
-use mostalgia_core::companion::{AnswerEvent, Point, PointKind, PointsReply};
+use mostalgia_core::companion::{AnswerEvent, NoteStyle, Point, PointKind, PointsReply};
 use mostalgia_core::config::{Config, NotesMode};
 use mostalgia_core::i18n::{self, tr, trf};
 
@@ -179,6 +179,10 @@ pub struct Companion {
     card_stagger: Duration,
     /// The focus hint from the settings (`Config::companion_notes_focus`).
     default_focus: String,
+    /// The note style from the settings (`Config::companion_notes_style`)…
+    default_style: NoteStyle,
+    /// …and this recording's choice from her bubble (`None` = the default).
+    style_override: Option<NoteStyle>,
     /// This recording's focus hint (empty = the default), set in her bubble
     /// or with the record button; saved with the meeting.
     focus_input: Entity<InputState>,
@@ -320,6 +324,8 @@ impl Companion {
             card_collapse: None,
             card_stagger: Duration::ZERO,
             default_focus: String::new(),
+            default_style: NoteStyle::Default,
+            style_override: None,
             focus_input,
             focus_editing: false,
             focus_clear: false,
@@ -393,6 +399,7 @@ impl Companion {
         self.card_collapse = config.card_collapse().map(Duration::from_secs_f32);
         self.card_stagger = Duration::from_secs_f32(config.card_stagger());
         self.default_focus = config.companion_notes_focus.trim().to_string();
+        self.default_style = config.notes_style();
         self.pos = config.companion_pos;
         self.hidden = config.companion_hidden;
         let character = config.companion_character();
@@ -428,6 +435,12 @@ impl Companion {
     fn notes_focus_in(&self, cx: &App) -> String {
         let own = self.focus_input.read(cx).value().trim().to_string();
         if own.is_empty() { self.default_focus.clone() } else { own }
+    }
+
+    /// The note style for this recording: chosen in her bubble, else the
+    /// default from the settings.
+    fn notes_style_now(&self) -> NoteStyle {
+        self.style_override.unwrap_or(self.default_style)
     }
 
     pub fn is_enabled(&self) -> bool {
@@ -887,6 +900,7 @@ impl Companion {
             }
         }
         self.focus_clear = true;
+        self.style_override = None;
         self.focus_editing = false;
         if self.points_rx.is_some() {
             self.late_save = Some(meeting_id);
