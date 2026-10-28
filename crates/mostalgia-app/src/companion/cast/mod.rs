@@ -10,4 +10,6 @@
 pub use mostalgia_core::companion::PointKind;
 
 pub mod hoshi;
+pub mod jin;
+pub mod kaito;
 pub mod tsumugi;
