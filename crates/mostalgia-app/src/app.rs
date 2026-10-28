@@ -178,6 +178,8 @@ impl MostalgiaApp {
         };
         this.reload(cx);
         this.sync_mori(false);
+        // Recordings a crash left unfinished become meetings now.
+        this.recording.update(cx, |r, cx| r.recover_orphans(cx));
         // Work on meetings (see `processing`): redraw the library and the
         // open screens whenever it moves on.
         cx.spawn(async move |this, cx| {
@@ -946,12 +948,17 @@ impl MostalgiaApp {
 
         let mut items: Vec<AnyElement> = Vec::new();
         if self.query.trim().is_empty() {
-            // The recording that just stopped, until it's in the library.
-            if let Some(job) = crate::processing::get(crate::processing::Key::Recording) {
+            // Recordings not in the library yet: the one that just stopped,
+            // and any recovered after a crash.
+            let pending: Vec<crate::processing::Job> =
+                crate::processing::all().into_iter().filter(|(k, _)| k.meeting().is_none()).map(|(_, j)| j).collect();
+            if !pending.is_empty() {
                 items.push(ui::section_title(tr("WIRD VERARBEITET"), cx).px_2().pt_4().pb_1().into_any_element());
+            }
+            for (ix, job) in pending.into_iter().enumerate() {
                 items.push(
                     v_flex()
-                        .id("processing-recording")
+                        .id(("processing-recording", ix))
                         .px_2()
                         .py_1p5()
                         .gap_1()
@@ -1083,7 +1090,7 @@ impl MostalgiaApp {
                         .into_any_element(),
                 );
             }
-            if self.meetings.is_empty() && crate::processing::get(crate::processing::Key::Recording).is_none() {
+            if self.meetings.is_empty() && !crate::processing::all().iter().any(|(k, _)| k.meeting().is_none()) {
                 items.push(
                     div()
                         .px_2()

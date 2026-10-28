@@ -165,6 +165,14 @@ enum Command {
         #[arg(long)]
         no_final: bool,
     },
+    /// Turn recordings a crash, kill or power loss left unfinished into
+    /// meetings (the app does this on its own when it starts)
+    Recover {
+        #[command(flatten)]
+        models: ModelArgs,
+        #[command(flatten)]
+        summary: SummaryArgs,
+    },
     /// Run the final pass on an existing recording folder and add it to the library
     Import {
         /// A session folder containing mic.wav and/or system.wav
@@ -523,9 +531,14 @@ fn main() -> Result<()> {
                 denoise: models.denoise(),
                 interim: mostalgia_core::config::Config::load().interim_text,
             };
+            let orphans = mostalgia_core::recovery::orphans(&cfg.out_dir);
+            if !orphans.is_empty() {
+                eprintln!("[mostalgia] {}", trf("{} unterbrochene Aufnahme(n) gefunden – `mostalgia recover` macht Besprechungen daraus", &[&orphans.len()]));
+            }
             start(&models, &summary, cfg, speakers, no_final)
         }
         Command::Import { dir, models, summary } => import(&dir, &models, &summary),
+        Command::Recover { models, summary } => recover(&models, &summary),
         Command::ImportText { file, title, date, duration, language, focus, style, no_notes, summary } => {
             import_text(&file, TextImportArgs { title, date, duration, language, focus, style, no_notes }, &summary)
         }
@@ -708,6 +721,8 @@ fn finish(engine: &mut Engine, models: &ModelArgs, sum: &SummaryArgs, rec: &Reco
     );
     let t = std::time::Instant::now();
     let saved = finalize::save_recording(rec, engine, &models.final_pass_options(), &models.language(), &[])?;
+    // In the library now: nothing left to recover.
+    mostalgia_core::recovery::finish(&rec.dir);
     let id = saved.meeting_id;
     let store = open_store()?;
     let meeting = store.get(id)?.with_context(|| trf("Keine Besprechung #{}", &[&id]))?;
@@ -781,6 +796,31 @@ fn summarize(store: &Store, id: i64, req: &summary::SummaryRequest, required: bo
         store.set_title(id, title)?;
     }
     println!("\n{}", s.markdown);
+    Ok(())
+}
+
+fn recover(models: &ModelArgs, sum: &SummaryArgs) -> Result<()> {
+    let orphans = mostalgia_core::recovery::orphans(&paths::recordings_dir());
+    if orphans.is_empty() {
+        println!("{}", tr("Keine unterbrochenen Aufnahmen."));
+        return Ok(());
+    }
+    let mut engine = models.build_engine(&models.final_choice()?)?;
+    let mut failed = 0;
+    for dir in orphans {
+        let result = mostalgia_core::recovery::recording(&dir).and_then(|rec| {
+            eprintln!(
+                "[mostalgia] {}",
+                trf("Unterbrochene Aufnahme von {} ({} min) wiederhergestellt – wird verarbeitet …", &[&rec.started_at.format("%H:%M"), &((rec.duration_secs / 60.0).round() as u64)])
+            );
+            finish(&mut engine, models, sum, &rec)
+        });
+        if let Err(e) = result {
+            failed += 1;
+            eprintln!("[mostalgia] {}", trf("Unterbrochene Aufnahme in {} lässt sich nicht wiederherstellen: {}", &[&dir.display(), &format!("{e:#}")]));
+        }
+    }
+    anyhow::ensure!(failed == 0, "{}", trf("{} Aufnahme(n) nicht wiederhergestellt", &[&failed]));
     Ok(())
 }
 

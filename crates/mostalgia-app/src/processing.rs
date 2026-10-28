@@ -11,6 +11,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub enum Key {
     /// The recording that just stopped (not in the library yet).
     Recording,
+    /// A recording left unfinished by a crash, by its start (unix seconds).
+    Recovered(i64),
     /// A meeting's transcript being made again.
     Transcript(i64),
     /// A meeting's summary being written.
@@ -23,7 +25,7 @@ impl Key {
     /// The library meeting this is about.
     pub fn meeting(self) -> Option<i64> {
         match self {
-            Key::Recording => None,
+            Key::Recording | Key::Recovered(_) => None,
             Key::Transcript(id) | Key::Summary(id) | Key::Notes(id) => Some(id),
         }
     }

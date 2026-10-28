@@ -208,6 +208,9 @@ impl Recorder {
         let started_at = Local::now();
         let dir = cfg.out_dir.join(format!("session-{}", started_at.timestamp()));
         std::fs::create_dir_all(&dir).context("creating session directory")?;
+        // Until the meeting is in the library (`recovery::finish`), this
+        // folder is recovered if the app dies.
+        crate::recovery::begin(&dir, &crate::recovery::Manifest { started_at: started_at.timestamp(), pid: std::process::id() })?;
 
         // Each source gets its own detector and chunker, so one side's noise
         // never bleeds into the other's transcript.

@@ -89,6 +89,10 @@ pub fn late_pad(timeline: u64, block: u64, written: u64) -> u64 {
 pub struct TrackWriter {
     source: Source,
     wav: hound::WavWriter<std::io::BufWriter<std::fs::File>>,
+    /// The same file, to sync it to disk.
+    file: std::fs::File,
+    /// Samples since the last flush and sync.
+    unsynced: u64,
     written: Arc<AtomicU64>,
     join_at: Option<Arc<AtomicU64>>,
 }
@@ -101,8 +105,10 @@ impl TrackWriter {
             bits_per_sample: 16,
             sample_format: hound::SampleFormat::Int,
         };
-        let wav = hound::WavWriter::create(path, spec).context("creating WAV writer")?;
-        Ok(Self { source, wav, written, join_at })
+        let file = std::fs::File::create(path).context("creating WAV file")?;
+        let sync = file.try_clone().context("creating WAV file")?;
+        let wav = hound::WavWriter::new(std::io::BufWriter::new(file), spec).context("creating WAV writer")?;
+        Ok(Self { source, wav, file: sync, unsynced: 0, written, join_at })
     }
 
     /// Writes one captured block (or as much silence when `muted`).
@@ -124,15 +130,29 @@ impl TrackWriter {
                 self.wav.write_sample(s16)?;
             }
             self.written.fetch_add(samples.len() as u64, Ordering::SeqCst);
+            self.unsynced += samples.len() as u64;
             out.push(Block { source: self.source, samples, silence: 0 });
         }
+        if self.unsynced as f64 >= crate::recovery::SYNC_SECS * SAMPLE_RATE as f64 {
+            self.sync()?;
+        }
         Ok(out)
+    }
+
+    /// Flushes what's buffered with the header's sizes brought up to date,
+    /// and syncs it to disk: a crash, kill or power loss after this keeps a
+    /// readable track (see `recovery`).
+    fn sync(&mut self) -> Result<()> {
+        self.unsynced = 0;
+        self.wav.flush().context("writing WAV file")?;
+        self.file.sync_data().context("syncing WAV file to disk")
     }
 
     fn silence(&mut self, n: u64) -> Result<()> {
         for _ in 0..n {
             self.wav.write_sample(0i16)?;
         }
+        self.unsynced += n;
         self.written.fetch_add(n, Ordering::SeqCst);
         Ok(())
     }

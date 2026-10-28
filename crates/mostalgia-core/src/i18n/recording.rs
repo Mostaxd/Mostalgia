@@ -99,4 +99,8 @@ pub const EN: &[(&str, &str)] = &[
     ("Sprecher werden erkannt …", "Finding speakers …"),
     ("Wird gespeichert …", "Saving …"),
     ("Live-Transkript – wird durch das fertige ersetzt, sobald es gespeichert ist.", "Live transcript – replaced by the final one once it's saved."),
+    ("Unterbrochene Aufnahme von {} ({} min) wiederhergestellt – wird verarbeitet …", "Recovered an unfinished recording from {} ({} min). Processing …"),
+    ("Wartet …", "Waiting …"),
+    ("Unterbrochene Aufnahme in {} lässt sich nicht wiederherstellen: {}", "The unfinished recording in {} can't be recovered: {}"),
+    ("Wiederhergestellte Aufnahme ließ sich nicht verarbeiten: {} — sie liegt in {}", "The recovered recording couldn't be processed: {} — it's in {}"),
 ];
