@@ -406,6 +406,7 @@ impl ModelArgs {
             diarize: self.diarize(),
             denoise_mic: self.denoise(),
             people: self.people.unwrap_or(0),
+            progress: Default::default(),
         }
     }
 

@@ -44,6 +44,65 @@ pub fn read_wav(path: &Path) -> Result<Vec<f32>> {
     Ok(samples)
 }
 
+/// Where a final pass is, for progress displays.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Stage {
+    /// Track `track` of `tracks` (0-based): `done` of `total` seconds of
+    /// its speech transcribed (`total` 0 while its speech is being found).
+    Transcribing { track: usize, tracks: usize, done: f64, total: f64 },
+    /// Telling the voices on the desktop audio apart.
+    Speakers,
+    /// Writing the meeting to the library.
+    Saving,
+}
+
+impl Stage {
+    /// How far the transcription is over all tracks, 0..=1 (`None` for
+    /// the stages without a measure).
+    pub fn fraction(&self) -> Option<f32> {
+        match *self {
+            Stage::Transcribing { track, tracks, done, total } => {
+                let within = if total > 0.0 { (done / total).clamp(0.0, 1.0) } else { 0.0 };
+                Some(((track as f64 + within) / tracks.max(1) as f64).clamp(0.0, 1.0) as f32)
+            }
+            _ => None,
+        }
+    }
+
+    /// "Transkribiere … 42 %", "Sprecher werden erkannt …", "Wird gespeichert …".
+    pub fn label(&self) -> String {
+        use crate::i18n::{tr, trf};
+        match self {
+            Stage::Transcribing { total, .. } if *total <= 0.0 && self.fraction() == Some(0.0) => tr("Sprache wird gesucht …").to_string(),
+            Stage::Transcribing { .. } => trf("Transkribiere … {} %", &[&((self.fraction().unwrap_or(0.0) * 100.0).floor() as u32)]),
+            Stage::Speakers => tr("Sprecher werden erkannt …").to_string(),
+            Stage::Saving => tr("Wird gespeichert …").to_string(),
+        }
+    }
+}
+
+/// Receives a final pass's [`Stage`]s (from its worker thread).
+#[derive(Clone, Default)]
+pub struct Progress(Option<std::sync::Arc<dyn Fn(Stage) + Send + Sync>>);
+
+impl Progress {
+    pub fn new(f: impl Fn(Stage) + Send + Sync + 'static) -> Self {
+        Self(Some(std::sync::Arc::new(f)))
+    }
+
+    pub fn report(&self, stage: Stage) {
+        if let Some(f) = &self.0 {
+            f(stage);
+        }
+    }
+}
+
+impl std::fmt::Debug for Progress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() { "Progress(..)" } else { "Progress(none)" })
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct FinalPassOptions {
     /// Silero VAD model; without it each track goes to Whisper whole.
@@ -55,6 +114,8 @@ pub struct FinalPassOptions {
     /// People in the call, counting you (a `diarize::PEOPLE_CHOICES`
     /// value; 0 = let the speaker separation decide).
     pub people: u8,
+    /// Told how far the pass is.
+    pub progress: Progress,
 }
 
 /// Each speech region goes to Whisper on its own: given a longer span with
@@ -108,7 +169,10 @@ fn final_pass_in(
     let mut vad = opts.vad_model.as_deref().map(load_vad).transpose()?;
     let diarize = opts.diarize;
     let mut out = Vec::new();
-    for (source, path) in tracks {
+    let n = tracks.len();
+    for (track, (source, path)) in tracks.iter().enumerate() {
+        let report = |done: f64, total: f64| opts.progress.report(Stage::Transcribing { track, tracks: n, done, total });
+        report(0.0, 0.0);
         let mut samples = read_wav(path)?;
         if opts.denoise_mic && *source == Source::Mic {
             samples = crate::denoise::denoise_all(&samples);
@@ -125,6 +189,9 @@ fn final_pass_in(
             !audio.is_empty() && crate::vad::rms(audio) >= gate
         })
         .collect();
+        let total: f64 = spans.iter().map(|(a, b)| b - a).sum();
+        let mut done = 0.0;
+        report(0.0, total);
         let mut language = track_language(engine, &samples, &spans, picked[*source as usize].clone())?;
         if let Some(status) = language.status() {
             eprintln!("[mostalgia] language {}: {}", source.as_str(), describe(&status));
@@ -145,6 +212,8 @@ fn final_pass_in(
             } else {
                 engine.transcribe_track_as(audio, lang.as_deref())?
             };
+            done += end - start;
+            report(done, total);
             let alone = segments.len() == 1;
             for seg in segments {
                 let text = seg.text.trim().to_string();
@@ -163,6 +232,7 @@ fn final_pass_in(
             }
         }
         if diarize && *source == Source::System {
+            opts.progress.report(Stage::Speakers);
             let mut lines: Vec<&mut FinalSegment> = out[first..].iter_mut().collect();
             let has_mic = tracks.iter().any(|(s, _)| *s == Source::Mic);
             let speakers = crate::diarize::Speakers::on_system_track(opts.people, has_mic);
@@ -318,6 +388,7 @@ pub fn save_recording(
             Some(trf("Feinschliff mit {} fehlgeschlagen: {}", &[&engine.label(), &format!("{e:#}")])),
         ),
     };
+    opts.progress.report(Stage::Saving);
     let mut store = crate::store::Store::open(&crate::paths::database())?;
     let title = trf("Besprechung {}", &[&crate::i18n::date_time(&rec.started_at)]);
     let id = store.insert_meeting(
@@ -351,6 +422,7 @@ pub fn retranscribe(meeting_id: i64, engine: &mut Engine, opts: &FinalPassOption
     anyhow::ensure!(!tracks.is_empty(), "{}", tr("Die Audiodateien dieser Besprechung gibt es nicht mehr"));
     let mut notes = Vec::new();
     let segments = final_pass_with_notes(engine, &tracks, opts, &mut notes)?;
+    opts.progress.report(Stage::Saving);
     store.replace_segments(meeting_id, &segments)?;
     let note = (!notes.is_empty()).then(|| notes.join(" · "));
     store.set_transcript_info(meeting_id, &engine.label(), note.as_deref())?;
@@ -378,6 +450,25 @@ fn store_detected_language(store: &crate::store::Store, meeting_id: i64, configu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn progress_over_all_tracks() {
+        let at = |track, done, total| Stage::Transcribing { track, tracks: 2, done, total };
+        assert_eq!(at(0, 0.0, 0.0).fraction(), Some(0.0));
+        assert_eq!(at(0, 50.0, 100.0).fraction(), Some(0.25));
+        assert_eq!(at(1, 0.0, 0.0).fraction(), Some(0.5));
+        assert_eq!(at(1, 100.0, 100.0).fraction(), Some(1.0));
+        assert_eq!(at(1, 150.0, 100.0).fraction(), Some(1.0), "never past the end");
+        assert_eq!(Stage::Speakers.fraction(), None);
+        assert!(at(0, 84.0, 100.0).label().ends_with("42 %"));
+        assert!(!at(0, 0.0, 0.0).label().contains('%'), "no 0 % while speech is still being found");
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = seen.clone();
+        let progress = Progress::new(move |s| sink.lock().unwrap().push(s));
+        progress.report(Stage::Speakers);
+        Progress::default().report(Stage::Saving);
+        assert_eq!(*seen.lock().unwrap(), [Stage::Speakers]);
+    }
 
     #[test]
     fn digital_silence_is_not_the_room() {

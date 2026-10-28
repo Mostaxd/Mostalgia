@@ -100,4 +100,5 @@ pub const EN: &[(&str, &str)] = &[
     ("Aus Text importiert, ohne Audio", "Imported from text, no audio"),
     ("Aus Text importiert · ohne Audio und ohne Zeiten", "Imported from text · no audio and no times"),
     ("Aus Text importiert · ohne Audio", "Imported from text · no audio"),
+    ("WIRD VERARBEITET", "PROCESSING"),
 ];

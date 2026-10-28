@@ -178,6 +178,32 @@ impl MostalgiaApp {
         };
         this.reload(cx);
         this.sync_mori(false);
+        // Work on meetings (see `processing`): redraw the library and the
+        // open screens whenever it moves on.
+        cx.spawn(async move |this, cx| {
+            let mut seen = crate::processing::generation();
+            loop {
+                cx.background_executor().timer(std::time::Duration::from_millis(250)).await;
+                let now = crate::processing::generation();
+                if now == seen {
+                    continue;
+                }
+                seen = now;
+                let alive = this
+                    .update(cx, |this, cx| {
+                        this.recording.update(cx, |_, cx| cx.notify());
+                        if let Some(m) = this.meeting_view() {
+                            m.update(cx, |m, cx| m.processing_changed(cx));
+                        }
+                        cx.notify();
+                    })
+                    .is_ok();
+                if !alive {
+                    break;
+                }
+            }
+        })
+        .detach();
         cx.on_app_quit(|this, _| {
             this.mori_host.stop();
             async {}
@@ -896,6 +922,36 @@ impl MostalgiaApp {
 
         let mut items: Vec<AnyElement> = Vec::new();
         if self.query.trim().is_empty() {
+            // The recording that just stopped, until it's in the library.
+            if let Some(job) = crate::processing::get(crate::processing::Key::Recording) {
+                items.push(ui::section_title(tr("WIRD VERARBEITET"), cx).px_2().pt_4().pb_1().into_any_element());
+                items.push(
+                    v_flex()
+                        .id("processing-recording")
+                        .px_2()
+                        .py_1p5()
+                        .gap_1()
+                        .rounded(theme.radius)
+                        .cursor_pointer()
+                        .when(on_record_screen, |el| el.bg(theme.sidebar_accent).text_color(theme.sidebar_accent_foreground))
+                        .when(!on_record_screen, |el| el.hover(|s| s.bg(theme.sidebar_accent.opacity(0.6))))
+                        .child(div().w_full().text_sm().font_medium().truncate().child(job.title.clone()))
+                        .child(
+                            h_flex()
+                                .gap_1p5()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(gpui_kit::component::spinner::Spinner::new().xsmall().color(theme.primary))
+                                .child(div().truncate().child(job.stage.clone())),
+                        )
+                        .child(ui::progress_bar(job.fraction, cx))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.screen = Screen::Recording;
+                            cx.notify();
+                        }))
+                        .into_any_element(),
+                );
+            }
             let today = Local::now().date_naive();
             let mut group: Option<&'static str> = None;
             for (ix, m) in self.meetings.iter().enumerate() {
@@ -944,11 +1000,25 @@ impl MostalgiaApp {
                                 .when(ui::is_rtl(&m.title), |el| el.child(ui::bidi_text(m.title.clone(), false)))
                                 .into_any_element(),
                         })
+                        .when_some(crate::processing::for_meeting(id), |el, (_, job)| {
+                            el.child(
+                                h_flex()
+                                    .gap_1p5()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(gpui_kit::component::spinner::Spinner::new().xsmall().color(theme.primary))
+                                    .child(div().truncate().child(match job.fraction {
+                                        Some(f) if !job.stage.contains('%') => format!("{} {}", job.stage, crate::processing::percent(f)),
+                                        _ => job.stage,
+                                    })),
+                            )
+                        })
                         .child(
                             h_flex()
                                 .gap_1p5()
                                 .text_xs()
                                 .text_color(theme.muted_foreground)
+                                .when(crate::processing::has_failure(id), |el| el.child(Icon::new(IconName::TriangleAlert).xsmall().text_color(theme.danger)))
                                 .child(format!("{time} · {}", ui::minutes(m.duration_secs)))
                                 .when(m.has_summary, |el| el.child(Icon::new(IconName::Sparkles).xsmall().text_color(theme.primary)))
                                 .when(m.text_import, |el| el.child(Icon::new(IconName::FileText).xsmall())),
@@ -989,7 +1059,7 @@ impl MostalgiaApp {
                         .into_any_element(),
                 );
             }
-            if self.meetings.is_empty() {
+            if self.meetings.is_empty() && crate::processing::get(crate::processing::Key::Recording).is_none() {
                 items.push(
                     div()
                         .px_2()

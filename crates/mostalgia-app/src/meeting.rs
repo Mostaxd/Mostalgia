@@ -21,6 +21,7 @@ use mostalgia_core::i18n::{self, tr, trf};
 use mostalgia_core::{Source, cloud_stt, companion, finalize, paths, summary, voices};
 
 use crate::recording::SharedEngine;
+use crate::processing;
 use crate::ui;
 
 /// Bars per waveform row.
@@ -75,6 +76,9 @@ pub struct MeetingView {
     position: Option<f64>,
     peaks: Option<Vec<(Source, Vec<f32>)>>,
     summarizing: bool,
+    /// Whether work on this meeting was running at the last look (see
+    /// [`MeetingView::processing_changed`]).
+    was_busy: bool,
     error: Option<SharedString>,
     notice: Option<SharedString>,
     edit: Option<Edit>,
@@ -136,6 +140,7 @@ impl MeetingView {
             position: None,
             peaks: None,
             summarizing: false,
+            was_busy: false,
             error: None,
             notice: None,
             edit: None,
@@ -164,6 +169,8 @@ impl MeetingView {
             _subscriptions: Vec::new(),
         };
         this.reload(cx);
+        this.take_failures();
+        this.was_busy = processing::for_meeting(id).is_some();
         if this.meeting.as_ref().is_some_and(|m| m.summary.is_none() && !m.segments.is_empty()) {
             this.tab = 1;
         }
@@ -179,6 +186,32 @@ impl MeetingView {
 
     pub fn set_tab(&mut self, tab: usize, cx: &mut Context<Self>) {
         self.tab = tab;
+        cx.notify();
+    }
+
+    /// Errors of work on this meeting that ended while it wasn't open (or
+    /// here, before the view saw them): shown where that work shows them,
+    /// next to its retry.
+    fn take_failures(&mut self) {
+        for (key, message) in processing::take_failures(self.id) {
+            let message: SharedString = message.into();
+            match key {
+                processing::Key::Transcript(_) => self.transcribe_error = Some(message),
+                processing::Key::Notes(_) => self.regen_error = Some(message),
+                _ => self.error = Some(message),
+            }
+        }
+    }
+
+    /// Work on meetings started or moved on: redraw, and load what work on
+    /// this meeting (maybe started in another view of it) just finished.
+    pub fn processing_changed(&mut self, cx: &mut Context<Self>) {
+        let busy = processing::for_meeting(self.id).is_some();
+        if self.was_busy && !busy {
+            self.reload(cx);
+        }
+        self.was_busy = busy;
+        self.take_failures();
         cx.notify();
     }
 
@@ -269,12 +302,23 @@ impl MeetingView {
         self.regen_done = None;
         cx.notify();
         let id = self.id;
+        let key = processing::Key::Notes(id);
+        let title = self.meeting.as_ref().map(|m| m.title.clone()).unwrap_or_default();
+        processing::set(key, processing::Job { title, stage: trf("{} schreibt Notizen …", &[&companion_name()]), fraction: None });
         let (tx, rx) = crossbeam_channel::unbounded::<Result<(usize, usize), Result<companion::Regenerated, String>>>();
+        let failed_provider = provider.clone();
         std::thread::spawn(move || {
             let progress_tx = tx.clone();
             let result = companion::regenerate_notes(id, style, &focus, &mut |part, parts| {
+                if parts > 1 {
+                    processing::stage(key, trf("{} schreibt Notizen … (Teil {} von {})", &[&companion_name(), &part, &parts]), Some((part - 1) as f32 / parts as f32));
+                }
                 let _ = progress_tx.send(Ok((part, parts)));
             });
+            match &result {
+                Ok(_) => processing::clear(key),
+                Err(e) => processing::fail(key, trf("Notizen mit {} neu erstellen fehlgeschlagen: {}", &[&failed_provider, &format!("{e:#}")])),
+            }
             let _ = tx.send(Err(result.map_err(|e| format!("{e:#}"))));
         });
         cx.spawn(async move |this, cx| {
@@ -302,6 +346,7 @@ impl MeetingView {
                         }
                         let Some(result) = finished else { return };
                         this.regenerating = None;
+                        processing::take_failures(this.id);
                         match result {
                             Ok(r) => {
                                 let line = if r.kept > 0 {
@@ -400,12 +445,24 @@ impl MeetingView {
         self.tab = 0;
         cx.notify();
         let id = self.id;
+        let key = processing::Key::Summary(id);
+        let title = self.meeting.as_ref().map(|m| m.title.clone()).unwrap_or_default();
+        processing::set(key, processing::Job { title, stage: tr("Zusammenfassung wird geschrieben …").to_string(), fraction: None });
         let provider = req.connection.name.clone();
+        let failed_provider = provider.clone();
         let keep_title = self.keep_title;
         let task = cx.background_spawn(async move {
+            let result = summarize_meeting(id, &req, keep_title);
+            match &result {
+                Ok(()) => processing::clear(key),
+                Err(e) => processing::fail(key, trf("Zusammenfassung mit {} fehlgeschlagen: {}", &[&failed_provider, &format!("{e:#}")])),
+            }
+            result
+        });
+        fn summarize_meeting(id: i64, req: &summary::SummaryRequest, keep_title: bool) -> anyhow::Result<()> {
             let store = Store::open(&paths::database())?;
             let meeting = store.get(id)?.ok_or_else(|| anyhow::anyhow!(tr("Besprechung nicht gefunden")))?;
-            let s = summary::summarize(&req, &meeting)?;
+            let s = summary::summarize(req, &meeting)?;
             store.save_summary(id, &s.provider, &s.model, s.effort.as_deref(), &s.markdown)?;
             if let Some(title) = s.title.as_ref().filter(|_| !keep_title) {
                 store.set_title(id, title)?;
@@ -415,11 +472,12 @@ impl MeetingView {
                 eprintln!("[mostalgia] search index: {e:#}");
             }
             anyhow::Ok(())
-        });
+        }
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
                 this.summarizing = false;
+                processing::take_failures(this.id);
                 if let Err(e) = result {
                     this.error = Some(trf("Zusammenfassung mit {} fehlgeschlagen: {}", &[&provider, &format!("{e:#}")]).into());
                 }
@@ -486,15 +544,19 @@ impl MeetingView {
         let label: SharedString = option.label.clone().into();
         let people = dialog.people;
         let language = m.language.clone();
+        let title = m.title.clone();
         self.player = None;
         self.position = None;
         self.edit = None;
         self.transcribe_error = None;
         self.retranscribing = Some(label.clone());
+        let id = self.id;
+        let key = processing::Key::Transcript(id);
+        processing::set(key, processing::Job { title, stage: trf("Transkribiere mit {} …", &[&label]), fraction: None });
         cx.notify();
 
-        let id = self.id;
         let slot = self.engine.clone();
+        let failed_label = label.clone();
         let task = cx.background_spawn(async move {
             let config = Config::load();
             let vad = config.vad_model_path();
@@ -503,6 +565,7 @@ impl MeetingView {
                 diarize: config.diarize,
                 denoise_mic: config.denoise,
                 people,
+                progress: finalize::Progress::new(move |stage| processing::stage(key, stage.label(), stage.fraction())),
             };
             let cached = slot.as_ref().filter(|_| choice.is_local()).and_then(|s| s.lock().unwrap().take());
             let mut engine = match cached {
@@ -517,12 +580,19 @@ impl MeetingView {
             if let Some(slot) = slot.filter(|_| !engine.is_cloud()) {
                 *slot.lock().unwrap() = Some(engine);
             }
+            // Ends here, so it ends even when this meeting isn't open any more.
+            match &result {
+                Ok(_) => processing::clear(key),
+                Err(e) => processing::fail(key, trf("Transkription mit {} fehlgeschlagen: {}", &[&failed_label, &format!("{e:#}")])),
+            }
             result
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             this.update(cx, |this, cx| {
                 this.retranscribing = None;
+                // Shown right here instead.
+                processing::take_failures(this.id);
                 match result {
                     Ok(lines) => {
                         this.notice = Some(trf("Neu transkribiert mit {}: {} Zeilen", &[&label, &lines]).into());
@@ -544,19 +614,29 @@ impl MeetingView {
     /// a way to transcribe again; shown above every tab.
     fn render_transcript_status(&mut self, m: &Meeting, cx: &mut Context<Self>) -> Option<AnyElement> {
         let theme = cx.theme();
-        if let Some(label) = &self.retranscribing {
+        let job = processing::get(processing::Key::Transcript(self.id));
+        if self.retranscribing.is_some() || job.is_some() {
+            let label = self.retranscribing.clone().unwrap_or_default();
+            let stage = job.as_ref().map(|j| j.stage.clone()).unwrap_or_else(|| trf("Transkribiere mit {} …", &[&label]));
+            let fraction = job.and_then(|j| j.fraction);
             return Some(
-                h_flex()
+                v_flex()
                     .mx_8()
                     .mb_3()
                     .p_3()
-                    .gap_3()
+                    .gap_2()
                     .rounded(theme.radius)
                     .bg(theme.muted)
                     .text_sm()
-                    .child(gpui_kit::component::spinner::Spinner::new().small())
-                    .child(div().font_medium().child(trf("Transkribiere mit {} …", &[label])))
-                    .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Bei langen Aufnahmen kann das einige Minuten dauern.")))
+                    .child(
+                        h_flex()
+                            .gap_3()
+                            .child(gpui_kit::component::spinner::Spinner::new().small())
+                            .child(div().font_medium().child(stage))
+                            .when(!label.is_empty(), |el| el.child(div().text_xs().text_color(theme.muted_foreground).child(label)))
+                            .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Bei langen Aufnahmen kann das einige Minuten dauern."))),
+                    )
+                    .child(ui::progress_bar(fraction, cx))
                     .into_any_element(),
             );
         }
@@ -1301,6 +1381,20 @@ impl MeetingView {
     /// The "Regenerate notes" panel, its progress, result (with Undo) or error.
     fn render_regenerate(&mut self, m: &Meeting, cx: &mut Context<Self>) -> Option<AnyElement> {
         let theme = cx.theme().clone();
+        let elsewhere = self.regenerating.is_none().then(|| processing::get(processing::Key::Notes(self.id))).flatten();
+        if let Some(job) = elsewhere {
+            return Some(
+                h_flex()
+                    .p_3()
+                    .gap_3()
+                    .rounded(theme.radius)
+                    .bg(theme.muted)
+                    .text_sm()
+                    .child(gpui_kit::component::spinner::Spinner::new().small())
+                    .child(div().font_medium().child(job.stage))
+                    .into_any_element(),
+            );
+        }
         if let Some((which, (part, parts))) = self.regenerating.clone() {
             return Some(
                 h_flex()
@@ -1663,7 +1757,7 @@ impl MeetingView {
 
     fn render_summary_body(&mut self, m: &Meeting, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
-        if self.summarizing {
+        if self.summarizing || processing::get(processing::Key::Summary(self.id)).is_some() {
             return v_flex()
                 .py_16()
                 .items_center()

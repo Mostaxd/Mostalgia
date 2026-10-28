@@ -7,6 +7,7 @@ pub mod companion;
 pub mod control;
 pub mod documents;
 pub mod meeting;
+pub mod processing;
 pub mod recording;
 pub mod settings;
 pub mod text_import;
