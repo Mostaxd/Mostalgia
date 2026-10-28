@@ -343,6 +343,7 @@ impl Companion {
         crate::ask_view::cited_answer(&turn.answer, &format!("mori-{ti}"), cx, move |target, _, cx| {
             weak.update(cx, |_, cx| match target {
                 Target::Meeting { meeting_id, secs } => cx.emit(MoriEvent::OpenCitation { meeting_id, secs }),
+                Target::Document { doc_id, loc } => cx.emit(MoriEvent::OpenDocument { doc_id, loc }),
                 Target::Time { secs, .. } if live => cx.emit(ShowLiveMoment { secs }),
                 Target::Time { secs, .. } => {
                     if let Some(meeting_id) = saved {

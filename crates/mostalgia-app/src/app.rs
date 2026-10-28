@@ -25,6 +25,7 @@ actions!(mostalgia, [OpenAsk, ZoomIn, ZoomOut, ZoomReset]);
 enum Screen {
     Recording,
     Ask(Entity<crate::ask_view::AskView>),
+    Documents(Entity<crate::documents::DocumentsView>),
     Meeting(Entity<MeetingView>),
     Settings(Entity<SettingsView>),
     /// "Besprechung aus Text" (a meeting that wasn't recorded).
@@ -43,6 +44,8 @@ pub struct MostalgiaApp {
     tray: Option<ksni::blocking::Handle<control::Tray>>,
     /// "Fragen" screen, kept so the conversation survives switching away.
     ask_view: Option<Entity<crate::ask_view::AskView>>,
+    /// "Dokumente" screen, kept like the ask view.
+    documents_view: Option<Entity<crate::documents::DocumentsView>>,
     /// Notices calls and offers / starts recordings for them.
     autostart: crate::autostart::AutoStart,
     /// Language the input placeholders were last set in.
@@ -121,6 +124,7 @@ impl MostalgiaApp {
                         m.update(cx, |m, cx| m.jump_to(secs, cx));
                     }
                 }
+                MoriEvent::OpenDocument { doc_id, loc } => this.open_document(*doc_id, Some(*loc), window, cx),
                 MoriEvent::OpenSettings => {
                     this.open_settings(window, cx);
                     if let Some(s) = this.settings_view() {
@@ -158,6 +162,7 @@ impl MostalgiaApp {
             error: None,
             tray: None,
             ask_view: None,
+            documents_view: None,
             autostart: crate::autostart::AutoStart::new(),
             lang_seen: None,
             selected: Vec::new(),
@@ -190,6 +195,10 @@ impl MostalgiaApp {
                     if let Err(e) = mostalgia_core::ask::index_pending_until(&cancel) {
                         eprintln!("[mostalgia] search index: {e:#}");
                     }
+                    // Documents added before the embedding model was there.
+                    if let Err(e) = mostalgia_core::docs::index_pending(&cancel) {
+                        eprintln!("[mostalgia] documents index: {e:#}");
+                    }
                 })
             };
             let worker = Mutex::new(Some(worker));
@@ -216,13 +225,15 @@ impl MostalgiaApp {
             Some(v) => v.clone(),
             None => {
                 let v = cx.new(|cx| crate::ask_view::AskView::new(window, cx));
-                let sub = cx.subscribe_in(&v, window, |this, _, event: &crate::ask_view::AskViewEvent, window, cx| {
-                    let crate::ask_view::AskViewEvent::OpenCitation { meeting_id, secs } = event;
-                    this.open_meeting(*meeting_id, window, cx);
-                    if let Some(m) = this.meeting_view() {
-                        let secs = *secs;
-                        m.update(cx, |m, cx| m.jump_to(secs, cx));
+                let sub = cx.subscribe_in(&v, window, |this, _, event: &crate::ask_view::AskViewEvent, window, cx| match event {
+                    crate::ask_view::AskViewEvent::OpenCitation { meeting_id, secs } => {
+                        this.open_meeting(*meeting_id, window, cx);
+                        if let Some(m) = this.meeting_view() {
+                            let secs = *secs;
+                            m.update(cx, |m, cx| m.jump_to(secs, cx));
+                        }
                     }
+                    crate::ask_view::AskViewEvent::OpenDocument { doc_id, loc } => this.open_document(*doc_id, Some(*loc), window, cx),
                 });
                 self._subscriptions.push(sub);
                 self.ask_view = Some(v.clone());
@@ -233,6 +244,25 @@ impl MostalgiaApp {
         focus.focus(window, cx);
         self.screen = Screen::Ask(view);
         cx.notify();
+    }
+
+    /// Opens the "Dokumente" screen, keeping its state.
+    pub fn open_documents(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<crate::documents::DocumentsView> {
+        let view = self.documents_view.get_or_insert_with(|| cx.new(|cx| crate::documents::DocumentsView::new(window, cx))).clone();
+        self.screen = Screen::Documents(view.clone());
+        cx.notify();
+        view
+    }
+
+    /// Opens a document in the reader, at a page or section (a citation).
+    pub fn open_document(&mut self, doc_id: i64, loc: Option<u32>, window: &mut Window, cx: &mut Context<Self>) {
+        let view = self.open_documents(window, cx);
+        view.update(cx, |v, cx| v.open(doc_id, loc, cx));
+    }
+
+    #[doc(hidden)]
+    pub fn documents_view(&self) -> Option<Entity<crate::documents::DocumentsView>> {
+        self.documents_view.clone()
     }
 
     /// The control socket (`mostalgia toggle`) and the tray icon.
@@ -335,6 +365,10 @@ impl MostalgiaApp {
                     if let Some(m) = self.meeting_view() {
                         m.update(cx, |m, cx| m.jump_to(secs, cx));
                     }
+                    window.activate_window();
+                }
+                FromMori::OpenDocument { doc_id, loc } => {
+                    self.open_document(doc_id, Some(loc), window, cx);
                     window.activate_window();
                 }
                 FromMori::ShowLiveMoment { secs } => {
@@ -1029,6 +1063,18 @@ impl MostalgiaApp {
                             .on_click(cx.listener(|this, _, window, cx| this.open_ask(window, cx))),
                     )
                     .child(
+                        Button::new("documents")
+                            .w_full()
+                            .ghost()
+                            .when(matches!(self.screen, Screen::Documents(_)), |b| b.selected(true))
+                            .icon(IconName::Library)
+                            .label(tr("Dokumente"))
+                            .tooltip(tr("Deine Dokumente – Antworten können sie zitieren"))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_documents(window, cx);
+                            })),
+                    )
+                    .child(
                         Input::new(&self.search)
                             .small()
                             .prefix(Icon::new(IconName::Search).small().text_color(theme.muted_foreground))
@@ -1082,6 +1128,7 @@ impl Render for MostalgiaApp {
             Screen::Settings(v) => v.clone().into(),
             Screen::Ask(v) => v.clone().into(),
             Screen::TextImport(v) => v.clone().into(),
+            Screen::Documents(v) => v.clone().into(),
         };
         let delete_dialog = self.render_delete_dialog(cx);
         let theme = cx.theme();

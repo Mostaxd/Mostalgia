@@ -22,6 +22,8 @@ use crate::ui;
 pub enum AskViewEvent {
     /// Open a meeting and play from this moment.
     OpenCitation { meeting_id: i64, secs: f64 },
+    /// Open a document at a page or section.
+    OpenDocument { doc_id: i64, loc: u32 },
 }
 
 impl EventEmitter<AskViewEvent> for AskView {}
@@ -180,8 +182,14 @@ impl AskView {
     fn render_answer(&self, answer: &str, ti: usize, cx: &mut Context<Self>) -> Div {
         let weak = cx.entity().downgrade();
         cited_answer(answer, &format!("ask-{ti}"), cx, move |target, _, cx| {
-            if let Target::Meeting { meeting_id, secs } = target {
-                weak.update(cx, |_, cx| cx.emit(AskViewEvent::OpenCitation { meeting_id, secs })).ok();
+            match target {
+                Target::Meeting { meeting_id, secs } => {
+                    weak.update(cx, |_, cx| cx.emit(AskViewEvent::OpenCitation { meeting_id, secs })).ok();
+                }
+                Target::Document { doc_id, loc } => {
+                    weak.update(cx, |_, cx| cx.emit(AskViewEvent::OpenDocument { doc_id, loc })).ok();
+                }
+                Target::Time { .. } => {}
             }
         })
     }
@@ -218,9 +226,43 @@ fn shorten(text: &str, max: usize) -> String {
     }
 }
 
+/// Title and kind of a document cited in an answer, cached like
+/// [`meeting_label`].
+fn document_label(id: i64) -> (String, Option<mostalgia_core::docs::Kind>) {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::time::Instant;
+    static CACHE: Mutex<Option<HashMap<i64, (String, Option<mostalgia_core::docs::Kind>, Instant)>>> = Mutex::new(None);
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let cache = cache.get_or_insert_with(HashMap::new);
+    if let Some((t, k, at)) = cache.get(&id) {
+        if at.elapsed() < Duration::from_secs(30) {
+            return (t.clone(), *k);
+        }
+    }
+    let (title, kind) = match mostalgia_core::docs::get(id).ok().flatten() {
+        Some(d) => (d.title, Some(d.kind)),
+        None => (trf("Dokument #{}", &[&id]), None),
+    };
+    cache.insert(id, (title.clone(), kind, Instant::now()));
+    (title, kind)
+}
+
+/// "p. 4" / "§4" for a cited document location (the chip label).
+fn loc_text(target: &Target) -> String {
+    match *target {
+        Target::Document { doc_id, loc } => match document_label(doc_id).1 {
+            Some(kind) => mostalgia_core::docs::loc_label(kind, loc),
+            None => format!("#{loc}"),
+        },
+        _ => target.time_label(),
+    }
+}
+
 /// Hover text for a citation: "0:42" or "Budget review · Oct 27 · 0:42".
 fn cite_tooltip(target: &Target) -> String {
     match *target {
+        Target::Document { doc_id, .. } => format!("{} · {}", document_label(doc_id).0, loc_text(target)),
         Target::Meeting { meeting_id, .. } => {
             let (title, date) = meeting_label(meeting_id);
             [title, date, target.time_label()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ")
@@ -366,9 +408,10 @@ pub fn cited_answer(answer: &str, key: &str, cx: &App, on_cite: impl Fn(Target, 
             .cursor_pointer()
             .hover(|s| s.bg(theme.primary.opacity(0.15)).text_color(theme.primary))
             .child(div().text_size(px(10.)).opacity(0.7).child(n.to_string()))
-            .child(target.time_label())
+            .child(loc_text(&target))
             .tooltip(tooltip(match target {
                 Target::Meeting { .. } => trf("{} – öffnen und ab hier abspielen", &[&cite_tooltip(&target)]),
+                Target::Document { .. } => trf("{} – im Dokument zeigen", &[&cite_tooltip(&target)]),
                 Target::Time { .. } => trf("{} – zu dieser Stelle springen", &[&target.time_label()]),
             }))
             .on_click(move |_, window, cx| on_cite(target, window, cx))
@@ -402,6 +445,32 @@ pub fn cited_answer(answer: &str, key: &str, cx: &App, on_cite: impl Fn(Target, 
                 .into_any_element(),
         );
         for (n, t) in numbered.clone().filter(|(_, t)| matches!(t, Target::Meeting { meeting_id, .. } if meeting_id == id)) {
+            row.push(chip(n, t));
+        }
+    }
+    let mut documents: Vec<i64> = Vec::new();
+    for t in &cited.sources {
+        if let Target::Document { doc_id, .. } = t {
+            if !documents.contains(doc_id) {
+                documents.push(*doc_id);
+            }
+        }
+    }
+    for id in &documents {
+        let (title, _) = document_label(*id);
+        row.push(
+            h_flex()
+                .id(SharedString::from(format!("source-{key}-d{id}")))
+                .flex_none()
+                .when(row.len() > 1, |el| el.ml(px(6.)))
+                .gap(px(3.))
+                .max_w(px(220.))
+                .child(Icon::new(IconName::FileText).xsmall())
+                .child(div().truncate().child(shorten(&title, 28)))
+                .tooltip(tooltip(title.clone()))
+                .into_any_element(),
+        );
+        for (n, t) in numbered.clone().filter(|(_, t)| matches!(t, Target::Document { doc_id, .. } if doc_id == id)) {
             row.push(chip(n, t));
         }
     }

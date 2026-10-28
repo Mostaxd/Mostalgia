@@ -748,7 +748,7 @@ impl Companion {
         let error = self.error.clone().filter(|e| e.points || !self.open);
         self.mark_shown();
         let visible = self.visible_points();
-        if visible.is_empty() && error.is_none() {
+        if visible.is_empty() && error.is_none() && !self.has_answers() {
             self.stack_bounds.set(None);
             return None;
         }
@@ -777,6 +777,8 @@ impl Companion {
         }
         // Oldest first, the newest (and an error) nearest to her.
         let mut items: Vec<AnyElement> = visible.iter().map(|&i| self.render_card(i, motion, r.above, cx)).collect();
+        // Suggested answers nearest to her: they matter right now.
+        items.extend(self.render_answers(cx));
         if let Some(e) = &error {
             items.push(self.render_error_card(e, cx));
         }

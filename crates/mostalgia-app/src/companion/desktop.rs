@@ -278,6 +278,7 @@ impl DesktopMori {
         let companion = cx.new(|cx| Companion::new_desktop(Feed::Remote(feed.clone()), placement, window, cx));
         let sub = cx.subscribe(&companion, |_, _, event: &MoriEvent, _| match event {
             MoriEvent::OpenCitation { meeting_id, secs } => send(&FromMori::OpenMeeting { meeting_id: *meeting_id, secs: *secs }),
+            MoriEvent::OpenDocument { doc_id, loc } => send(&FromMori::OpenDocument { doc_id: *doc_id, loc: *loc }),
             MoriEvent::OpenSettings => send(&FromMori::OpenSettings),
             MoriEvent::BackToApp => send(&FromMori::BackToApp),
             MoriEvent::NotesSaved { meeting_id } => send(&FromMori::NotesSaved { meeting_id: *meeting_id }),
