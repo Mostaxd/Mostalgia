@@ -468,6 +468,23 @@ mod tests {
     }
 
     #[test]
+    fn unknown_third_voice_is_not_given_a_known_name() {
+        // Meeting of Oct 28, 13:01: Felix and Clara known, Nora not. Her
+        // cluster measured Felix 0.832 / Clara 0.814; the old matcher
+        // (best above 0.5, no margin, not one-to-one) called her Felix.
+        let mut v = Voices::default();
+        v.learn("Felix", Some(1), vec![1.0, 0.0, 0.0], 30.0);
+        v.learn("Clara", Some(1), vec![0.809, 0.588, 0.0], 30.0);
+        let prints = vec![
+            Some(normalize(vec![0.965, 0.039, 0.26])),
+            Some(normalize(vec![0.832, 0.240, 0.500])),
+            Some(normalize(vec![0.810, 0.541, 0.226])),
+        ];
+        assert_eq!(v.best_match(prints[1].as_ref().unwrap(), 0.5, 0.0).map(|m| m.0), Some("Felix"), "the old rule");
+        assert_eq!(named(&v.assign(&prints, 0.6, 0.08)), [Some("Felix"), None, Some("Clara")]);
+    }
+
+    #[test]
     fn correcting_lines_fixes_both_profiles() {
         let mut v = Voices::default();
         v.learn("Felix", Some(3), at(0.0), 60.0);
