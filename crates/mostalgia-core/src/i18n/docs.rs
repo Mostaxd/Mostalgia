@@ -63,4 +63,8 @@ pub const EN: &[(&str, &str)] = &[
     ("Antwortvorschläge während Aufnahmen", "Suggest answers during recordings"),
     ("Noch keine Dokumente – füge welche unter „Dokumente“ in der Seitenleiste hinzu.", "No documents yet – add some under “Documents” in the sidebar."),
     ("Für jede erkannte Frage gehen die Frage, die Minuten davor und die gefundenen Abschnitte an {} (die Verbindung der Live-Notizen).", "For each question she spots, the question, the minutes before it and the passages found go to {} (the live notes connection)."),
+    // Documents on/off for answers
+    ("Wird für Antworten genutzt – klicken zum Ausschalten", "Used for answers – click to switch off"),
+    ("Ausgeschaltet – Antworten nutzen dieses Dokument nicht", "Switched off – answers don't use this document"),
+    ("Für Antworten", "Used for answers"),
 ];
