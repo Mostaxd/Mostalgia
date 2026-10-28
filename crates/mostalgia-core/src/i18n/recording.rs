@@ -68,6 +68,8 @@ pub const EN: &[(&str, &str)] = &[
     ("Feinschliff mit {} fehlgeschlagen: {}", "Refining with {} failed: {}"),
     ("Live-Transkript ({})", "Live transcript ({})"),
     ("Transkription mit {} fehlgeschlagen: {}", "Transcription with {} failed: {}"),
+    ("Die Live-Transkription hängt seit {} s", "Live transcription has been stuck for {} s"),
+    ("Die Aufnahme läuft weiter und wird vollständig gespeichert; der fehlende Live-Text kommt mit der Transkription nach dem Ende.", "Recording continues and is saved in full; the missing live text arrives with the transcription after the end."),
     ("Die Aufnahme läuft weiter und wird gespeichert. Danach kannst du sie erneut transkribieren.", "Recording continues and will be saved. You can transcribe it again afterwards."),
     ("{} Abschnitte ohne Text", "{} sections without text"),
     ("Speichern fehlgeschlagen: {} — die Aufnahme liegt in {}", "Saving failed: {} — the recording is in {}"),

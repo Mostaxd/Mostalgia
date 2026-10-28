@@ -67,6 +67,8 @@ pub const EN: &[(&str, &str)] = &[
     ("Erneut transkribieren: `mostalgia retranscribe {} --engine …`", "Transcribe again: `mostalgia retranscribe {} --engine …`"),
     ("Transkribiert mit {}", "Transcribed with {}"),
     ("Transkription mit {} fehlgeschlagen (Aufnahme läuft weiter): {}", "Transcription with {} failed (still recording): {}"),
+    ("Live-Transkription läuft wieder", "Live transcription is working again"),
+    ("Live-Transkription hängt seit {} s (Aufnahme läuft weiter)", "Live transcription stuck for {} s (still recording)"),
     ("Letzter Durchgang über {} s Audio mit {} …", "Final pass over {} s of audio with {} …"),
     ("Kein Modell für {} gewählt — --summary-model angeben", "No model chosen for {} — pass --summary-model"),
     ("Unbekannte Verbindung {} (vorhanden: {})", "Unknown connection {} (available: {})"),
