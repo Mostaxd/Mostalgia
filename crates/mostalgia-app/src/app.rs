@@ -57,6 +57,10 @@ pub struct MostalgiaApp {
     /// Meetings waiting for the delete confirmation, and whether their
     /// audio files go too.
     confirm_delete: Option<Vec<i64>>,
+    /// Audio the cleanup would delete, waiting for the user's first yes.
+    confirm_cleanup: Option<Vec<mostalgia_core::cleanup::Candidate>>,
+    /// The `audio_keep_days` the last cleanup ran with.
+    cleanup_days: Option<u32>,
     delete_audio: bool,
     /// Meeting being renamed inline in the sidebar.
     rename: Option<(i64, Entity<InputState>)>,
@@ -168,6 +172,8 @@ impl MostalgiaApp {
             selected: Vec::new(),
             anchor: None,
             confirm_delete: None,
+            confirm_cleanup: None,
+            cleanup_days: None,
             delete_audio: true,
             rename: None,
             library_focus: cx.focus_handle(),
@@ -180,6 +186,17 @@ impl MostalgiaApp {
         this.sync_mori(false);
         // Recordings a crash left unfinished become meetings now.
         this.recording.update(cx, |r, cx| r.recover_orphans(cx));
+        // Old audio: now, then once a day.
+        this.run_cleanup(cx);
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(std::time::Duration::from_secs(24 * 3600)).await;
+                if this.update(cx, |this, cx| this.run_cleanup(cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         // Work on meetings (see `processing`): redraw the library and the
         // open screens whenever it moves on.
         cx.spawn(async move |this, cx| {
@@ -663,6 +680,9 @@ impl MostalgiaApp {
             .and_then(|e| e.as_ref().and_then(|e| e.gpu().map(str::to_string)));
         let view = cx.new(|cx| SettingsView::new(gpu, window, cx));
         let sub = cx.subscribe(&view, |this, _, _: &SettingsEvent, cx| {
+            if this.cleanup_days != Some(mostalgia_core::config::Config::load().audio_keep_days) {
+                this.run_cleanup(cx);
+            }
             this.recording.update(cx, |r, cx| r.reload_config(cx));
             this.companion.update(cx, |c, cx| c.reload_config(cx));
             this.sync_mori(true);
@@ -853,6 +873,142 @@ impl MostalgiaApp {
             .ok();
         })
         .detach();
+    }
+
+    /// Deletes audio older than `audio_keep_days` (see `cleanup`), never
+    /// of a meeting being worked on or open. The first time it would delete
+    /// anything it asks instead (`confirm_cleanup`). Errors show.
+    fn run_cleanup(&mut self, cx: &mut Context<Self>) {
+        use mostalgia_core::cleanup;
+        let config = mostalgia_core::config::Config::load();
+        self.cleanup_days = Some(config.audio_keep_days);
+        let mut busy: Vec<i64> = crate::processing::all().iter().filter_map(|(k, _)| k.meeting()).collect();
+        if let Some(m) = self.meeting_view() {
+            busy.push(m.read(cx).id);
+        }
+        let recordings = paths::recordings_dir();
+        let plan = Store::open(&paths::database()).and_then(|s| cleanup::plan(&s, &recordings, config.audio_keep_days, chrono::Local::now(), &busy));
+        match plan {
+            Ok(plan) if plan.is_empty() => {}
+            Ok(plan) if !config.audio_cleanup_confirmed => {
+                self.confirm_cleanup = Some(plan);
+                cx.notify();
+            }
+            Ok(plan) => self.delete_audio_now(plan, config.audio_keep_days, cx),
+            Err(e) => {
+                self.error = Some(trf("Aufräumen des Audios fehlgeschlagen: {}", &[&format!("{e:#}")]).into());
+                cx.notify();
+            }
+        }
+    }
+
+    fn delete_audio_now(&mut self, plan: Vec<mostalgia_core::cleanup::Candidate>, days: u32, cx: &mut Context<Self>) {
+        let recordings = paths::recordings_dir();
+        let task = cx.background_spawn(async move {
+            let mut errors = Vec::new();
+            for c in &plan {
+                if let Err(e) = mostalgia_core::cleanup::delete(c, days, &recordings) {
+                    errors.push(format!("{}: {e:#}", c.title));
+                }
+            }
+            errors
+        });
+        cx.spawn(async move |this, cx| {
+            let errors = task.await;
+            this.update(cx, |this, cx| {
+                if !errors.is_empty() {
+                    this.error = Some(trf("Aufräumen des Audios fehlgeschlagen: {}", &[&errors.join(" · ")]).into());
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The first cleanup: what it would delete, and a yes or no.
+    fn render_cleanup_dialog(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let plan = self.confirm_cleanup.clone()?;
+        let theme = cx.theme().clone();
+        let days = mostalgia_core::config::Config::load().audio_keep_days;
+        let bytes: u64 = plan.iter().map(|c| c.bytes).sum();
+        let names: Vec<String> = plan.iter().take(3).map(|c| c.title.clone()).collect();
+        Some(
+            div()
+                .id("cleanup-overlay")
+                .absolute()
+                .inset_0()
+                .bg(gpui_kit::black().opacity(0.45))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    v_flex()
+                        .id("cleanup-dialog")
+                        .w(px(460. * ui::ui_scale()))
+                        .max_w(relative(0.9))
+                        .p_5()
+                        .gap_3()
+                        .rounded(theme.radius_lg)
+                        .border(ui::border_width(cx))
+                        .border_color(theme.border)
+                        .bg(theme.background)
+                        .shadow_lg()
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .items_start()
+                                .child(Icon::new(IconName::Trash).flex_none().mt_1().text_color(theme.warning))
+                                .child(div().flex_1().min_w_0().text_lg().font_semibold().child(if plan.len() == 1 {
+                                    trf("Audio von 1 Besprechung löschen ({})?", &[&mostalgia_core::cleanup::human(bytes)])
+                                } else {
+                                    trf("Audio von {} Besprechungen löschen ({})?", &[&plan.len(), &mostalgia_core::cleanup::human(bytes)])
+                                })),
+                        )
+                        .children(names.into_iter().map(|n| ui::bidi_text(n, false).text_sm().font_medium()))
+                        .when(plan.len() > 3, |el| el.child(div().text_sm().text_color(theme.muted_foreground).child(trf("… und {} weitere", &[&(plan.len() - 3)]))))
+                        .child(div().text_sm().text_color(theme.muted_foreground).child(trf(
+                            "Die Aufnahmen sind älter als {}. Nur die Audiodateien werden gelöscht – Transkript, Zusammenfassung, Notizen und Sprecher bleiben. Danach geschieht das automatisch; „Audio behalten“ in einer Besprechung nimmt sie aus.",
+                            &[&if days == 1 { tr("1 Tag").to_string() } else { trf("{} Tage", &[&days]) }],
+                        )))
+                        .child(
+                            h_flex()
+                                .justify_end()
+                                .gap_2()
+                                .child(Button::new("cleanup-no").ghost().label(tr("Nein, Audio behalten")).on_click(cx.listener(|this, _, _, cx| {
+                                    this.confirm_cleanup = None;
+                                    let mut config = mostalgia_core::config::Config::load();
+                                    config.audio_keep_days = 0;
+                                    if let Err(e) = config.save() {
+                                        this.error = Some(format!("{e:#}").into());
+                                    }
+                                    this.cleanup_days = Some(0);
+                                    this.recording.update(cx, |r, cx| r.reload_config(cx));
+                                    cx.notify();
+                                })))
+                                .child(
+                                    Button::new("cleanup-yes")
+                                        .danger()
+                                        .icon(IconName::Trash)
+                                        .label(tr("Audio löschen"))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            let Some(plan) = this.confirm_cleanup.take() else { return };
+                                            let mut config = mostalgia_core::config::Config::load();
+                                            config.audio_cleanup_confirmed = true;
+                                            if let Err(e) = config.save() {
+                                                this.error = Some(format!("{e:#}").into());
+                                                cx.notify();
+                                                return;
+                                            }
+                                            this.recording.update(cx, |r, cx| r.reload_config(cx));
+                                            this.delete_audio_now(plan, config.audio_keep_days, cx);
+                                        })),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
     }
 
     fn render_delete_dialog(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -1238,6 +1394,7 @@ impl Render for MostalgiaApp {
             Screen::Documents(v) => v.clone().into(),
         };
         let delete_dialog = self.render_delete_dialog(cx);
+        let cleanup_dialog = self.render_cleanup_dialog(cx);
         let theme = cx.theme();
         v_flex()
             .size_full()
@@ -1263,5 +1420,6 @@ impl Render for MostalgiaApp {
             .child(h_flex().flex_1().min_h_0().child(sidebar).child(div().flex_1().min_w_0().h_full().child(content)))
             .child(self.companion.clone())
             .children(delete_dialog)
+            .children(cleanup_dialog)
     }
 }

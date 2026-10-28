@@ -476,6 +476,9 @@ impl RecordingView {
         self.config.companion_desktop_pos = disk.companion_desktop_pos;
         self.config.companion_hidden = disk.companion_hidden;
         self.config.companion_bar_indicator = disk.companion_bar_indicator;
+        // So is the audio cleanup (its dialog).
+        self.config.audio_keep_days = disk.audio_keep_days;
+        self.config.audio_cleanup_confirmed = disk.audio_cleanup_confirmed;
         if let Err(e) = self.config.save() {
             eprintln!("[mostalgia] saving settings: {e:#}");
         }

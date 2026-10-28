@@ -148,6 +148,14 @@ pub struct Config {
     /// Where suggested answers come from: "meetings", "documents" or
     /// "both" (see [`Config::answer_sources`]).
     pub companion_answer_sources: String,
+
+    // ── Audio cleanup ──
+    /// Delete a meeting's audio this many days after it (0 = keep it);
+    /// transcript, summary, notes and speakers stay. See `cleanup`.
+    pub audio_keep_days: u32,
+    /// The user agreed to deleting audio (asked once, the first time it
+    /// would delete any).
+    pub audio_cleanup_confirmed: bool,
 }
 
 /// When Mori looks for live notes during a recording.
@@ -306,6 +314,8 @@ impl Default for Config {
             transcript_scale: 1.0,
             companion_answers: false,
             companion_answer_sources: crate::assist::Sources::Both.id().into(),
+            audio_keep_days: 7,
+            audio_cleanup_confirmed: false,
         }
     }
 }

@@ -704,7 +704,7 @@ impl MeetingView {
                         .icon(IconName::RefreshCw)
                         .label(tr("Erneut transkribieren"))
                         .disabled(!has_audio)
-                        .when(!has_audio, |b| b.tooltip(tr("Audiodateien gelöscht")))
+                        .when(!has_audio, |b| b.tooltip(audio_gone(m)))
                         .on_click(cx.listener(|this, _, _, cx| this.open_retranscribe(cx))),
                 )
                 .when(transient, |el| {
@@ -893,6 +893,10 @@ impl MeetingView {
             return;
         }
         let tracks: Vec<_> = m.tracks().into_iter().map(|(_, p)| p).collect();
+        // Audio deleted: a jump only shows the line.
+        if tracks.is_empty() {
+            return;
+        }
         self.player = None;
         match Player::play(&tracks, secs) {
             Ok(p) => {
@@ -1307,7 +1311,24 @@ impl MeetingView {
                                 .on_click(cx.listener(|this, _, _, cx| this.stop_playback(cx))),
                         )
                     })
-                    .when(self.player.is_none() && !m.is_text_import(), |el| {
+                    .when(!m.is_text_import() && !m.tracks().is_empty(), |el| {
+                        let kept = mostalgia_core::cleanup::is_kept(&m.dir);
+                        el.child(
+                            Button::new("keep-audio")
+                                .small()
+                                .ghost()
+                                .icon(if kept { IconName::PinOff } else { IconName::Pin })
+                                .tooltip(if kept { tr("Audio wird behalten – klicken, um es wieder aufräumen zu lassen") } else { tr("Audio behalten (nie automatisch löschen)") })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    let Some(m) = &this.meeting else { return };
+                                    if let Err(e) = mostalgia_core::cleanup::set_kept(&m.dir, !kept) {
+                                        this.error = Some(format!("{e:#}").into());
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                    })
+                    .when(self.player.is_none() && !m.is_text_import() && !m.tracks().is_empty(), |el| {
                         el.child(
                             Button::new("play")
                                 .icon(IconName::Play)
@@ -1323,7 +1344,7 @@ impl MeetingView {
                             .small()
                             .ghost()
                             .icon(IconName::RefreshCw)
-                            .tooltip(if has_audio { tr("Erneut transkribieren") } else { tr("Audiodateien gelöscht") })
+                            .tooltip(if has_audio { SharedString::from(tr("Erneut transkribieren")) } else { audio_gone(m) })
                             .disabled(!has_audio || self.retranscribing.is_some())
                             .on_click(cx.listener(|this, _, _, cx| this.open_retranscribe(cx)))
                     }))
@@ -1924,7 +1945,7 @@ impl MeetingView {
                     .icon(IconName::RefreshCw)
                     .label(tr("Erneut transkribieren"))
                     .disabled(!has_audio || self.retranscribing.is_some())
-                    .when(!has_audio, |b| b.tooltip(tr("Audiodateien gelöscht")))
+                    .when(!has_audio, |b| b.tooltip(audio_gone(m)))
                     .on_click(cx.listener(|this, _, _, cx| this.open_retranscribe(cx))),
             ));
         if m.segments.is_empty() {
@@ -2178,6 +2199,17 @@ impl MeetingView {
     }
 
     fn render_audio(&mut self, m: &Meeting, cx: &mut Context<Self>) -> AnyElement {
+        if m.tracks().is_empty() {
+            return v_flex()
+                .py_16()
+                .items_center()
+                .gap_2()
+                .text_color(cx.theme().muted_foreground)
+                .child(Icon::new(IconName::Trash).large())
+                .child(div().font_medium().child(audio_gone(m)))
+                .child(div().text_sm().child(tr("Transkript, Zusammenfassung, Notizen und Sprecher sind geblieben.")))
+                .into_any_element();
+        }
         self.load_peaks(m, cx);
         let theme = cx.theme();
         let duration = m.duration_secs.max(0.1);
@@ -2365,6 +2397,14 @@ fn summary_body(markdown: &str) -> String {
     match trimmed.strip_prefix("# ") {
         Some(rest) => rest.split_once('\n').map_or("", |(_, body)| body).trim_start().to_string(),
         None => trimmed.to_string(),
+    }
+}
+
+/// Why a meeting has no audio: deleted by the cleanup after N days, or gone.
+fn audio_gone(m: &Meeting) -> SharedString {
+    match mostalgia_core::cleanup::deleted(&m.dir) {
+        Some(d) => trf("Audio nach {} Tagen gelöscht ({})", &[&d.days, &i18n::date_time(&mostalgia_core::cleanup::local(d.at))]).into(),
+        None => tr("Audiodateien gelöscht").into(),
     }
 }
 
