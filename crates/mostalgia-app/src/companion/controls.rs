@@ -54,17 +54,15 @@ pub enum BarIndicator {
     #[default]
     Sparkles,
     Spinner,
-    /// The red recording dot.
-    Dot,
 }
 
 impl BarIndicator {
-    pub const ALL: [BarIndicator; 3] = [BarIndicator::Sparkles, BarIndicator::Spinner, BarIndicator::Dot];
+    pub const ALL: [BarIndicator; 2] = [BarIndicator::Sparkles, BarIndicator::Spinner];
 
     pub fn parse(s: &str) -> Self {
         match s {
             "spinner" => BarIndicator::Spinner,
-            "dot" => BarIndicator::Dot,
+            // "dot" (the red dot, no longer offered) and anything else.
             _ => BarIndicator::Sparkles,
         }
     }
@@ -73,7 +71,6 @@ impl BarIndicator {
         match self {
             BarIndicator::Sparkles => "sparkles",
             BarIndicator::Spinner => "spinner",
-            BarIndicator::Dot => "dot",
         }
     }
 
@@ -81,7 +78,6 @@ impl BarIndicator {
         match self {
             BarIndicator::Sparkles => tr("Funkeln"),
             BarIndicator::Spinner => tr("Kreisel"),
-            BarIndicator::Dot => tr("Aufnahmepunkt"),
         }
     }
 }
@@ -341,44 +337,26 @@ impl Companion {
         if let Some(live) = self.live(cx) {
             let paused = live.paused;
             let mic_on = live.sources[0];
-            let color = if paused { theme.warning } else { theme.danger };
-            // Her bar keeps it friendly: sparkles (or a spinner) and the
-            // time, small and muted; the app and the tray keep the red dot.
-            let calm = place == ChoiceIn::Bar && self.ctl.bar_indicator != BarIndicator::Dot;
+            // Her bubble and bar keep it friendly: sparkles (or a spinner)
+            // and the time, small and muted; only the app's recording
+            // window and the tray show the red dot.
             let spec = crate::themes::active(cx);
             let motion = spec.animations && !self.reduce_motion;
-            let indicator = if calm {
-                h_flex()
-                    .gap_1p5()
-                    .px_1()
-                    .child(match self.ctl.bar_indicator {
-                        BarIndicator::Spinner if !paused => gpui_kit::component::spinner::Spinner::new().xsmall().color(theme.primary).into_any_element(),
-                        BarIndicator::Spinner => Icon::new(IconName::Pause).xsmall().text_color(theme.muted_foreground).into_any_element(),
-                        _ => sparkles(theme.primary, motion, paused),
-                    })
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_family(theme.mono_font_family.clone())
-                            .text_color(theme.muted_foreground)
-                            .child(ui::hms(live.elapsed_secs)),
-                    )
-            } else { h_flex()
+            let indicator = h_flex()
                 .gap_1p5()
                 .px_1()
-                .child(if paused {
-                    Icon::new(IconName::Pause).xsmall().text_color(color).into_any_element()
-                } else {
-                    div().size(px(9.)).rounded_full().bg(color).into_any_element()
+                .child(match self.ctl.bar_indicator {
+                    BarIndicator::Spinner if !paused => gpui_kit::component::spinner::Spinner::new().xsmall().color(theme.primary).into_any_element(),
+                    BarIndicator::Spinner => Icon::new(IconName::Pause).xsmall().text_color(theme.muted_foreground).into_any_element(),
+                    BarIndicator::Sparkles => sparkles(theme.primary, motion, paused),
                 })
                 .child(
                     div()
-                        .text_sm()
-                        .font_medium()
+                        .text_xs()
                         .font_family(theme.mono_font_family.clone())
-                        .text_color(if paused { theme.muted_foreground } else { theme.foreground })
+                        .text_color(theme.muted_foreground)
                         .child(ui::hms(live.elapsed_secs)),
-                ) };
+                );
             return h_flex()
                 .gap_0p5()
                 .child(indicator)
@@ -389,7 +367,7 @@ impl Companion {
                         .icon(if mic_on {
                             Icon::new(IconName::Mic)
                         } else {
-                            Icon::new(IconName::MicOff).text_color(theme.danger)
+                            Icon::new(IconName::MicOff).text_color(theme.muted_foreground)
                         })
                         .tooltip(if mic_on { tr("Mikrofon ausschalten") } else { tr("Mikrofon einschalten") })
                         .on_click(cx.listener(move |_, _, _, cx| {
@@ -408,7 +386,7 @@ impl Companion {
                     Button::new(id("stop"))
                         .xsmall()
                         .ghost()
-                        .icon(Icon::new(IconName::Square).text_color(if calm { theme.muted_foreground } else { theme.danger }))
+                        .icon(Icon::new(IconName::Square).text_color(theme.muted_foreground))
                         .tooltip(tr("Aufnahme beenden"))
                         .on_click(cx.listener(|_, _, _, cx| cx.emit(MoriEvent::StopRecording))),
                 )
@@ -439,7 +417,7 @@ impl Companion {
             .xsmall()
             .ghost()
             .selected(open)
-            .child(div().size(px(10.)).rounded_full().bg(theme.danger))
+            .child(div().size(px(10.)).rounded_full().border_2().border_color(theme.primary))
             .tooltip(tr("Aufnahme starten"))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.ctl.choice = if this.ctl.choice == Some(place) { None } else { Some(place) };

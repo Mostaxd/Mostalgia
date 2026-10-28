@@ -3380,7 +3380,7 @@ impl SettingsView {
         });
         ui::card(cx).child(div().font_semibold().child(tr("Leiste"))).child(settings_row(
             tr("Anzeige während der Aufnahme"),
-            Some(tr("Wenn die Figur ausgeblendet ist: wie ihre Leiste zeigt, dass aufgenommen wird. Das Aufnahmefenster und das Tray-Symbol zeigen immer den roten Punkt.")),
+            Some(tr("Wie ihre Sprechblase und ihre Leiste eine laufende Aufnahme zeigen. Das Aufnahmefenster und das Tray-Symbol zeigen den roten Punkt.")),
             h_flex().flex_wrap().gap_1().children(buttons).into_any_element(),
             &theme,
         ))
