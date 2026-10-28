@@ -74,8 +74,11 @@ pub struct Config {
     pub live_engine: SttChoice,
     /// Speech-to-text for the final pass after a recording.
     pub final_engine: SttChoice,
-    /// Show Mori, the note-taking companion, in the window.
+    /// Show the note-taking companion (Mori or one of the others).
     pub companion: bool,
+    /// Which companion: "mori", "tsumugi" or "hoshi" (unknown → Mori).
+    /// "off" in a hand-edited config turns her off (see [`Config::load`]).
+    pub companion_character: String,
     /// Mori's size (1.0 ≈ 220 px tall).
     pub companion_scale: f32,
     /// Ask for new live points after this much new speech (0 = off). Only
@@ -235,6 +238,7 @@ impl Default for Config {
             live_engine: SttChoice::local(),
             final_engine: SttChoice::local(),
             companion: false,
+            companion_character: "mori".into(),
             companion_scale: 1.0,
             companion_points_interval_secs: 90,
             companion_notes_mode: String::new(),
@@ -423,8 +427,37 @@ impl Config {
     pub fn load() -> Self {
         std::fs::read_to_string(Self::path())
             .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
+            .and_then(|s| serde_json::from_str::<Self>(&s).ok())
+            .map(Self::normalized)
             .unwrap_or_default()
+    }
+
+    /// `companion_character: "off"` is the same as `companion: false`.
+    fn normalized(mut self) -> Self {
+        if self.companion_character.trim() == "off" {
+            self.companion = false;
+            self.companion_character = crate::companion::Character::Mori.id().into();
+        }
+        self
+    }
+
+    /// The companion shown, `None` when she's turned off.
+    pub fn character(&self) -> Option<crate::companion::Character> {
+        (self.companion && self.companion_character.trim() != "off").then(|| self.companion_character())
+    }
+
+    /// The chosen companion (also while turned off: names in the settings).
+    pub fn companion_character(&self) -> crate::companion::Character {
+        crate::companion::Character::parse(&self.companion_character).unwrap_or(crate::companion::Character::Mori)
+    }
+
+    /// Picks a companion, or turns her off (`None`; the choice is kept for
+    /// when she's turned on again).
+    pub fn set_character(&mut self, character: Option<crate::companion::Character>) {
+        self.companion = character.is_some();
+        if let Some(c) = character {
+            self.companion_character = c.id().into();
+        }
     }
 
     pub fn save(&self) -> Result<()> {
@@ -473,6 +506,29 @@ pub fn effort_for(conn: &crate::connections::Connection, model: &str, effort: &s
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::companion::Character;
+
+    #[test]
+    fn character_maps_off_and_unknown() {
+        let mut c = Config::default();
+        assert_eq!(c.character(), None);
+        assert_eq!(c.companion_character(), Character::Mori);
+        c.set_character(Some(Character::Hoshi));
+        assert!(c.companion);
+        assert_eq!((c.character(), c.companion_character.as_str()), (Some(Character::Hoshi), "hoshi"));
+        c.set_character(None);
+        assert!(!c.companion);
+        // The choice stays for the next time she's turned on.
+        assert_eq!((c.character(), c.companion_character()), (None, Character::Hoshi));
+        let saved: Config = serde_json::from_str(r#"{"companion": true, "companion_character": "off"}"#).unwrap();
+        let loaded = saved.normalized();
+        assert_eq!((loaded.companion, loaded.character(), loaded.companion_character.as_str()), (false, None, "mori"));
+        // Older configs (no field) keep Mori; unknown names fall back to her.
+        let old: Config = serde_json::from_str(r#"{"companion": true}"#).unwrap();
+        assert_eq!(old.character(), Some(Character::Mori));
+        let odd = Config { companion: true, companion_character: "nobody".into(), ..Config::default() };
+        assert_eq!(odd.character(), Some(Character::Mori));
+    }
 
     #[test]
     fn notes_mode_migrates_the_old_interval() {

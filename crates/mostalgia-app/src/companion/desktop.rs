@@ -199,7 +199,7 @@ pub fn run(demo: bool) {
         };
         let opened = cx.open_window(options, |window, cx| {
             ui::apply_theme(window, cx);
-            window.set_window_title("Mori");
+            window.set_window_title(Config::load().companion_character().name());
             let view = cx.new(|cx| DesktopMori::new(rx, demo, window, cx));
             cx.new(|cx| gpui_kit::component::Root::new(view, window, cx).bg(transparent_black()))
         });
@@ -309,6 +309,7 @@ impl DesktopMori {
                     mostalgia_core::i18n::set_lang(mostalgia_core::i18n::resolve(&config.ui_language));
                     ui::apply_theme(window, cx);
                     self.companion.update(cx, |c, cx| c.reload_config(cx));
+                    window.set_window_title(config.companion_character().name());
                     cx.refresh_windows();
                 }
                 ToMori::Quit => {

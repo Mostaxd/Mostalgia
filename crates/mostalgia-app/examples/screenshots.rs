@@ -213,6 +213,31 @@ fn main() {
             });
             std::thread::sleep(std::time::Duration::from_millis(900));
             shot("13f-mori-points-calm", &mut cx);
+            // Each companion writing along, with a note card and (Tsumugi,
+            // Hoshi) her own "a note arrived" pop.
+            for c in mostalgia_app::companion::character::Character::ALL {
+                mori(&mut cx, &|m, cx| {
+                    m.demo_reset(cx);
+                    m.demo_character(c, cx);
+                    m.demo_pose(Some(Pose::Writing), cx);
+                    m.demo_points(
+                        &[
+                            (PointKind::Decision, "Marketing spend is frozen until the end of June.", 27.0),
+                            (PointKind::Action, "Anna sends the revised Q3 forecast to finance by Friday.", 36.8),
+                        ],
+                        &[],
+                        cx,
+                    );
+                });
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                mori(&mut cx, &|m, cx| m.demo_pop(Some(PointKind::Action), 7, cx));
+                shot(&format!("19-companion-{}", c.id()), &mut cx);
+            }
+            let configured = mostalgia_core::config::Config::load().companion_character();
+            mori(&mut cx, &|m, cx| {
+                m.demo_reset(cx);
+                m.demo_character(configured, cx);
+            });
             mori(&mut cx, &|c, cx| {
                 c.demo_pose(Some(Pose::Talking), cx);
                 c.demo_chat(

@@ -7,7 +7,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::Receiver;
-use mostalgia_core::i18n::{tr, trf};
+use mostalgia_core::i18n::trf;
 
 use super::ipc::{self, FromMori, ToMori, WireLine, WireLive};
 use crate::recording::RecordingView;
@@ -56,12 +56,12 @@ impl DesktopHost {
             return;
         }
         if std::env::var_os("DISPLAY").is_none_or(|d| d.is_empty()) {
-            self.problem = Some(tr("Mori kann nicht auf den Desktop: XWayland ist nicht verfügbar (DISPLAY ist nicht gesetzt).").to_string());
+            self.problem = Some(trf("{} kann nicht auf den Desktop: XWayland ist nicht verfügbar (DISPLAY ist nicht gesetzt).", &[&her_name()]));
             return;
         }
         match spawn() {
             Ok(r) => self.running = Some(r),
-            Err(e) => self.problem = Some(trf("Mori konnte nicht gestartet werden: {}", &[&format!("{e:#}")]).to_string()),
+            Err(e) => self.problem = Some(trf("{} konnte nicht gestartet werden: {}", &[&her_name(), &format!("{e:#}")]).to_string()),
         }
     }
 
@@ -101,7 +101,7 @@ impl DesktopHost {
             let now = Instant::now();
             self.restarts.retain(|t| now - *t < RESTART_WINDOW);
             if self.restarts.len() >= MAX_RESTARTS {
-                self.problem = Some(trf("Mori ist auf dem Desktop mehrmals abgestürzt ({}). Schalte sie in den Einstellungen aus und wieder ein, um es erneut zu versuchen.", &[&status]).to_string());
+                self.problem = Some(trf("{} ist auf dem Desktop mehrmals abgestürzt ({}). Schalte sie in den Einstellungen aus und wieder ein, um es erneut zu versuchen.", &[&her_name(), &status]).to_string());
             } else {
                 self.restarts.push(now);
                 self.start(false);
@@ -205,4 +205,9 @@ fn spawn() -> anyhow::Result<Running> {
         last_interim: Vec::new(),
         transcript_at: Instant::now() - TRANSCRIPT_EVERY,
     })
+}
+
+/// The chosen companion's name, for messages about her process.
+fn her_name() -> &'static str {
+    mostalgia_core::config::Config::load().companion_character().name()
 }

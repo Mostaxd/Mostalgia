@@ -2,6 +2,8 @@
 //! card grid on the right) with a search across all of them.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -19,6 +21,8 @@ use mostalgia_core::paths;
 
 use mostalgia_core::i18n::{tr, trf};
 
+use crate::companion::art::Pose;
+use crate::companion::character::{self, Character};
 use crate::{themes, ui};
 
 pub enum SettingsEvent {
@@ -72,6 +76,12 @@ pub struct SettingsView {
     tray_available: Option<bool>,
     /// Also list unplugged ports in the device pickers.
     show_all_devices: bool,
+    /// The character tiles' pictures, the frame they're at, whether their
+    /// timer runs and when they were last drawn.
+    preview_frames: HashMap<(Character, Pose, usize), Arc<Image>>,
+    preview_frame: usize,
+    preview_ticking: bool,
+    preview_seen: Instant,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -162,16 +172,18 @@ enum Category {
     Sprecher,
     Ki,
     Darstellung,
+    Begleiterin,
     Speicher,
     System,
 }
 
 impl Category {
-    const ALL: [Category; 6] = [
+    const ALL: [Category; 7] = [
         Category::Aufnahme,
         Category::Sprecher,
         Category::Ki,
         Category::Darstellung,
+        Category::Begleiterin,
         Category::Speicher,
         Category::System,
     ];
@@ -182,6 +194,7 @@ impl Category {
             Category::Sprecher => "sprecher",
             Category::Ki => "ki",
             Category::Darstellung => "darstellung",
+            Category::Begleiterin => "begleiterin",
             Category::Speicher => "speicher",
             Category::System => "system",
         }
@@ -193,6 +206,7 @@ impl Category {
             Category::Sprecher => "Sprecher",
             Category::Ki => "KI & Transkription",
             Category::Darstellung => "Darstellung",
+            Category::Begleiterin => "Begleiterin",
             Category::Speicher => "Speicher & Export",
             Category::System => "Tastenkürzel & System",
         })
@@ -204,6 +218,7 @@ impl Category {
             Category::Sprecher => "Wer hat was gesagt",
             Category::Ki => "Verbindungen, Modelle und wo transkribiert wird",
             Category::Darstellung => "Design, Schrift und Animationen",
+            Category::Begleiterin => "Wer mitschreibt, wo sie steht und wie sie Notizen macht",
             Category::Speicher => "Wo Aufnahmen liegen und wie exportiert wird",
             Category::System => "Tastenkürzel, Tray-Symbol und Systeminfo",
         })
@@ -215,6 +230,7 @@ impl Category {
             Category::Sprecher => IconName::Users,
             Category::Ki => IconName::Sparkles,
             Category::Darstellung => IconName::Palette,
+            Category::Begleiterin => IconName::FaceSlightlySmiling,
             Category::Speicher => IconName::FolderOpen,
             Category::System => IconName::Keyboard,
         }
@@ -374,6 +390,10 @@ impl SettingsView {
             shortcut: None,
             tray_available: None,
             show_all_devices: false,
+            preview_frames: HashMap::new(),
+            preview_frame: 0,
+            preview_ticking: false,
+            preview_seen: Instant::now(),
             _subscriptions: vec![sub, custom_sub, url_sub, focus_sub],
         };
         this.load_system_status(cx);
@@ -398,12 +418,12 @@ impl SettingsView {
     }
 
     /// Opens a category by id ("aufnahme", "sprecher", "ki", "darstellung",
-    /// "speicher", "system").
+    /// "begleiterin", "speicher", "system").
     pub fn show_category(&mut self, id: &str, cx: &mut Context<Self>) {
         self.set_category(Category::parse(id), cx);
     }
 
-    pub const CATEGORY_IDS: [&'static str; 6] = ["aufnahme", "sprecher", "ki", "darstellung", "speicher", "system"];
+    pub const CATEGORY_IDS: [&'static str; 7] = ["aufnahme", "sprecher", "ki", "darstellung", "begleiterin", "speicher", "system"];
 
     fn set_category(&mut self, category: Category, cx: &mut Context<Self>) {
         self.category = category;
@@ -755,7 +775,12 @@ impl SettingsView {
     }
 }
 
-// ── Darstellung: Mori ──
+// ── Begleiterin ──
+
+/// The character tiles: picture height and animation rate (gentler than
+/// the companion herself).
+const PREVIEW_H: f32 = 128.;
+const PREVIEW_FPS: u64 = 8;
 
 /// Choices for Mori's timing (seconds): the least gap between checks as
 /// it happens, the interval, when a card shrinks to a line, and how far
@@ -807,10 +832,103 @@ impl SettingsView {
             .into_any_element()
     }
 
-    fn render_mori(&mut self, cx: &mut Context<Self>) -> Div {
+    /// The companion's picture for a character tile: her writing loop, or
+    /// her first idle frame with reduced motion (cached per frame).
+    fn preview_image(&mut self, c: Character) -> Arc<Image> {
+        let (pose, frame) = if self.config.reduce_motion {
+            (Pose::Idle, 0)
+        } else {
+            (Pose::Writing, self.preview_frame % character::frame_count(c, Pose::Writing).max(1))
+        };
+        self.preview_frames
+            .entry((c, pose, frame))
+            .or_insert_with(|| {
+                let svg = character::scaled(character::frame_svg(c, pose, frame), character::frame_size(c), PREVIEW_H as u32 * 2);
+                Arc::new(Image::from_bytes(ImageFormat::Svg, svg.into_bytes()))
+            })
+            .clone()
+    }
+
+    /// Animates the character tiles while they're on screen (at a gentle
+    /// rate, only in the active window, never with reduced motion).
+    fn tick_previews(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.preview_seen = Instant::now();
+        if self.preview_ticking || self.config.reduce_motion || !window.is_window_active() {
+            return;
+        }
+        self.preview_ticking = true;
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_millis(1000 / PREVIEW_FPS)).await;
+                let go = this
+                    .update_in(cx, |this, window, cx| {
+                        let shown = this.preview_seen.elapsed() < Duration::from_millis(600);
+                        if !shown || this.config.reduce_motion || !window.is_window_active() {
+                            this.preview_ticking = false;
+                            return false;
+                        }
+                        this.preview_frame = this.preview_frame.wrapping_add(1);
+                        cx.notify();
+                        true
+                    })
+                    .unwrap_or(false);
+                if !go {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Which companion: a tile per character (with her animated
+    /// picture) and one to turn her off.
+    fn render_companion_character(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        self.tick_previews(window, cx);
+        let theme = cx.theme().clone();
+        let current = self.config.character();
+        let tile = |id: String, selected: bool, picture: AnyElement, name: String, tagline: String, choice: Option<Character>, cx: &mut Context<Self>| {
+            v_flex()
+                .id(SharedString::from(id))
+                .w(px(150.))
+                .p_2()
+                .gap_1()
+                .rounded(theme.radius_lg)
+                .border_2()
+                .border_color(if selected { theme.primary } else { theme.border })
+                .when(selected, |el| el.bg(theme.primary.opacity(0.08)))
+                .when(!selected, |el| el.hover(|s| s.bg(theme.muted)))
+                .cursor_pointer()
+                .child(h_flex().h(px(PREVIEW_H)).w_full().justify_center().child(picture))
+                .child(div().text_sm().font_semibold().when(selected, |el| el.text_color(theme.primary)).child(name))
+                .child(div().text_xs().text_color(theme.muted_foreground).child(tagline))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.config.set_character(choice);
+                    this.save(cx);
+                }))
+                .into_any_element()
+        };
+        let mut tiles: Vec<AnyElement> = Vec::new();
+        for c in Character::ALL {
+            let image = self.preview_image(c);
+            let (fw, fh) = character::frame_size(c);
+            let picture = img(image).h(px(PREVIEW_H)).w(px(PREVIEW_H * fw / fh)).into_any_element();
+            tiles.push(tile(format!("companion-{}", c.id()), current == Some(c), picture, c.name().into(), c.tagline().into(), Some(c), cx));
+        }
+        let off = Icon::new(IconName::EyeOff).large().text_color(theme.muted_foreground).into_any_element();
+        tiles.push(tile("companion-off".into(), current.is_none(), off, tr("Aus").into(), tr("Keine Begleiterin").into(), None, cx));
+        ui::card(cx)
+            .child(div().font_semibold().child(tr("Figur")))
+            .child(div().text_sm().text_color(theme.muted_foreground).child(tr(
+                "Eine kleine Figur im Fenster, die mitschreibt, solange gesprochen wird. Klick sie an, um Fragen zur laufenden Besprechung zu stellen; während der Aufnahme zeigt sie Entscheidungen, Aufgaben und offene Fragen, die du anheften kannst.",
+            )))
+            .child(h_flex().flex_wrap().gap_3().items_start().children(tiles))
+    }
+
+    /// Where she stands, how big, hidden behind a bar.
+    fn render_companion_place(&mut self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme().clone();
         let row = |label: &str, hint: Option<&str>, control: AnyElement| settings_row(label, hint, control, &theme);
-        let on = self.config.companion;
+        let name = self.config.companion_character().name();
         let scale = self.config.companion_scale;
         let size_button = |id: &'static str, label: &'static str, value: f32, cx: &mut Context<Self>| {
             let selected = (scale - value).abs() < 0.01;
@@ -825,6 +943,169 @@ impl SettingsView {
                 }))
                 .into_any_element()
         };
+        let hidden = Config::load().companion_hidden;
+        ui::card(cx)
+            .child(div().font_semibold().child(tr("Ort und Größe")))
+            .child(row(
+                tr("Wo"),
+                Some(tr("Auf dem Desktop steht sie über allen Fenstern, z. B. über Teams, und lässt sich auf jeden Bildschirm ziehen.")),
+                h_flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .children([(false, "mori-where-window", "Im App-Fenster"), (true, "mori-where-desktop", "Auf dem Desktop (bleibt im Vordergrund)")].map(
+                        |(desktop, id, label)| {
+                            let selected = self.config.companion_desktop == desktop;
+                            Button::new(id)
+                                .small()
+                                .label(tr(label))
+                                .when(selected, |b| b.primary())
+                                .when(!selected, |b| b.ghost())
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.config.companion_desktop = desktop;
+                                    this.save(cx);
+                                }))
+                                .into_any_element()
+                        },
+                    ))
+                    .into_any_element(),
+            ))
+            .child(row(
+                tr("Größe"),
+                None,
+                h_flex()
+                    .gap_1()
+                    .child(size_button("mori-size-s", "Klein", 0.75, cx))
+                    .child(size_button("mori-size-m", "Mittel", 1.0, cx))
+                    .child(size_button("mori-size-l", "Groß", 1.3, cx))
+                    .into_any_element(),
+            ))
+            .child(row(
+                tr("Als Leiste ausblenden"),
+                Some(&trf("{} tritt zur Seite; eine kleine Leiste mit Aufnahme, Notizen und Chat bleibt an ihrem Platz.", &[&name])),
+                Switch::new("set-mori-hidden")
+                    .checked(hidden)
+                    .on_change(cx.listener(|this, v: &bool, _, cx| {
+                        // (Her own menu writes it too: straight to disk.)
+                        let mut disk = Config::load();
+                        disk.companion_hidden = *v;
+                        if let Err(e) = disk.save() {
+                            eprintln!("[mostalgia] saving settings: {e:#}");
+                        }
+                        this.save(cx);
+                    }))
+                    .into_any_element(),
+            ))
+            .child(row(
+                tr("Position"),
+                Some(&trf("Zieh {} mit der Maus an eine andere Stelle.", &[&name])),
+                Button::new("mori-reset-pos")
+                    .small()
+                    .outline()
+                    .icon(IconName::RefreshCw)
+                    .label(tr("Position zurücksetzen"))
+                    .disabled({
+                        let disk = Config::load();
+                        if self.config.companion_desktop { disk.companion_desktop_pos.is_none() } else { disk.companion_pos.is_none() }
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        let mut disk = Config::load();
+                        if this.config.companion_desktop {
+                            disk.companion_desktop_pos = None;
+                            this.config.companion_desktop_pos = None;
+                        } else {
+                            disk.companion_pos = None;
+                        }
+                        if let Err(e) = disk.save() {
+                            eprintln!("[mostalgia] saving settings: {e:#}");
+                        }
+                        this.save(cx);
+                    }))
+                    .into_any_element(),
+            ))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .items_start()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(Icon::new(IconName::Info).xsmall().mt(px(2.)).flex_none())
+                    .child(div().flex_1().min_w_0().child(if self.config.companion_desktop {
+                        trf("Auf dem Desktop läuft {} als kleines eigenes Fenster über XWayland: Unter GNOME Wayland dürfen nur solche Fenster im Vordergrund bleiben und frei platziert werden. Klicks neben ihr gehen an das Fenster darunter.", &[&name])
+                    } else {
+                        format!(
+                            "{} {}",
+                            trf("{} lebt im Mostalgia-Fenster. Damit sie über anderen Fenstern steht, wähle „Auf dem Desktop“.", &[&name]),
+                            trf("Aus dem Fenster ziehen bringt {} auf den Desktop.", &[&name])
+                        )
+                    })),
+            )
+    }
+
+    /// The chat: the clear button, and which connection answers.
+    fn render_companion_chat(&mut self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
+        let row = |label: &str, hint: Option<&str>, control: AnyElement| settings_row(label, hint, control, &theme);
+        let notes_on = self.config.notes_mode() != NotesMode::Off;
+        // Which connection she talks to: the one for "Fragen".
+        let connection = match self.config.ask_request() {
+            Ok(req) => {
+                let conn = &req.connection;
+                let notes_conn = self.config.notes_request().map_or_else(|_| conn.name.clone(), |r| r.connection.name);
+                let ready = self.keys.is_none() || self.configured(conn);
+                let (color, badge) = if conn.is_local() {
+                    (theme.success, connections::local_label(conn.base()).to_string())
+                } else {
+                    (theme.warning, tr("Cloud").to_string())
+                };
+                v_flex()
+                    .gap_1p5()
+                    .child(
+                        h_flex()
+                            .flex_wrap()
+                            .gap_2()
+                            .text_sm()
+                            .child(Icon::new(if conn.is_local() { IconName::HardDrive } else { IconName::Globe }).small().text_color(theme.muted_foreground))
+                            .child(div().child(trf("Nutzt {} · {}", &[&conn.name, &req.model])))
+                            .child(chip(badge, color, &theme)),
+                    )
+                    .when(!ready, |el| {
+                        el.child(div().text_xs().text_color(theme.warning).child(trf("{} ist nicht eingerichtet — in Einstellungen → KI hinterlegen.", &[&conn.name])))
+                    })
+                    .when(!conn.is_local() && notes_on, |el| {
+                        el.child(div().text_xs().text_color(theme.muted_foreground).child(trf(
+                            "Live-Notizen senden das Transkript der Besprechung an {} (bei langen Besprechungen eine kurze Zusammenfassung plus die letzten Minuten); jede Frage sendet das Live-Transkript. Das kostet Tokens bei {}.",
+                            &[&notes_conn, &notes_conn],
+                        )))
+                    })
+                    .when(!conn.is_local() && !notes_on, |el| {
+                        el.child(div().text_xs().text_color(theme.muted_foreground).child(trf("Jede Frage sendet das Live-Transkript an {}.", &[&conn.name])))
+                    })
+                    .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Ändern unter KI & Transkription → Zusammenfassungen & Fragen.")))
+                    .into_any_element()
+            }
+            Err(e) => div().text_xs().text_color(theme.danger).child(format!("{e:#}")).into_any_element(),
+        };
+        ui::card(cx)
+            .child(div().font_semibold().child(tr("Chat")))
+            .child(row(
+                tr("Leeren-Knopf im Chat zeigen"),
+                Some(tr("Ein Knopf in der Sprechblase der Begleiterin, der den Chat leert (rückgängig machbar).")),
+                Switch::new("set-mori-clear")
+                    .checked(self.config.companion_clear_button)
+                    .on_change(cx.listener(|this, v: &bool, _, cx| {
+                        this.config.companion_clear_button = *v;
+                        this.save(cx);
+                    }))
+                    .into_any_element(),
+            ))
+            .child(connection)
+    }
+
+    /// Live notes: when she looks, how the cards behave, which model.
+    fn render_companion_notes(&mut self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
+        let row = |label: &str, hint: Option<&str>, control: AnyElement| settings_row(label, hint, control, &theme);
+        let name = self.config.companion_character().name();
         let notes_mode = self.config.notes_mode();
         let interval = self.config.notes_interval();
         let mode_button = |mode: NotesMode, label: String, cx: &mut Context<Self>| {
@@ -850,12 +1131,12 @@ impl SettingsView {
         let timing = match notes_mode {
             NotesMode::Live => Some((
                 tr("Mindestabstand zwischen Prüfungen"),
-                tr("Mori schaut nach jedem fertigen Satz nach, aber nie öfter als so. Kürzer: Notizen kommen schneller, kosten mehr Anfragen."),
+                trf("{} schaut nach jedem fertigen Satz nach, aber nie öfter als so. Kürzer: Notizen kommen schneller, kosten mehr Anfragen.", &[&name]),
                 self.stepper("mori-gap", secs_label(self.config.notes_gap()), neighbours(GAP_STEPS, self.config.notes_gap()), |c, v| c.companion_notes_gap_secs = v, cx),
             )),
             NotesMode::Every(secs) => Some((
                 tr("Abstand"),
-                tr("Mori sucht nach so viel neuer Sprache nach Notizen (Stille zählt nicht)."),
+                trf("{} sucht nach so viel neuer Sprache nach Notizen (Stille zählt nicht).", &[&name]),
                 self.stepper("mori-interval", secs_label(secs as f32), neighbours(INTERVAL_STEPS, secs as f32), |c, v| c.set_notes_mode(NotesMode::Every(v as u32)), cx),
             )),
             NotesMode::Off => None,
@@ -903,178 +1184,45 @@ impl SettingsView {
             h_flex().flex_wrap().gap_1().child(conn_picker).children(model_picker).into_any_element()
         });
         let notes_custom = self.custom_model_row(Slot::Notes, cx);
-
-        // Which connection she talks to: the one for "Fragen".
-        let connection = match self.config.ask_request() {
-            Ok(req) => {
-                let conn = &req.connection;
-                let notes_conn = self.config.notes_request().map_or_else(|_| conn.name.clone(), |r| r.connection.name);
-                let ready = self.keys.is_none() || self.configured(conn);
-                let (color, badge) = if conn.is_local() {
-                    (theme.success, connections::local_label(conn.base()).to_string())
-                } else {
-                    (theme.warning, tr("Cloud").to_string())
-                };
-                v_flex()
-                    .gap_1p5()
-                    .child(
-                        h_flex()
-                            .flex_wrap()
-                            .gap_2()
-                            .text_sm()
-                            .child(Icon::new(if conn.is_local() { IconName::HardDrive } else { IconName::Globe }).small().text_color(theme.muted_foreground))
-                            .child(div().child(trf("Nutzt {} · {}", &[&conn.name, &req.model])))
-                            .child(chip(badge, color, &theme)),
-                    )
-                    .when(!ready, |el| {
-                        el.child(div().text_xs().text_color(theme.warning).child(trf("{} ist nicht eingerichtet — in Einstellungen → KI hinterlegen.", &[&conn.name])))
-                    })
-                    .when(!conn.is_local() && notes_on, |el| {
-                        el.child(div().text_xs().text_color(theme.muted_foreground).child(trf(
-                            "Live-Notizen senden das Transkript der Besprechung an {} (bei langen Besprechungen eine kurze Zusammenfassung plus die letzten Minuten); jede Frage sendet das Live-Transkript. Das kostet Tokens bei {}.",
-                            &[&notes_conn, &notes_conn],
-                        )))
-                    })
-                    .when(!conn.is_local() && !notes_on, |el| {
-                        el.child(div().text_xs().text_color(theme.muted_foreground).child(trf("Jede Frage sendet das Live-Transkript an {}.", &[&conn.name])))
-                    })
-                    .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Ändern unter KI & Transkription → Zusammenfassungen & Fragen.")))
-                    .into_any_element()
-            }
-            Err(e) => div().text_xs().text_color(theme.danger).child(format!("{e:#}")).into_any_element(),
+        let mode_hint = match notes_mode {
+            NotesMode::Live => tr("Sieht nach jedem fertigen Satz kurz nach – Notizen erscheinen wenige Sekunden, nachdem etwas gesagt wurde.").to_string(),
+            NotesMode::Every(_) => tr("Sucht nach so vielen Sekunden neuer Sprache nach neuen Notizen.").to_string(),
+            NotesMode::Off => trf("{} schreibt während der Aufnahme keine Notizen mit. Fragen kannst du sie trotzdem.", &[&name]),
         };
-
         ui::card(cx)
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(Icon::new(IconName::Sparkles).small().text_color(theme.primary))
-                    .child(div().flex_1().font_semibold().child(tr("Mori – Notiz-Begleiterin")))
-                    .child(
-                        Switch::new("set-mori")
-                            .checked(on)
-                            .on_change(cx.listener(|this, v: &bool, _, cx| {
-                                this.config.companion = *v;
-                                this.save(cx);
-                            })),
-                    ),
-            )
-            .child(div().text_sm().text_color(theme.muted_foreground).child(tr(
-                "Eine kleine Figur im Fenster, die mitschreibt, solange gesprochen wird. Klick sie an, um Fragen zur laufenden Besprechung zu stellen; während der Aufnahme zeigt sie Entscheidungen, Aufgaben und offene Fragen, die du anheften kannst.",
-            )))
-            .when(on, |el| {
-                el.child(row(
-                    tr("Größe"),
-                    None,
-                    h_flex()
-                        .gap_1()
-                        .child(size_button("mori-size-s", "Klein", 0.75, cx))
-                        .child(size_button("mori-size-m", "Mittel", 1.0, cx))
-                        .child(size_button("mori-size-l", "Groß", 1.3, cx))
-                        .into_any_element(),
-                ))
-                .child(row(
-                    tr("Live-Notizen"),
-                    Some(match notes_mode {
-                        NotesMode::Live => tr("Sieht nach jedem fertigen Satz kurz nach – Notizen erscheinen wenige Sekunden, nachdem etwas gesagt wurde."),
-                        NotesMode::Every(_) => tr("Sucht nach so vielen Sekunden neuer Sprache nach neuen Notizen."),
-                        NotesMode::Off => tr("Mori schreibt während der Aufnahme keine Notizen mit. Fragen kannst du sie trotzdem."),
-                    }),
-                    h_flex().flex_wrap().gap_1().children(mode_buttons).into_any_element(),
-                ))
-                .children(timing.map(|(label, hint, control)| row(label, Some(hint), control)))
-                .when(notes_on, |el| {
-                    el.child(div().text_xs().text_color(theme.muted_foreground).child(estimate))
-                        .child(row(
-                            tr("Worauf soll Mori achten?"),
-                            Some(tr("Optional. Mori achtet zuerst darauf, notiert aber weiter klar wichtige Entscheidungen und Aufgaben. Für eine Aufnahme änderst du es in ihrer Sprechblase.")),
-                            div().w(px(280.)).child(Input::new(&self.notes_focus).small()).into_any_element(),
-                        ))
-                        .child(row(tr("Karte einklappen nach"), Some(tr("Danach zeigt eine Notiz-Karte nur noch eine ruhige Zeile.")), collapse_control))
-                        .child(row(tr("Abstand zwischen Karten"), Some(tr("Kommen mehrere Notizen auf einmal, erscheinen sie so weit nacheinander.")), stagger_control))
-                })
-                .children(notes_picker.map(|p| row(tr("Modell für Live-Notizen"), Some(tr("Ein schnelles Modell reicht; gedacht wird dabei so wenig wie möglich.")), p)))
-                .children(notes_custom)
-                .child(row(
-                    tr("Wo"),
-                    Some(tr("Auf dem Desktop steht sie über allen Fenstern, z. B. über Teams, und lässt sich auf jeden Bildschirm ziehen.")),
-                    h_flex()
-                        .flex_wrap()
-                        .gap_1()
-                        .children([(false, "mori-where-window", "Im App-Fenster"), (true, "mori-where-desktop", "Auf dem Desktop (bleibt im Vordergrund)")].map(
-                            |(desktop, id, label)| {
-                                let selected = self.config.companion_desktop == desktop;
-                                Button::new(id)
-                                    .small()
-                                    .label(tr(label))
-                                    .when(selected, |b| b.primary())
-                                    .when(!selected, |b| b.ghost())
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.config.companion_desktop = desktop;
-                                        this.save(cx);
-                                    }))
-                                    .into_any_element()
-                            },
-                        ))
-                        .into_any_element(),
-                ))
-                .child(row(
-                    tr("Leeren-Knopf im Chat zeigen"),
-                    Some(tr("Ein Knopf in Moris Sprechblase, der den Chat leert (rückgängig machbar).")),
-                    Switch::new("set-mori-clear")
-                        .checked(self.config.companion_clear_button)
-                        .on_change(cx.listener(|this, v: &bool, _, cx| {
-                            this.config.companion_clear_button = *v;
-                            this.save(cx);
-                        }))
-                        .into_any_element(),
-                ))
-                .child(row(
-                    tr("Position"),
-                    Some(tr("Zieh Mori mit der Maus an eine andere Stelle.")),
-                    Button::new("mori-reset-pos")
-                        .small()
-                        .outline()
-                        .icon(IconName::RefreshCw)
-                        .label(tr("Position zurücksetzen"))
-                        .disabled({
-                            let disk = Config::load();
-                            if self.config.companion_desktop { disk.companion_desktop_pos.is_none() } else { disk.companion_pos.is_none() }
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            let mut disk = Config::load();
-                            if this.config.companion_desktop {
-                                disk.companion_desktop_pos = None;
-                                this.config.companion_desktop_pos = None;
-                            } else {
-                                disk.companion_pos = None;
-                            }
-                            if let Err(e) = disk.save() {
-                                eprintln!("[mostalgia] saving settings: {e:#}");
-                            }
-                            this.save(cx);
-                        }))
-                        .into_any_element(),
-                ))
-                .child(connection)
+            .child(div().font_semibold().child(tr("Live-Notizen")))
+            .child(row(tr("Live-Notizen"), Some(&mode_hint), h_flex().flex_wrap().gap_1().children(mode_buttons).into_any_element()))
+            .children(timing.map(|(label, hint, control)| row(label, Some(&hint), control)))
+            .when(notes_on, |el| {
+                el.child(div().text_xs().text_color(theme.muted_foreground).child(estimate))
+                    .child(row(tr("Karte einklappen nach"), Some(tr("Danach zeigt eine Notiz-Karte nur noch eine ruhige Zeile.")), collapse_control))
+                    .child(row(tr("Abstand zwischen Karten"), Some(tr("Kommen mehrere Notizen auf einmal, erscheinen sie so weit nacheinander.")), stagger_control))
+                    .child(row(
+                        &trf("Worauf soll {} achten?", &[&name]),
+                        Some(&trf("Optional. {} achtet zuerst darauf, notiert aber weiter klar wichtige Entscheidungen und Aufgaben. Für eine Aufnahme änderst du es in ihrer Sprechblase.", &[&name])),
+                        div().w(px(280.)).child(Input::new(&self.notes_focus).small()).into_any_element(),
+                    ))
             })
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_start()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(Icon::new(IconName::Info).xsmall().mt(px(2.)).flex_none())
-                    .child(div().flex_1().min_w_0().child(if self.config.companion_desktop {
-                        tr("Auf dem Desktop läuft Mori als kleines eigenes Fenster über XWayland: Unter GNOME Wayland dürfen nur solche Fenster im Vordergrund bleiben und frei platziert werden. Klicks neben ihr gehen an das Fenster darunter.").to_string()
-                    } else {
-                        format!(
-                            "{} {}",
-                            tr("Mori lebt im Mostalgia-Fenster. Damit sie über anderen Fenstern steht, wähle „Auf dem Desktop“."),
-                            tr("Aus dem Fenster ziehen bringt Mori auf den Desktop.")
-                        )
-                    })),
-            )
+            .children(notes_picker.map(|p| row(tr("Modell für Live-Notizen"), Some(tr("Ein schnelles Modell reicht; gedacht wird dabei so wenig wie möglich.")), p)))
+            .children(notes_custom)
+    }
+
+    /// Motion (the app-wide setting, mirrored here).
+    fn render_companion_behaviour(&mut self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
+        let name = self.config.companion_character().name();
+        ui::card(cx).child(div().font_semibold().child(tr("Verhalten"))).child(settings_row(
+            tr("Animationen reduzieren"),
+            Some(&trf("Gilt für die ganze App (auch unter Darstellung): {} bewegt sich kaum, neue Notizen erscheinen ohne Animation.", &[&name])),
+            Switch::new("set-mori-reduce-motion")
+                .checked(self.config.reduce_motion)
+                .on_change(cx.listener(|this, v: &bool, _, cx| {
+                    this.config.reduce_motion = *v;
+                    this.save(cx);
+                }))
+                .into_any_element(),
+            &theme,
+        ))
     }
 }
 
@@ -2264,7 +2412,7 @@ impl SettingsView {
 }
 
 impl Render for SettingsView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let lang = self.config.language.clone();
         let threshold = self.config.vad_threshold;
         let choice = |id: &'static str, label: &'static str, on: bool, cx: &mut Context<Self>, f: fn(&mut Config)| {
@@ -2525,18 +2673,50 @@ impl Render for SettingsView {
         });
         cards.push(Card {
             category: Category::Darstellung,
-            title: "Mori",
-            keywords: "mori companion assistant anime character notes avatar begleiterin figur notizen live punkte points fokus focus abstand intervall interval gap karten cards einklappen collapse",
-            wide: false,
-            element: self.render_mori(cx).into_any_element(),
-        });
-        cards.push(Card {
-            category: Category::Darstellung,
             title: "Design",
             keywords: "design theme farbe hell dunkel blockwelt schrift schriftart animationen reduzieren color light dark font animations reduce motion sprache app language",
             wide: true,
             element: self.render_themes(cx).into_any_element(),
         });
+
+        // ── Begleiterin ──
+        cards.push(Card {
+            category: Category::Begleiterin,
+            title: "Figur",
+            keywords: "begleiterin companion figur character mori tsumugi hoshi anime avatar assistant aus off auswählen choose weberin weaver schal scarf sterne stars sternbilder constellations notizblock notepad",
+            wide: true,
+            element: self.render_companion_character(window, cx).into_any_element(),
+        });
+        if self.config.character().is_some() {
+            cards.push(Card {
+                category: Category::Begleiterin,
+                title: "Ort und Größe",
+                keywords: "begleiterin companion mori tsumugi hoshi wo where fenster window desktop vordergrund on top größe size klein groß small large leiste bar ausblenden hide hidden position zurücksetzen reset xwayland gnome wayland",
+                wide: false,
+                element: self.render_companion_place(cx).into_any_element(),
+            });
+            cards.push(Card {
+                category: Category::Begleiterin,
+                title: "Chat",
+                keywords: "begleiterin companion mori tsumugi hoshi chat fragen ask leeren clear knopf button verbindung connection modell model",
+                wide: false,
+                element: self.render_companion_chat(cx).into_any_element(),
+            });
+            cards.push(Card {
+                category: Category::Begleiterin,
+                title: "Live-Notizen",
+                keywords: "begleiterin companion mori tsumugi hoshi live notizen notes punkte points fokus focus abstand intervall interval gap karten cards einklappen collapse stagger anfragen requests modell model",
+                wide: false,
+                element: self.render_companion_notes(cx).into_any_element(),
+            });
+            cards.push(Card {
+                category: Category::Begleiterin,
+                title: "Verhalten",
+                keywords: "begleiterin companion mori tsumugi hoshi verhalten behaviour behavior animationen reduzieren reduce motion bewegung",
+                wide: false,
+                element: self.render_companion_behaviour(cx).into_any_element(),
+            });
+        }
 
         // ── Speicher & Export ──
         let data_dir = paths::data_dir();

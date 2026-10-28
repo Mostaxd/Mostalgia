@@ -174,7 +174,7 @@ impl Companion {
     pub(super) fn render_menu(&mut self, o: Point2, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (x, y, w, _) = self.menu_rect(o)?;
         let theme = cx.theme().clone();
-        let item = |id: &'static str, icon: IconName, label: &'static str, cx: &mut Context<Self>, act: fn(&mut Companion, &mut Context<Companion>)| {
+        let item = |id: &'static str, icon: IconName, label: String, cx: &mut Context<Self>, act: fn(&mut Companion, &mut Context<Companion>)| {
             h_flex()
                 .id(id)
                 .h(px(MENU_ITEM_H))
@@ -185,7 +185,7 @@ impl Companion {
                 .cursor_pointer()
                 .hover(|s| s.bg(theme.accent).text_color(theme.accent_foreground))
                 .child(Icon::new(icon).small().text_color(theme.muted_foreground))
-                .child(tr(label))
+                .child(label)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.ctl.menu = None;
                     act(this, cx);
@@ -193,22 +193,22 @@ impl Companion {
                 }))
         };
         let hide = if self.hidden {
-            item("mori-menu-show", IconName::Eye, "Mori einblenden", cx, |this, cx| this.set_hidden(false, cx))
+            item("mori-menu-show", IconName::Eye, trf("{} einblenden", &[&self.name()]), cx, |this, cx| this.set_hidden(false, cx))
         } else {
-            item("mori-menu-hide", IconName::EyeOff, "Mori ausblenden", cx, |this, cx| this.set_hidden(true, cx))
+            item("mori-menu-hide", IconName::EyeOff, trf("{} ausblenden", &[&self.name()]), cx, |this, cx| this.set_hidden(true, cx))
         };
         let place = if self.desktop_mode {
-            item("mori-menu-window", IconName::AppWindow, "Zurück ins Fenster", cx, |this, cx| {
+            item("mori-menu-window", IconName::AppWindow, tr("Zurück ins Fenster").into(), cx, |this, cx| {
                 this.open = false;
                 cx.emit(MoriEvent::BackToApp);
             })
         } else {
-            item("mori-menu-desktop", IconName::MonitorUp, "Auf den Desktop", cx, |this, cx| {
+            item("mori-menu-desktop", IconName::MonitorUp, tr("Auf den Desktop").into(), cx, |this, cx| {
                 this.open = false;
                 cx.emit(MoriEvent::PopOut);
             })
         };
-        let settings = item("mori-menu-settings", IconName::Settings, "Einstellungen", cx, |_, cx| cx.emit(MoriEvent::OpenMoriSettings));
+        let settings = item("mori-menu-settings", IconName::Settings, tr("Einstellungen").into(), cx, |_, cx| cx.emit(MoriEvent::OpenMoriSettings));
         Some(
             v_flex()
                 .id("mori-menu")
@@ -380,7 +380,7 @@ impl Companion {
                 .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Aufnehmen von:")))
                 .child(buttons)
                 .when(self.notes_mode != mostalgia_core::config::NotesMode::Off, |el| {
-                    el.child(div().pt_1().text_xs().text_color(theme.muted_foreground).child(tr("Worauf soll Mori achten? (optional)")))
+                    el.child(div().pt_1().text_xs().text_color(theme.muted_foreground).child(trf("Worauf soll {} achten? (optional)", &[&self.name()])))
                         .child(gpui_kit::component::input::Input::new(&self.focus_input).xsmall().w(px(240.)))
                 })
                 .into_any_element(),
@@ -504,7 +504,7 @@ impl Companion {
         match &rows {
             Err(e) => items.push(div().p_2().rounded(theme.radius).bg(theme.danger.opacity(0.1)).text_color(theme.danger).text_xs().child(e.clone()).into_any_element()),
             Ok(rows) if rows.is_empty() => items.push(hint(if live {
-                tr("Noch keine Notizen – Mori notiert Entscheidungen, Aufgaben, offene Fragen und Zahlen, während ihr sprecht.").to_string()
+                trf("Noch keine Notizen – {} notiert Entscheidungen, Aufgaben, offene Fragen und Zahlen, während ihr sprecht.", &[&self.name()])
             } else if self.open_meeting.is_some() {
                 tr("Diese Besprechung hat keine Notizen.").to_string()
             } else {
@@ -549,7 +549,7 @@ impl Companion {
             return None;
         }
         if self.points_rx.is_some() {
-            return Some(tr("Mori sucht gerade nach Notizen …").to_string());
+            return Some(trf("{} sucht gerade nach Notizen …", &[&self.name()]));
         }
         match self.notes_mode {
             NotesMode::Every(secs) => {
@@ -660,7 +660,7 @@ impl Companion {
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _, cx| this.mouse_up(cx)))
             .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, window, cx| this.mouse_move(ev, window, cx)))
             .on_mouse_down(MouseButton::Right, cx.listener(|this, ev: &MouseDownEvent, _, cx| this.open_menu(ev, cx)))
-            .when(!busy, |el| el.child(div().flex_none().text_sm().font_semibold().child("Mori")))
+            .when(!busy, |el| el.child(div().flex_none().text_sm().font_semibold().child(self.name())))
             .child(keep(controls))
             .child(div().flex_1())
             .child(keep(

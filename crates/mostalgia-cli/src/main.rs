@@ -467,8 +467,9 @@ fn regenerate_notes(id: i64, focus: Option<String>) -> Result<()> {
         Some(f) => f,
         None => open_store()?.notes_focus(id)?.unwrap_or_else(|| Config::load().companion_notes_focus),
     };
-    let req = Config::load().notes_request()?;
-    eprintln!("[mostalgia] {}", trf("Mori liest die Besprechung mit {} · {} …", &[&req.connection.name, &req.model]));
+    let config = Config::load();
+    let req = config.notes_request()?;
+    eprintln!("[mostalgia] {}", trf("{} liest die Besprechung mit {} · {} …", &[&config.companion_character().name(), &req.connection.name, &req.model]));
     let done = companion::regenerate_notes(id, &focus, &mut |part, parts| {
         if parts > 1 {
             eprintln!("[mostalgia] {}", trf("Teil {} von {}", &[&part, &parts]));

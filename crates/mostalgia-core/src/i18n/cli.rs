@@ -89,7 +89,7 @@ pub const EN: &[(&str, &str)] = &[
     ("ca. {} $/h", "approx. ${}/h"),
     ("zeige die eingebaute Liste", "showing the built-in list"),
     ("Modell nicht gefunden: {} — zuerst scripts/download-model.sh ausführen oder --model angeben", "Model not found: {} — run scripts/download-model.sh first or pass --model"),
-    ("Mori liest die Besprechung mit {} · {} …", "Mori is reading the meeting with {} · {} …"),
+    ("{} liest die Besprechung mit {} · {} …", "{} is reading the meeting with {} · {} …"),
     ("Teil {} von {}", "Part {} of {}"),
     ("{} neue Notizen, {} angeheftete behalten, {} Wiederholungen weggelassen ({} · {})", "{} new notes, {} pinned kept, {} repeats left out ({} · {})"),
 ];

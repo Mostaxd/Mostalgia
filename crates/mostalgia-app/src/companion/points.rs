@@ -363,12 +363,16 @@ impl Companion {
     pub(super) fn release_points(&mut self) -> bool {
         let now = Instant::now();
         let mut released = 0;
+        let mut newest = None;
         for p in &mut self.points {
             if p.announced || p.release_at > now {
                 continue;
             }
             p.announced = true;
             released += 1;
+            if !p.dismissed {
+                newest = Some(p.point.kind);
+            }
             let Some(line_at) = p.line_at else { continue };
             eprintln!(
                 "[mori] {} note shown{}: {:.1}s after its newest line was finalized (request {:.1}s, queued {:.1}s) — [{}] {}",
@@ -385,6 +389,9 @@ impl Companion {
             return false;
         }
         self.talking_until = Some(now + Duration::from_millis(2000));
+        if let Some(kind) = newest {
+            self.start_pop(kind);
+        }
         if self.points_follow {
             self.points_scroll_to_end = true;
         } else {
@@ -683,7 +690,7 @@ impl Companion {
                     .font_semibold()
                     .text_color(theme.danger)
                     .child(Icon::new(IconName::TriangleAlert).xsmall())
-                    .child(if err.points { tr("Live-Notizen fehlgeschlagen") } else { tr("Mori konnte nicht antworten") }),
+                    .child(if err.points { tr("Live-Notizen fehlgeschlagen").to_string() } else { trf("{} konnte nicht antworten", &[&self.name()]) }),
             )
             .child(div().text_xs().child(err.message.clone()))
             .when(err.points, |el| {

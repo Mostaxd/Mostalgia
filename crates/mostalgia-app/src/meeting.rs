@@ -255,9 +255,9 @@ impl MeetingView {
                         match result {
                             Ok(r) => {
                                 let line = if r.kept > 0 {
-                                    trf("{} neue Notizen von Mori ({} angeheftete behalten).", &[&r.added, &r.kept])
+                                    trf("{} neue Notizen von {} ({} angeheftete behalten).", &[&r.added, &companion_name(), &r.kept])
                                 } else {
-                                    trf("{} neue Notizen von Mori.", &[&r.added])
+                                    trf("{} neue Notizen von {}.", &[&r.added, &companion_name()])
                                 };
                                 eprintln!("[mostalgia] regenerated notes of meeting {}: {} new, {} kept, {} repeats left out, {} part(s), {} · {}", this.id, r.added, r.kept, r.repeats, r.parts, r.provider, r.model);
                                 this.regen_done = Some((line.into(), r.version));
@@ -292,7 +292,7 @@ impl MeetingView {
                 let version = self.note_versions.first().map(|v| v.id);
                 let n = self.meeting.as_ref().map_or(0, |m| m.notes.iter().filter(|n| !n.pinned).count());
                 let kept = self.meeting.as_ref().map_or(0, |m| m.notes.iter().filter(|n| n.pinned).count());
-                self.regen_done = Some((trf("{} neue Notizen von Mori ({} angeheftete behalten).", &[&n, &kept]).into(), version));
+                self.regen_done = Some((trf("{} neue Notizen von {} ({} angeheftete behalten).", &[&n, &companion_name(), &kept]).into(), version));
                 self.versions_open = true;
             }
         }
@@ -987,9 +987,9 @@ impl MeetingView {
                             .child(Icon::new(IconName::FileText).large())
                             .child(div().font_medium().child(tr("Keine Notizen für diese Besprechung")))
                             .child(div().text_sm().text_center().child(if can_regenerate {
-                                tr("Mori war bei dieser Aufnahme nicht dabei – sie kann die Notizen aber jetzt aus dem Transkript schreiben.")
+                                trf("{} war bei dieser Aufnahme nicht dabei – sie kann die Notizen aber jetzt aus dem Transkript schreiben.", &[&companion_name()])
                             } else {
-                                tr("Mori war bei dieser Aufnahme nicht dabei. Schalte sie unter Einstellungen → Darstellung → Mori ein.")
+                                tr("Bei dieser Aufnahme war keine Begleiterin dabei. Schalte eine unter Einstellungen → Begleiterin ein.").to_string()
                             }))
                             .when(can_regenerate, |el| {
                                 el.child(
@@ -1042,7 +1042,7 @@ impl MeetingView {
                         .icon(IconName::WandSparkles)
                         .label(tr("Notizen neu erstellen"))
                         .disabled(busy)
-                        .tooltip(tr("Mori liest das ganze Transkript noch einmal und schreibt die Notizen neu – angeheftete bleiben"))
+                        .tooltip(trf("{} liest das ganze Transkript noch einmal und schreibt die Notizen neu – angeheftete bleiben", &[&companion_name()]))
                         .on_click(cx.listener(|this, _, window, cx| this.open_regenerate(window, cx))),
                 )
             })
@@ -1084,9 +1084,9 @@ impl MeetingView {
                     .child(
                         v_flex()
                             .child(div().font_medium().child(if parts > 1 {
-                                trf("Mori liest die Besprechung … (Teil {} von {})", &[&part, &parts])
+                                trf("{} liest die Besprechung … (Teil {} von {})", &[&companion_name(), &part, &parts])
                             } else {
-                                tr("Mori liest die Besprechung …").to_string()
+                                trf("{} liest die Besprechung …", &[&companion_name()])
                             }))
                             .child(div().text_xs().text_color(theme.muted_foreground).child(which)),
                     )
@@ -1110,13 +1110,13 @@ impl MeetingView {
                     .bg(theme.secondary)
                     .child(h_flex().gap_2().child(Icon::new(IconName::WandSparkles).small().text_color(theme.primary)).child(div().font_semibold().child(tr("Notizen neu erstellen"))))
                     .child(div().text_sm().text_color(theme.muted_foreground).child(trf(
-                        "Mori liest {} noch einmal und schreibt die Notizen neu, mit Zeitstempeln. Angeheftete Notizen ({}) bleiben, die übrigen werden ersetzt – rückgängig machbar.",
-                        &[&reads, &pinned],
+                        "{} liest {} noch einmal und schreibt die Notizen neu, mit Zeitstempeln. Angeheftete Notizen ({}) bleiben, die übrigen werden ersetzt – rückgängig machbar.",
+                        &[&companion_name(), &reads, &pinned],
                     )))
                     .child(
                         v_flex()
                             .gap_1()
-                            .child(div().text_sm().font_medium().child(tr("Worauf soll Mori achten? (optional)")))
+                            .child(div().text_sm().font_medium().child(trf("Worauf soll {} achten? (optional)", &[&companion_name()])))
                             .child(Input::new(&input).small()),
                     )
                     .child(match &target {
@@ -1859,4 +1859,9 @@ fn summary_language(m: &Meeting) -> String {
         return String::new();
     }
     trf(" · auf {}", &[&summary::language_name(&code)])
+}
+
+/// The chosen companion's name (who writes and regenerates the notes).
+fn companion_name() -> &'static str {
+    Config::load().companion_character().name()
 }

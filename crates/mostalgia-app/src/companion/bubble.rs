@@ -110,7 +110,7 @@ impl Companion {
             let result = mostalgia_core::store::Store::open(&mostalgia_core::paths::database()).and_then(|mut s| s.add_companion_chat(meeting_id, &chat));
             if let Err(e) = result {
                 self.error = Some(MoriError {
-                    message: mostalgia_core::i18n::trf("Der Chat mit Mori konnte nicht gespeichert werden: {}", &[&format!("{e:#}")]),
+                    message: mostalgia_core::i18n::trf("Der Chat mit {} konnte nicht gespeichert werden: {}", &[&self.name(), &format!("{e:#}")]),
                     points: false,
                 });
             }
@@ -194,8 +194,8 @@ impl Companion {
             question: question.clone(),
             answer: String::new(),
             status: Some(match scope {
-                Scope::Live => tr("Mori liest das Live-Transkript …").into(),
-                Scope::Open => tr("Mori liest die Besprechung …").into(),
+                Scope::Live => trf("{} liest das Live-Transkript …", &[&self.name()]),
+                Scope::Open => trf("{} liest die Besprechung …", &[&self.name()]),
                 Scope::Library => tr("Durchsuche Besprechungen …").into(),
             }),
             error: None,
@@ -384,8 +384,9 @@ impl Companion {
                 .hover(|s| s.bg(theme.primary.opacity(0.2)))
                 .child(Icon::new(IconName::Target).xsmall())
                 .child(div().min_w_0().truncate().child(trf("Fokus: {}", &[&text])))
-                .tooltip(|window, cx| {
-                    gpui_kit::component::tooltip::Tooltip::new(tr("Worauf Mori bei den Live-Notizen besonders achtet – gilt für diese Aufnahme und wird mit ihr gespeichert. Den Standard legst du in den Einstellungen fest.")).build(window, cx)
+                .tooltip({
+                    let tip: SharedString = trf("Worauf {} bei den Live-Notizen besonders achtet – gilt für diese Aufnahme und wird mit ihr gespeichert. Den Standard legst du in den Einstellungen fest.", &[&self.name()]).into();
+                    move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
                 })
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.focus_editing = true;
@@ -435,7 +436,7 @@ impl Companion {
             .py_2()
             .border_b_1()
             .border_color(theme.border)
-            .child(div().font_semibold().child("Mori"))
+            .child(div().font_semibold().child(self.name()))
             .when(!setup.name.is_empty(), |el| {
                 let (color, label) = match setup.local {
                     Some(l) => (theme.success, l.split(" · ").next().unwrap_or(l).to_string()),

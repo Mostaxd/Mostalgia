@@ -1,10 +1,12 @@
-//! Mori, the optional note-taking companion: an animated character that
-//! writes along while people speak, answers live questions and pops up
-//! points she noticed. She is drawn over the window's content, can be
-//! dragged anywhere inside it, and opens a chat bubble when clicked.
+//! The optional note-taking companion (Mori, Tsumugi or Hoshi, see
+//! `character`): an animated character that writes along while people
+//! speak, answers live questions and pops up points she noticed. She is
+//! drawn over the window's content, can be dragged anywhere inside it, and
+//! opens a chat bubble when clicked. (The code calls her Mori, the first.)
 
 pub mod art;
 pub mod cast;
+pub mod character;
 mod bubble;
 pub use bubble::ShowLiveMoment;
 mod controls;
@@ -27,13 +29,14 @@ use gpui_kit::component::{ActiveTheme, StyledExt, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use mostalgia_core::ask::AskEvent;
-use mostalgia_core::companion::{AnswerEvent, Point, PointsReply};
+use mostalgia_core::companion::{AnswerEvent, Point, PointKind, PointsReply};
 use mostalgia_core::config::{Config, NotesMode};
 use mostalgia_core::i18n::{self, tr, trf};
 
 use crate::recording::{LiveState, RecordingView};
 use feed::Feed;
 use art::Pose;
+use character::Character;
 
 pub enum MoriEvent {
     /// Open a meeting at this moment (a citation in an answer).
@@ -52,7 +55,7 @@ pub enum MoriEvent {
     SetPaused { paused: bool },
     /// Stop (and save) the recording in progress.
     StopRecording,
-    /// "Settings" in her menu: Settings → Appearance.
+    /// "Settings" in her menu: Settings → Companion.
     OpenMoriSettings,
 }
 
@@ -188,9 +191,15 @@ pub struct Companion {
     /// Top-left as fractions of the free room (see `Config::companion_pos`).
     pos: Option<(f32, f32)>,
     reduce_motion: bool,
+    /// Who she is (`Config::companion_character`).
+    character: Character,
     /// Rendered frames for the current pixel height.
-    frames: HashMap<(Pose, usize), Arc<Image>>,
+    frames: HashMap<(Character, Pose, usize), Arc<Image>>,
     frames_px: u32,
+    /// The "a note arrived" animation playing (Tsumugi's and Hoshi's), and
+    /// its rendered frames.
+    pop: Option<(PointKind, Instant)>,
+    pop_frames: HashMap<(Character, PointKind, usize, u32), Arc<Image>>,
     pose: Pose,
     frame: usize,
     pose_since: Instant,
@@ -270,7 +279,7 @@ impl Companion {
     }
 
     fn build(recording: Feed, desktop_mode: bool, placement: Option<desktop::Placement>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Frag Mori …")));
+        let input = cx.new(|cx| InputState::new(window, cx));
         let focus_input = cx.new(|cx| InputState::new(window, cx));
         let focus_sub = cx.subscribe_in(&focus_input, window, |this, _, event: &InputEvent, _, cx| {
             if let InputEvent::PressEnter { .. } = event {
@@ -317,8 +326,11 @@ impl Companion {
             focus_placeholder: String::new(),
             pos: None,
             reduce_motion: false,
+            character: Character::Mori,
             frames: HashMap::new(),
             frames_px: 0,
+            pop: None,
+            pop_frames: HashMap::new(),
             pose: Pose::Idle,
             frame: 0,
             pose_since: Instant::now(),
@@ -383,6 +395,15 @@ impl Companion {
         self.default_focus = config.companion_notes_focus.trim().to_string();
         self.pos = config.companion_pos;
         self.hidden = config.companion_hidden;
+        let character = config.companion_character();
+        if character != self.character {
+            self.character = character;
+            self.frames.clear();
+            self.pop = None;
+            self.frame = 0;
+            // Her name in the placeholders.
+            self.lang_seen = None;
+        }
         let size = self.size();
         if let Some(p) = &mut self.desktop
             && p.drag.is_none()
@@ -457,7 +478,7 @@ impl Companion {
         let mut config = Config::load();
         config.companion_pos = self.pos;
         if let Err(e) = config.save() {
-            eprintln!("[mostalgia] saving Mori's position: {e:#}");
+            eprintln!("[mostalgia] saving the companion's position: {e:#}");
         }
     }
 
@@ -615,18 +636,68 @@ impl Companion {
         }
     }
 
+    /// Her name, for the UI.
+    pub(crate) fn name(&self) -> &'static str {
+        self.character.name()
+    }
+
     /// The frame image for her current pose, rendered at the pixel size
-    /// she is drawn at (cached per pose and frame).
+    /// she is drawn at (cached per character, pose and frame).
     fn frame_image(&mut self, px_h: u32) -> Arc<Image> {
         if px_h != self.frames_px {
             self.frames.clear();
             self.frames_px = px_h;
         }
-        let (pose, frame) = (self.pose, self.frame % art::frame_count(self.pose).max(1));
+        let c = self.character;
+        let (pose, frame) = (self.pose, self.frame % character::frame_count(c, self.pose).max(1));
         self.frames
-            .entry((pose, frame))
-            .or_insert_with(|| Arc::new(Image::from_bytes(ImageFormat::Svg, scaled_svg(pose, frame, px_h).into_bytes())))
+            .entry((c, pose, frame))
+            .or_insert_with(|| Arc::new(Image::from_bytes(ImageFormat::Svg, character::scaled(character::frame_svg(c, pose, frame), character::frame_size(c), px_h).into_bytes())))
             .clone()
+    }
+
+    /// How long a pop stays: played once, then held a moment.
+    fn pop_len(&self) -> Option<Duration> {
+        let frames = character::pop_frames(self.character)?;
+        Some(Duration::from_secs_f32(frames as f32 / character::fps(self.character).max(1) as f32) + Duration::from_millis(600))
+    }
+
+    /// A note arrived: her own little animation of it, if she has one
+    /// (not with reduced motion, or while she's hidden).
+    pub(crate) fn start_pop(&mut self, kind: PointKind) {
+        if self.reduce_motion || self.hidden || character::pop_frames(self.character).is_none() {
+            return;
+        }
+        self.pop = Some((kind, Instant::now()));
+    }
+
+    /// The pop over her, while it plays.
+    fn render_pop(&mut self, o: Point2, (w, h): (f32, f32), scale: f32) -> Option<AnyElement> {
+        let (kind, since) = self.pop?;
+        let len = self.pop_len()?;
+        if since.elapsed() >= len || self.hidden {
+            self.pop = None;
+            return None;
+        }
+        let c = self.character;
+        let frames = character::pop_frames(c)?;
+        let frame = ((since.elapsed().as_secs_f32() * character::fps(c) as f32) as usize).min(frames - 1);
+        let size = (w * 0.34).round();
+        let px_ = (size * scale).round().max(1.) as u32;
+        let image = match self.pop_frames.get(&(c, kind, frame, px_)) {
+            Some(i) => i.clone(),
+            None => {
+                let (svg, side) = character::pop_svg(c, kind, frame)?;
+                let image = Arc::new(Image::from_bytes(ImageFormat::Svg, character::scaled(svg, (side, side), px_).into_bytes()));
+                if self.pop_frames.len() > 256 {
+                    self.pop_frames.clear();
+                }
+                self.pop_frames.insert((c, kind, frame, px_), image.clone());
+                image
+            }
+        };
+        // Up by her head, on the side towards her cards.
+        Some(div().absolute().left(px(o.x + w * 0.6)).top(px(o.y + h * 0.02 - size * 0.25)).w(px(size)).h(px(size)).child(img(image).size_full()).into_any_element())
     }
 
     fn thinking(&self) -> bool {
@@ -760,11 +831,19 @@ impl Companion {
             self.pose_since = Instant::now();
             changed = true;
         }
-        let busy = self.chat_rx.is_some() || self.points_rx.is_some();
+        if let Some((_, since)) = self.pop {
+            // (Its frames follow the clock; the last render clears it.)
+            changed = true;
+            if self.pop_len().is_none_or(|len| since.elapsed() > len + Duration::from_millis(200)) {
+                self.pop = None;
+            }
+        }
+        let busy = self.chat_rx.is_some() || self.points_rx.is_some() || self.pop.is_some();
         // On the desktop she's always in view, not only in an active window.
         let animate = !self.reduce_motion && !self.hidden && (self.desktop_mode || window.is_window_active()) && self.demo_pose.is_none();
-        if animate && art::frame_count(self.pose) > 1 {
-            self.frame = (self.frame + 1) % art::frame_count(self.pose);
+        let count = character::frame_count(self.character, self.pose);
+        if animate && count > 1 {
+            self.frame = (self.frame + 1) % count;
             changed = true;
         }
         if changed {
@@ -773,7 +852,9 @@ impl Companion {
         Some(if moving {
             Duration::from_millis(50)
         } else if animate {
-            Duration::from_secs_f32(1. / art::FPS.clamp(1, MAX_FPS) as f32)
+            Duration::from_secs_f32(1. / character::fps(self.character).clamp(1, MAX_FPS) as f32)
+        } else if self.pop.is_some() {
+            Duration::from_millis(1000 / character::fps(self.character).clamp(1, MAX_FPS) as u64)
         } else if busy || live.is_some() || self.ctl.starting.is_some() {
             Duration::from_millis(100)
         } else {
@@ -834,7 +915,7 @@ impl Companion {
             Err(e) => {
                 eprintln!("[mori] saving points with meeting {meeting_id}: {e:#}");
                 self.error = Some(MoriError {
-                    message: mostalgia_core::i18n::trf("Moris Notizen konnten nicht gespeichert werden: {}", &[&format!("{e:#}")]),
+                    message: mostalgia_core::i18n::trf("Die Notizen von {} konnten nicht gespeichert werden: {}", &[&self.name(), &format!("{e:#}")]),
                     points: false,
                 });
                 false
@@ -862,7 +943,27 @@ impl Companion {
         self.points_unseen = 0;
         self.scope_choice = None;
         self.hidden = false;
+        self.pop = None;
         self.ctl = Default::default();
+        cx.notify();
+    }
+
+    /// Shows this companion instead of the configured one (screenshots).
+    #[doc(hidden)]
+    pub fn demo_character(&mut self, character: Character, cx: &mut Context<Self>) {
+        self.character = character;
+        self.frames.clear();
+        self.lang_seen = None;
+        cx.notify();
+    }
+
+    /// Holds the "a note arrived" animation at this frame (screenshots).
+    #[doc(hidden)]
+    pub fn demo_pop(&mut self, kind: Option<PointKind>, frame: usize, cx: &mut Context<Self>) {
+        self.pop = kind.and_then(|k| {
+            let at = Duration::from_secs_f32(frame as f32 / character::fps(self.character).max(1) as f32);
+            Instant::now().checked_sub(at).map(|t| (k, t))
+        });
         cx.notify();
     }
 
@@ -886,23 +987,6 @@ impl Companion {
     }
 }
 
-/// `art::frame_svg` wrapped in an outer SVG of the size it is drawn at, so
-/// it is rasterized sharp instead of scaled from 200 × 320.
-fn scaled_svg(pose: Pose, frame: usize, px_h: u32) -> String {
-    let inner = art::frame_svg(pose, frame);
-    let inner = match inner.trim_start().strip_prefix("<?xml") {
-        Some(rest) => rest.split_once("?>").map_or("", |(_, r)| r).to_string(),
-        None => inner,
-    };
-    let h = px_h.max(1);
-    let w = ((h as f32) * art::FRAME_W / art::FRAME_H).round() as u32;
-    format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{w}" height="{h}" viewBox="0 0 {} {}">{inner}</svg>"#,
-        art::FRAME_W,
-        art::FRAME_H
-    )
-}
-
 impl Render for Companion {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.enabled {
@@ -910,7 +994,8 @@ impl Render for Companion {
         }
         if self.lang_seen != Some(i18n::lang()) {
             self.lang_seen = Some(i18n::lang());
-            self.input.update(cx, |s, cx| s.set_placeholder(tr("Frag Mori …"), window, cx));
+            let ask = trf("Frag {} …", &[&self.name()]);
+            self.input.update(cx, |s, cx| s.set_placeholder(ask, window, cx));
             self.focus_placeholder.clear();
         }
         let placeholder = if self.default_focus.is_empty() {
@@ -955,7 +1040,8 @@ impl Render for Companion {
             .on_mouse_down(MouseButton::Right, cx.listener(|this, ev: &MouseDownEvent, _, cx| this.open_menu(ev, cx)))
             // (Her desktop window is too small for the tooltip.)
             .when(!self.desktop_mode, |el| {
-                el.tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Mori · klicken zum Fragen, ziehen zum Verschieben, Rechtsklick für das Menü")).build(window, cx))
+                let tip: SharedString = trf("{} · klicken zum Fragen, ziehen zum Verschieben, Rechtsklick für das Menü", &[&self.name()]).into();
+                el.tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx))
             })
             .child(img(image).size_full())
             .into_any_element()
@@ -964,6 +1050,7 @@ impl Render for Companion {
         let bubble = self.render_bubble(o, (w, h), cx);
         let stack = self.render_points(o, (w, h), cx);
         let badge = if self.hidden { None } else { self.render_badge(o, (w, h), cx) };
+        let pop = self.render_pop(o, (w, h), window.scale_factor());
         let menu = self.render_menu(o, cx);
         let theme = cx.theme();
         let name_tag = (self.pose == Pose::Error && !self.hidden).then(|| {
@@ -983,6 +1070,7 @@ impl Render for Companion {
             .size_full()
             .children(stack)
             .child(character)
+            .children(pop)
             .children(name_tag)
             .children(badge)
             .children(bubble)

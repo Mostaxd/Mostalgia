@@ -62,26 +62,105 @@ pub enum AnswerEvent {
     Error(String),
 }
 
-/// Who Mori is, for every prompt she answers: her name, her manner, what
-/// Mostalgia is, what she can do, and (truthfully) which model runs her.
-pub fn persona(req: &SummaryRequest) -> String {
+/// Which companion keeps the notes: the same work and the same rules,
+/// a different character (and artwork in the app).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Character {
+    /// Writes along on her notepad.
+    Mori,
+    /// Weaves the notes into her scarf.
+    Tsumugi,
+    /// Charts the notes as constellations.
+    Hoshi,
+}
+
+impl Character {
+    pub const ALL: [Character; 3] = [Character::Mori, Character::Tsumugi, Character::Hoshi];
+
+    /// The value stored in `Config::companion_character`.
+    pub fn id(self) -> &'static str {
+        match self {
+            Character::Mori => "mori",
+            Character::Tsumugi => "tsumugi",
+            Character::Hoshi => "hoshi",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        let s = s.trim().to_ascii_lowercase();
+        Self::ALL.into_iter().find(|c| c.id() == s)
+    }
+
+    /// Her name (the same in every language).
+    pub fn name(self) -> &'static str {
+        match self {
+            Character::Mori => "Mori",
+            Character::Tsumugi => "Tsumugi",
+            Character::Hoshi => "Hoshi",
+        }
+    }
+
+    /// One line about how she keeps the notes (UI language).
+    pub fn tagline(self) -> &'static str {
+        match self {
+            Character::Mori => tr("Schreibt auf ihrem Notizblock mit"),
+            Character::Tsumugi => tr("Webt die Notizen in ihren Schal"),
+            Character::Hoshi => tr("Zeichnet die Notizen als Sternbilder"),
+        }
+    }
+
+    /// Who she is and her manner, for the persona.
+    fn persona_lines(self) -> (&'static str, &'static str) {
+        match self {
+            Character::Mori => (
+                "You're a small animated character who sits next to the user's meetings, writes along \
+while people talk and remembers what was said.",
+                "Your manner: warm, calm, a little witty — never at the user's expense — and concise.",
+            ),
+            Character::Tsumugi => (
+                "You're a small animated weaver who sits next to the user's meetings, spins what people \
+say into thread and weaves the notes into her long scarf.",
+                "Your manner: patient, gentle and warm, unhurried even when the meeting isn't, and \
+concise. A weaving or thread image now and then is fine (picking up a thread, tying off a loose \
+end), but sparingly — never more than one in an answer, and never at the cost of clarity.",
+            ),
+            Character::Hoshi => (
+                "You're a small animated astronomer who sits next to the user's meetings with her \
+telescope and star chart, and charts the notes as stars and constellations.",
+                "Your manner: curious, calm and precise, glad to notice how things connect, and \
+concise. A star or constellation image now and then is fine (how points line up, a guiding \
+star), but sparingly — never more than one in an answer, and never at the cost of clarity.",
+            ),
+        }
+    }
+}
+
+/// Who the companion is, for every prompt she answers: her name, her
+/// manner, what Mostalgia is, what she can do, and (truthfully) which
+/// model runs her. Machine prompts (notes, memory, regenerating) have none.
+pub fn persona_for(character: Character, req: &SummaryRequest) -> String {
+    let name = character.name();
+    let (who, manner) = character.persona_lines();
     format!(
-        "You are Mori, the note-taking companion in Mostalgia — a local-first meeting recorder \
-(\"Nostalgia, but for meetings you can actually recall in full\"). You're a small animated \
-character who sits next to the user's meetings, writes along while people talk and remembers \
-what was said. Your manner: warm, calm, a little witty — never at the user's expense — and \
-concise. Answer in the language the user writes in.\n\n\
+        "You are {name}, the note-taking companion in Mostalgia — a local-first meeting recorder \
+(\"Nostalgia, but for meetings you can actually recall in full\"). {who} {manner} Answer in the \
+language the user writes in.\n\n\
 What you can do: in the chat the user picks a scope — \"Live meeting\" (the recording in \
 progress, from its live transcript), \"This meeting\" (the meeting open in the app, from its \
 transcript, summary and notes) or \"All meetings\" (searching the whole library). You cite \
 the moments you rely on so the user can jump there and listen. While a recording runs you \
 also pin up live notes — decisions, action items, open questions, numbers — which are saved \
 with the meeting. You can't join calls, send messages or change settings.\n\n\
-If asked who you are, you're Mori. You are not the language model itself: if asked which \
+If asked who you are, you're {name}. You are not the language model itself: if asked which \
 model powers you, say it's the connection chosen in Mostalgia's settings — currently {} with \
 the model {} — and don't claim to be anything else.",
         req.connection.name, req.model
     )
+}
+
+/// [`persona_for`] the companion chosen in the settings.
+pub fn persona(req: &SummaryRequest) -> String {
+    persona_for(Config::load().companion_character(), req)
 }
 
 const LIVE_SYSTEM: &str = "\
@@ -1097,6 +1176,27 @@ mod tests {
         let (with_memory, _) = notes_message(&NotesInput { memory: Some("Q3 planning; Anna owns the forecast."), lines: &lines[2..], new_after: 20., notes: &[] }, 10_000);
         assert!(with_memory.starts_with("Meeting memory (the part before the transcript below):\nQ3 planning"));
         assert!(with_memory.contains("Notes so far: none") && !with_memory.contains("Transcript since then"));
+    }
+
+    #[test]
+    fn every_persona_names_her_and_is_truthful_about_the_model() {
+        let req = SummaryRequest { connection: crate::connections::default_connections().remove(0), model: "some-model-7".into(), language: None, effort: None };
+        for c in Character::ALL {
+            let p = persona_for(c, &req);
+            assert!(p.starts_with(&format!("You are {}, the note-taking companion", c.name())), "{p}");
+            assert!(p.contains(&format!("If asked who you are, you're {}.", c.name())));
+            assert!(p.contains("You are not the language model itself"));
+            assert!(p.contains(&format!("currently {} with the model some-model-7", req.connection.name)));
+            assert!(p.contains("concise") && p.contains("Answer in the language the user writes in."));
+            // Only her own name.
+            for other in Character::ALL.into_iter().filter(|o| *o != c) {
+                assert!(!p.contains(other.name()), "{} mentions {}", c.name(), other.name());
+            }
+            assert_eq!(Character::parse(c.id()), Some(c));
+        }
+        assert!(persona_for(Character::Tsumugi, &req).contains("weav") && persona_for(Character::Hoshi, &req).contains("constellation"));
+        assert_eq!(Character::parse(" Hoshi "), Some(Character::Hoshi));
+        assert_eq!(Character::parse("off"), None);
     }
 
     #[test]

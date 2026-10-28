@@ -460,11 +460,11 @@ impl MostalgiaApp {
         cx.notify();
     }
 
-    /// Settings → Appearance, where Mori's options are.
+    /// Settings → Companion, where her options are.
     fn open_mori_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_settings(window, cx);
         if let Some(s) = self.settings_view() {
-            s.update(cx, |s, cx| s.show_category("darstellung", cx));
+            s.update(cx, |s, cx| s.show_category("begleiterin", cx));
         }
     }
 
