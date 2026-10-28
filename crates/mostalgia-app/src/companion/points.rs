@@ -322,7 +322,7 @@ impl Companion {
                 let reason = if returned == 0 && duplicates > 0 {
                     format!(" — nothing new: all {duplicates} repeated earlier points")
                 } else if returned == 0 {
-                    " — nothing new: the model returned []".to_string()
+                    " — nothing new: the model returned no notes".to_string()
                 } else if returned > 1 {
                     " — they appear one by one".to_string()
                 } else {

@@ -11,7 +11,7 @@ use gpui_kit::component::{ActiveTheme, Icon, Selectable, Sizable, StyledExt, h_f
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use mostalgia_core::companion::PointKind;
-use mostalgia_core::config::Config;
+use mostalgia_core::config::{Config, NotesMode};
 use mostalgia_core::i18n::{tr, trf};
 use mostalgia_core::store::{Note, Store};
 
@@ -515,6 +515,11 @@ impl Companion {
         for row in rows.unwrap_or_default() {
             items.push(self.render_note_row(row, live, cx));
         }
+        // While recording: when she looks next, so a quiet interval isn't
+        // a mystery.
+        if let Some(status) = self.live(cx).and_then(|l| self.notes_status(&l)) {
+            items.push(div().text_xs().text_color(theme.muted_foreground).child(status).into_any_element());
+        }
         let source = if live {
             tr("Live-Besprechung").to_string()
         } else {
@@ -535,6 +540,24 @@ impl Companion {
                     .children(items),
             )
             .into_any_element()
+    }
+
+    /// The live notes' state for the Notes tab: a request running, or (with
+    /// an interval) how much more speech until the next one.
+    fn notes_status(&self, live: &LiveState) -> Option<String> {
+        if self.notes_mode == NotesMode::Off || self.error.as_ref().is_some_and(|e| e.points) {
+            return None;
+        }
+        if self.points_rx.is_some() {
+            return Some(tr("Mori sucht gerade nach Notizen …").to_string());
+        }
+        match self.notes_mode {
+            NotesMode::Every(secs) => {
+                let left = (secs as f64 - (live.speech_secs - self.points_mark)).max(0.);
+                Some(if left < 1. { tr("Nächste Notizen in Kürze").to_string() } else { trf("Nächste Notizen nach etwa {} s weiterer Sprache", &[&(left.ceil() as u64)]) })
+            }
+            _ => None,
+        }
     }
 
     fn render_note_row(&mut self, row: NoteRow, live: bool, cx: &mut Context<Self>) -> AnyElement {

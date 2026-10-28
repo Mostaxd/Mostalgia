@@ -247,7 +247,21 @@ pub fn chat(
 /// and token usage reported where the server can. The system prompt and
 /// the first `stable` bytes of `user` are marked for prompt caching on
 /// Anthropic (OpenAI-compatible servers cache equal prefixes by themselves).
-pub fn chat_quick(conn: &Connection, model: &str, system: &str, user: &str, stable: usize, max_tokens: u32, on_delta: &mut dyn FnMut(&str)) -> Result<Completion> {
+/// With `json`, OpenAI-compatible servers are asked for a JSON object
+/// (`response_format`; the prompts must then mention JSON); a server that
+/// rejects that gets the request again without it, and is remembered for
+/// the session (see [`json_mode_rejected`]).
+#[allow(clippy::too_many_arguments)]
+pub fn chat_quick(
+    conn: &Connection,
+    model: &str,
+    system: &str,
+    user: &str,
+    stable: usize,
+    max_tokens: u32,
+    json: bool,
+    on_delta: &mut dyn FnMut(&str),
+) -> Result<Completion> {
     let key = conn.require_key()?;
     let key = key.as_deref();
     match conn.api {
@@ -271,16 +285,57 @@ pub fn chat_quick(conn: &Connection, model: &str, system: &str, user: &str, stab
         }
         Api::OpenAi => {
             let effort = (!openai_efforts(conn, model).is_empty()).then_some("low");
-            openai(conn, key, model, effort, system, &[Message::user(user)], &quick_extras(conn, model), on_delta).map_err(|e| effort_hint(e, effort.is_some()))
+            let mut extra = quick_extras(conn, model, max_tokens);
+            let json = json && !json_mode_rejected(conn);
+            if json {
+                extra["response_format"] = json!({ "type": "json_object" });
+            }
+            let messages = [Message::user(user)];
+            match openai(conn, key, model, effort, system, &messages, &extra, on_delta) {
+                // Nothing streamed yet, so a plain retry is safe.
+                Err(e) if json && rejects_json_mode(&e) => {
+                    eprintln!("[llm] {} rejected response_format json_object ({e:#}); asking without it for the rest of the session", conn.name);
+                    JSON_MODE_REJECTED.lock().unwrap_or_else(|p| p.into_inner()).insert(json_mode_key(conn));
+                    extra.as_object_mut().map(|o| o.remove("response_format"));
+                    openai(conn, key, model, effort, system, &messages, &extra, on_delta)
+                }
+                r => r,
+            }
+            .map_err(|e| effort_hint(e, effort.is_some()))
         }
     }
 }
 
+/// Connections (by id and URL) that rejected `response_format` this session.
+static JSON_MODE_REJECTED: std::sync::Mutex<std::collections::BTreeSet<String>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+fn json_mode_key(conn: &Connection) -> String {
+    format!("{}|{}", conn.id, conn.base())
+}
+
+/// Whether this connection rejected JSON mode earlier in the session.
+pub fn json_mode_rejected(conn: &Connection) -> bool {
+    JSON_MODE_REJECTED.lock().unwrap_or_else(|p| p.into_inner()).contains(&json_mode_key(conn))
+}
+
+/// Whether a request failed because the server doesn't take
+/// `response_format` (a 400/422 naming it or JSON mode).
+fn rejects_json_mode(e: &anyhow::Error) -> bool {
+    let text = format!("{e:#}").to_ascii_lowercase();
+    (text.contains(" 400") || text.contains(" 422") || text.contains("(400)") || text.contains("(422)"))
+        && ["response_format", "response format", "json_object", "json mode", "json_schema"].iter().any(|w| text.contains(w))
+}
+
 /// Extra request fields for [`chat_quick`] on OpenAI-compatible servers
 /// known to take them.
-fn quick_extras(conn: &Connection, model: &str) -> Value {
+fn quick_extras(conn: &Connection, model: &str, max_tokens: u32) -> Value {
     let mut extra = json!({});
     let deepseek = conn.preset == "deepseek" || conn.base().contains("api.deepseek.com");
+    // A cap only where the field is known (OpenAI's reasoning models want
+    // `max_completion_tokens`, so it's left to the server's default there).
+    if deepseek {
+        extra["max_tokens"] = json!(max_tokens);
+    }
     if deepseek && !model.contains("reasoner") {
         extra["thinking"] = json!({ "type": "disabled" });
     }
@@ -483,4 +538,19 @@ fn openai(
         _ => {}
     }
     Ok(Completion { text, model: served, effort: effort.map(str::to_string), usage })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spots_servers_that_reject_json_mode() {
+        let rejected = anyhow::anyhow!("Local: error 400: 'response_format.type' must be 'json_schema' or 'text'");
+        assert!(rejects_json_mode(&rejected));
+        assert!(rejects_json_mode(&anyhow::anyhow!("Proxy: Fehler 422: unknown field response_format")));
+        // Other failures are not retried without it.
+        assert!(!rejects_json_mode(&anyhow::anyhow!("DeepSeek: error 400: max_tokens too large")));
+        assert!(!rejects_json_mode(&anyhow::anyhow!("DeepSeek: Limit erreicht (429): response_format quota")));
+    }
 }

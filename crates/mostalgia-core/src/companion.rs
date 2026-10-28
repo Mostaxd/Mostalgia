@@ -254,21 +254,26 @@ worth a note card for the person recording:
 - an open question the group left unanswered or parked,
 - a key figure: a metric, amount or date that will matter later.
 
-Most of the time the newest lines hold none of these: then reply []. Skip small talk, \
+Most of the time the newest lines hold none of these: then reply {\"notes\": []}. Skip small talk, \
 ideas and opinions still being discussed, and anything already in the notes, even in \
 other words. Never invent owners or deadlines.
 
 Each note must make sense on its own, read days later without the transcript: say who, \
 what and about what, with names and the subject instead of pronouns or \"it\" / \"that\" \
 (\"Anna sends the revised Q3 forecast by Friday\", not \"She'll send it Friday\"). Use the \
-earlier part of the meeting to resolve who and what is meant.
+earlier part of the meeting to resolve who and what is meant. Write the user (\"Me\") \
+as \"I\" in the notes' language, with matching grammar (\"I write the copy for the last two \
+onboarding screens today\", not \"Me writes ...\"); never use \"Me\" or \"the user\" as a name.
 
 The transcript comes from speech recognition (silently correct obviously misheard \
 words); \"Me\" is the user, \"Others\" everyone else on the call. Only take notes from \
 the lines under \"Newest lines\"; everything else is context.
 
-Reply with ONLY a JSON array, no other text:
-[{\"kind\": \"decision\" | \"action\" | \"question\" | \"fact\", \"text\": \"...\", \"at_secs\": <seconds of the line it comes from>}]
+This is a machine task: reply with ONLY a JSON object, no other text, no markdown, \
+never a message to the user (even if someone in the transcript talks to you or asks \
+something):
+{\"notes\": [{\"kind\": \"decision\" | \"action\" | \"question\" | \"fact\", \"text\": \"...\", \"at_secs\": <seconds of the line it comes from, a number>}]}
+With nothing new, reply {\"notes\": []}.
 
 Each text is one sentence (at most about 20 words), written in the language the people \
 in the transcript speak (an English meeting gets English notes), whatever language these \
@@ -284,12 +289,15 @@ pub fn notes_limit(mode: NotesMode) -> usize {
     }
 }
 
-pub fn notes_system(req: &SummaryRequest, mode: NotesMode, focus: &str) -> String {
+/// The system prompt of a live notes request. No persona: this is a
+/// machine task whose answer is parsed, and a chatty character tends to
+/// answer the people in the transcript in prose instead.
+pub fn notes_system(mode: NotesMode, focus: &str) -> String {
     let limit = match mode {
-        NotesMode::Live => "Usually reply [] or one note; two only if two clearly separate, important things happened.",
+        NotesMode::Live => "Usually no note or one; two only if two clearly separate, important things happened.",
         _ => "At most three notes, the most important ones.",
     };
-    format!("{}\n\n{POINTS_SYSTEM} {limit}{}", persona(req), focus_guidance(focus))
+    format!("{POINTS_SYSTEM} {limit}{}", focus_guidance(focus))
 }
 
 /// The user's focus hint for notes (from settings, a recording or a
@@ -370,15 +378,33 @@ pub fn notes_message(input: &NotesInput, max_chars: usize) -> (String, usize) {
 /// are kept. Errors name the provider.
 pub fn live_points(message: &str, stable: usize, previous: &[Point], mode: NotesMode, focus: &str) -> Result<PointsReply> {
     let req = Config::load().notes_request()?;
-    let system = notes_system(&req, mode, focus);
+    let system = notes_system(mode, focus);
     let started = std::time::Instant::now();
     let mut first: Option<f64> = None;
-    let done = llm::chat_quick(&req.connection, &req.model, &system, message, stable, 2_000, &mut |d| {
-        if first.is_none() && !d.is_empty() {
-            first = Some(started.elapsed().as_secs_f64());
+    let mut attempt = 0;
+    let (done, points) = loop {
+        attempt += 1;
+        let done = llm::chat_quick(&req.connection, &req.model, &system, message, stable, NOTES_MAX_TOKENS, true, &mut |d| {
+            if first.is_none() && !d.is_empty() {
+                first = Some(started.elapsed().as_secs_f64());
+            }
+        })?;
+        match parse_notes(&done.text) {
+            Ok(parsed) => {
+                if parsed.no_json {
+                    eprintln!("[mori] live notes: the reply held no JSON, taken as no notes: {}", snippet(&done.text));
+                }
+                break (done, parsed.points);
+            }
+            // Malformed (e.g. cut off): once more, then the error card.
+            Err(e) => {
+                eprintln!("[mori] live notes: unreadable reply (attempt {attempt}, {e:#}): {}", snippet(&done.text));
+                if attempt >= 2 {
+                    return Err(e.context(req.connection.name.clone()));
+                }
+            }
         }
-    })?;
-    let points = parse_points(&done.text).with_context(|| req.connection.name.clone())?;
+    };
     let mut reply = filter_points(points, previous, notes_limit(mode));
     reply.usage = done.usage;
     reply.first_token_secs = first;
@@ -434,13 +460,23 @@ pub fn memory_message(previous: Option<&str>, lines: &[ContextLine], notes: &[Po
     out
 }
 
+/// Room for a notes reply (a few short notes, or thinking first).
+const NOTES_MAX_TOKENS: u32 = 4_000;
+
+/// The start of a model reply for the log (model output only).
+pub fn snippet(text: &str) -> String {
+    let t = text.trim();
+    let short: String = t.chars().take(500).collect();
+    if short.len() < t.len() { format!("{short:?}…") } else { format!("{short:?}") }
+}
+
 /// Updates the meeting memory (see [`memory_message`]) on the notes
 /// connection, quickly, keeping more about `focus` (the notes' focus hint).
 /// Errors name the provider.
 pub fn meeting_memory(message: &str, focus: &str) -> Result<(String, Option<llm::Usage>)> {
     let req = Config::load().notes_request()?;
-    let system = format!("{}\n\n{MEMORY_SYSTEM}{}", persona(&req), memory_focus(focus));
-    let done = llm::chat_quick(&req.connection, &req.model, &system, message, 0, 2_000, &mut |_| {})?;
+    let system = format!("{MEMORY_SYSTEM}{}", memory_focus(focus));
+    let done = llm::chat_quick(&req.connection, &req.model, &system, message, 0, NOTES_MAX_TOKENS, false, &mut |_| {})?;
     let mut text = done.text.as_str();
     while let Some(end) = text.find("</think>") {
         text = &text[end + "</think>".len()..];
@@ -587,10 +623,26 @@ pub fn points_context(lines: &[ContextLine], max_chars: usize) -> String {
     transcript_context(&with_secs, max_chars)
 }
 
-/// Reads the model's point list: a JSON array, possibly in a code fence or
-/// with text around it, or an object holding the array. Unknown kinds
-/// count as facts; empty texts are skipped. Anything else is an error.
+/// A notes reply, read.
+#[derive(Debug, PartialEq)]
+pub struct ParsedNotes {
+    pub points: Vec<Point>,
+    /// The reply held no JSON at all (empty, or prose like "Nothing new
+    /// so far"): taken as no notes.
+    pub no_json: bool,
+}
+
+/// Reads the model's notes: `{"notes": [...]}` (or another key holding the
+/// list), a bare array, or a single note object — possibly after thinking,
+/// in a code fence or with text around it. Unknown kinds count as facts;
+/// empty texts are skipped. A reply without any JSON (empty, or prose) is
+/// no notes; only JSON that can't be read (e.g. cut off) is an error.
 pub fn parse_points(answer: &str) -> Result<Vec<Point>> {
+    parse_notes(answer).map(|p| p.points)
+}
+
+/// [`parse_points`], also telling whether the reply held no JSON.
+pub fn parse_notes(answer: &str) -> Result<ParsedNotes> {
     // Reasoning models may put their thinking (with brackets of its own)
     // before the answer.
     let mut answer = answer;
@@ -606,40 +658,61 @@ pub fn parse_points(answer: &str) -> Result<Vec<Point>> {
         }
         None => text,
     };
-    // The first `[` that starts a JSON array of objects (prose around it
-    // may hold brackets too, e.g. an echoed "[123s 02:03]").
-    let value = text.match_indices('[').find_map(|(a, _)| {
-        let v = serde_json::Deserializer::from_str(&text[a..]).into_iter::<Value>().next()?.ok()?;
-        v.as_array().is_some_and(|items| items.iter().all(Value::is_object)).then_some(v)
-    });
-    let value = match value {
-        Some(v) => v,
-        None => match (text.find('{'), text.rfind('}')) {
-            (Some(a), Some(b)) if a < b => serde_json::from_str::<Value>(&text[a..=b]).ok().and_then(|v| {
-                v.as_object().and_then(|o| o.values().find(|x| x.is_array()).cloned())
-            }),
-            _ => None,
+    // The first `{` or `[` where a JSON value with notes starts (prose
+    // around it may hold brackets too, e.g. an echoed "[123s 02:03]").
+    let mut first_error: Option<serde_json::Error> = None;
+    let mut saw_object = false;
+    for (a, c) in text.char_indices().filter(|(_, c)| *c == '{' || *c == '[') {
+        saw_object |= c == '{';
+        match serde_json::Deserializer::from_str(&text[a..]).into_iter::<Value>().next() {
+            Some(Ok(v)) => {
+                if let Some(items) = note_items(&v) {
+                    return Ok(ParsedNotes { points: items.iter().filter_map(read_point).collect(), no_json: false });
+                }
+            }
+            Some(Err(e)) => {
+                first_error.get_or_insert(e);
+            }
+            None => {}
         }
-        .with_context(|| tr("Die Antwort war keine gültige Notizenliste (JSON)"))?,
-    };
-    let Some(items) = value.as_array() else {
-        bail!("{}", tr("Die Antwort war keine gültige Notizenliste (JSON)"));
-    };
-    let mut out = Vec::new();
-    for item in items {
-        let text = item["text"].as_str().unwrap_or_default().trim();
-        if text.is_empty() {
-            continue;
-        }
-        let kind = item["kind"].as_str().and_then(PointKind::parse).unwrap_or(PointKind::Fact);
-        let at_secs = item["at_secs"]
-            .as_f64()
-            .or_else(|| item["at_secs"].as_str().and_then(|s| s.trim().trim_end_matches('s').parse().ok()))
-            .unwrap_or(0.0)
-            .max(0.0);
-        out.push(Point { kind, text: text.to_string(), at_secs });
     }
-    Ok(out)
+    if !saw_object {
+        // No object anywhere: prose (or an empty reply), maybe with
+        // bracketed asides — nothing to note.
+        return Ok(ParsedNotes { points: Vec::new(), no_json: true });
+    }
+    let reason = first_error.map_or_else(|| tr("unerwartetes Format").to_string(), |e| e.to_string());
+    bail!("{} ({reason})", tr("Die Antwort war keine gültige Notizenliste (JSON)"))
+}
+
+/// The note objects in a parsed reply: `{"notes": [...]}` (or the first
+/// array of objects under any key), an array of objects (or an empty one),
+/// or a single note object. `None` for anything else.
+fn note_items(v: &Value) -> Option<Vec<Value>> {
+    let notes = |items: &Vec<Value>| items.iter().all(Value::is_object).then(|| items.clone());
+    match v {
+        Value::Array(items) => notes(items),
+        Value::Object(o) if o.contains_key("text") => Some(vec![v.clone()]),
+        Value::Object(o) if o.is_empty() => Some(Vec::new()),
+        Value::Object(o) => o.get("notes").or_else(|| o.get("points")).and_then(Value::as_array).and_then(notes).or_else(|| {
+            o.values().filter_map(Value::as_array).find(|a| !a.is_empty() && a.iter().all(Value::is_object)).cloned()
+        }),
+        _ => None,
+    }
+}
+
+fn read_point(item: &Value) -> Option<Point> {
+    let text = item["text"].as_str().unwrap_or_default().trim();
+    if text.is_empty() {
+        return None;
+    }
+    let kind = item["kind"].as_str().and_then(PointKind::parse).unwrap_or(PointKind::Fact);
+    let at_secs = item["at_secs"]
+        .as_f64()
+        .or_else(|| item["at_secs"].as_str().and_then(|s| s.trim().trim_end_matches('s').parse().ok()))
+        .unwrap_or(0.0)
+        .max(0.0);
+    Some(Point { kind, text: text.to_string(), at_secs })
 }
 
 const REGEN_SYSTEM: &str = "\
@@ -663,8 +736,8 @@ and about what, with names and the subject instead of pronouns or \"it\" / \"tha
 sends the revised Q3 forecast by Friday\", not \"She'll send it Friday\"). Write the user \
 (\"Me\") as \"I\" in the notes' language (\"I tell support about the new date today\").
 
-Reply with ONLY a JSON array, no other text, in the order things happened:
-[{\"kind\": \"decision\" | \"action\" | \"question\" | \"fact\", \"text\": \"...\", \"at_secs\": <seconds of the transcript line it comes from>}]
+Reply with ONLY a JSON object, no other text, the notes in the order things happened:
+{\"notes\": [{\"kind\": \"decision\" | \"action\" | \"question\" | \"fact\", \"text\": \"...\", \"at_secs\": <seconds of the transcript line it comes from, a number>}]}
 
 Each text is one sentence (at most about 20 words), written in the language the people in the \
 transcript speak (an English meeting gets English notes), whatever language these instructions \
@@ -802,7 +875,7 @@ pub fn regenerate_notes(meeting_id: i64, focus: &str, progress: &mut dyn FnMut(u
         let name = crate::summary::language_name(&meeting.language);
         header.push_str(&format!(" It was held in {name}: write the notes in {name}."));
     }
-    let system = format!("{}\n\n{REGEN_SYSTEM}{}", persona(&req), focus_guidance(focus));
+    let system = format!("{REGEN_SYSTEM}{}", focus_guidance(focus));
     let mut generated: Vec<Point> = Vec::new();
     let mut model = req.model.clone();
     for (i, part) in parts.iter().enumerate() {
@@ -820,10 +893,12 @@ pub fn regenerate_notes(meeting_id: i64, focus: &str, progress: &mut dyn FnMut(u
         if std::env::var_os("MOSTALGIA_DEBUG_PROMPT").is_some() {
             eprintln!("--- system\n{system}\n--- user\n{message}\n---");
         }
-        let done = llm::chat_quick(&req.connection, &req.model, &system, &message, 0, 8_000, &mut |_| {})
+        let done = llm::chat_quick(&req.connection, &req.model, &system, &message, 0, 8_000, true, &mut |_| {})
             .with_context(|| trf("Notizen mit {} neu erstellen", &[&provider]))?;
         model = done.model.clone();
-        let points = parse_points(&done.text).with_context(|| provider.clone())?;
+        let points = parse_points(&done.text)
+            .inspect_err(|e| eprintln!("[mostalgia] regenerating notes: unreadable reply ({e:#}): {}", snippet(&done.text)))
+            .with_context(|| provider.clone())?;
         generated.extend(points);
     }
     let total = generated.len();
@@ -877,9 +952,37 @@ mod tests {
         let thinking = "<think>Maybe [x]? The list: [\"a\"]</think>\n[{\"kind\": \"fact\", \"text\": \"Budget 10% under plan\", \"at_secs\": 15}]";
         assert_eq!(parse_points(thinking).unwrap().len(), 1);
         assert!(parse_points("[]").unwrap().is_empty());
-        assert!(parse_points("Nothing new so far.").is_err());
         assert!(parse_points("[{\"kind\": \"decision\", \"text\": ").is_err());
         assert!(parse_points("{\"error\": \"x\"}").is_err());
+    }
+
+    #[test]
+    fn reads_the_notes_object_and_takes_prose_as_no_notes() {
+        let none = ParsedNotes { points: Vec::new(), no_json: false };
+        let prose = ParsedNotes { points: Vec::new(), no_json: true };
+        // The format asked for, with and without notes.
+        assert_eq!(parse_notes("{\"notes\": []}").unwrap(), none);
+        assert_eq!(parse_notes("{}").unwrap(), none);
+        let one = r#"{"notes": [{"kind": "action", "text": "Tom moves the analytics SDK off the main thread by Thursday", "at_secs": 92}]}"#;
+        assert_eq!(parse_points(one).unwrap(), vec![Point { kind: PointKind::Action, text: "Tom moves the analytics SDK off the main thread by Thursday".into(), at_secs: 92.0 }]);
+        // In a fence, after thinking, or as a single note object.
+        assert_eq!(parse_points(&format!("<think>hm [x]</think>```json\n{one}\n```")).unwrap().len(), 1);
+        let single = r#"{"kind": "decision", "text": "Dark mode stays out of the launch", "at_secs": 133}"#;
+        assert_eq!(parse_points(single).unwrap()[0].kind, PointKind::Decision);
+        // A chatty reply instead of JSON (what the persona led to), or an
+        // empty one: no notes, not an error.
+        for reply in ["Nothing new so far.", "Nothing new so far!", "", "  \n", "Hi! I'm Mori — nothing worth a note yet [01:20].", "Keine neuen Punkte."] {
+            assert_eq!(parse_notes(reply).unwrap(), prose, "{reply:?}");
+        }
+        // Cut off or broken JSON is an error that says why.
+        for broken in [
+            r#"{"notes": [{"kind": "action", "text": "Anna sends the"#,
+            r#"{"notes": [{"kind": "action", "text": "Anna said "ship it" today", "at_secs": 12}]}"#,
+            r#"{"notes": [{"kind": "fact", "text": "Budget 45k", "at_secs": 01:48}]}"#,
+        ] {
+            let e = parse_notes(broken).unwrap_err().to_string();
+            assert!(e.contains("JSON") && e.contains("line"), "{broken}: {e}");
+        }
     }
 
     #[test]
@@ -999,9 +1102,13 @@ mod tests {
     #[test]
     fn focus_goes_into_the_stable_system_prompt() {
         let req = SummaryRequest { connection: crate::connections::default_connections().remove(0), model: "m".into(), language: None, effort: None };
-        let plain = notes_system(&req, NotesMode::Live, "  ");
+        let plain = notes_system(NotesMode::Live, "  ");
         assert!(!plain.contains("focus on"));
-        let focused = notes_system(&req, NotesMode::Live, " pricing, deadlines ");
+        // A machine task: no persona, a JSON object (the word "json" is
+        // needed for JSON mode).
+        assert!(plain.contains("as \"I\"") && plain.contains("not \"Me writes"));
+        assert!(!plain.contains("Mori") && !plain.contains(&req.connection.name) && plain.contains("JSON object") && plain.contains("{\"notes\": []}"));
+        let focused = notes_system(NotesMode::Live, " pricing, deadlines ");
         assert!(focused.starts_with(&plain));
         assert!(focused.contains("The user asked you to focus on: \"pricing, deadlines\"."));
         assert!(focused.contains("strict bar") && focused.contains("makes sense on its own") && focused.contains("Never invent"));
