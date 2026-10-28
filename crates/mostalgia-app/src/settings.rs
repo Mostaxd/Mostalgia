@@ -14,6 +14,7 @@ use gpui_kit::*;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use mostalgia_core::audio::{self, SourceInfo};
 use mostalgia_core::cloud_stt;
+use mostalgia_core::store::Store;
 use mostalgia_core::config::{Config, Mode, NotesMode, SttChoice};
 use mostalgia_core::connections::{self, Api, Connection, PRESETS};
 use mostalgia_core::llm::{self, ModelInfo};
@@ -441,6 +442,8 @@ impl SettingsView {
         self.config.companion_pos = disk.companion_pos;
         self.config.companion_desktop_pos = disk.companion_desktop_pos;
         self.config.companion_hidden = disk.companion_hidden;
+        // Answered in the cleanup dialog meanwhile.
+        self.config.audio_cleanup_confirmed = disk.audio_cleanup_confirmed;
         if let Err(e) = self.config.save() {
             eprintln!("[mostalgia] saving settings: {e:#}");
         }
@@ -3005,6 +3008,13 @@ impl Render for SettingsView {
             wide: false,
             element: storage.into_any_element(),
         });
+        cards.push(Card {
+            category: Category::Speicher,
+            title: "Audio aufräumen",
+            keywords: "audio aufräumen löschen tage speicherplatz alt cleanup delete days disk space old wav",
+            wide: false,
+            element: self.render_audio_cleanup(cx).into_any_element(),
+        });
         let export = ui::card(cx)
             .child(title("Export"))
             .child(div().text_sm().child(tr("In jeder Besprechung über „Exportieren“: Zusammenfassung und Transkript als")))
@@ -3357,6 +3367,75 @@ fn theme_name(id: &str, name: &str) -> String {
         _ => return name.to_string(),
     };
     tr(de).to_string()
+}
+
+/// "1 Tag" / "7 Tage".
+fn days_label(n: u32) -> String {
+    if n == 1 { tr("1 Tag").to_string() } else { trf("{} Tage", &[&n]) }
+}
+
+// ── Speicher: deleting old audio ──
+impl SettingsView {
+    /// "Delete audio after N days": Off / 7 / 14 / 30 / 90 or any number
+    /// (− / +), how much audio there is and what the next cleanup takes.
+    fn render_audio_cleanup(&mut self, cx: &mut Context<Self>) -> Div {
+        use mostalgia_core::cleanup;
+        let theme = cx.theme().clone();
+        let days = self.config.audio_keep_days;
+        let set = |n: u32| {
+            cx.listener(move |this: &mut Self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>| {
+                this.config.audio_keep_days = n;
+                this.save(cx);
+            })
+        };
+        let presets = [0u32, 7, 14, 30, 90].map(|n| {
+            Button::new(SharedString::from(format!("audio-days-{n}")))
+                .small()
+                .label(if n == 0 { tr("Aus").to_string() } else { days_label(n) })
+                .when(n == days, |b| b.primary())
+                .when(n != days, |b| b.ghost())
+                .on_click(set(n))
+                .into_any_element()
+        });
+        let custom = h_flex()
+            .gap_1()
+            .child(Button::new("audio-days-minus").small().ghost().icon(IconName::Minus).disabled(days == 0).on_click(set(days.saturating_sub(1))))
+            .child(div().min_w(px(64.)).text_center().text_sm().child(if days == 0 { tr("Aus").to_string() } else { days_label(days) }))
+            .child(Button::new("audio-days-plus").small().ghost().icon(IconName::Plus).on_click(set((days + 1).min(3650))));
+        let info = Store::open(&paths::database()).and_then(|s| {
+            let usage = cleanup::usage(&s)?;
+            let next = cleanup::plan(&s, &paths::recordings_dir(), days, chrono::Local::now(), &[])?;
+            Ok((usage, next.len(), next.iter().map(|c| c.bytes).sum::<u64>()))
+        });
+        let info = match info {
+            Ok((usage, n, bytes)) => {
+                let mut line = if usage.meetings == 1 {
+                    trf("Audio belegt {} in 1 Besprechung.", &[&cleanup::human(usage.bytes)])
+                } else {
+                    trf("Audio belegt {} in {} Besprechungen.", &[&cleanup::human(usage.bytes), &usage.meetings])
+                };
+                if days > 0 {
+                    line.push(' ');
+                    line.push_str(&if n == 0 { tr("Das nächste Aufräumen löscht nichts.").to_string() } else { if n == 1 {
+                        trf("Das nächste Aufräumen löscht das Audio von 1 Besprechung ({}).", &[&cleanup::human(bytes)])
+                    } else {
+                        trf("Das nächste Aufräumen löscht das Audio von {} Besprechungen ({}).", &[&n, &cleanup::human(bytes)])
+                    } });
+                }
+                div().text_xs().text_color(theme.muted_foreground).child(line)
+            }
+            Err(e) => div().text_xs().text_color(theme.danger).child(format!("{e:#}")),
+        };
+        ui::card(cx)
+            .child(div().font_semibold().child(tr("Audio aufräumen")))
+            .child(settings_row(
+                tr("Audio löschen nach"),
+                Some(tr("Nur die Audiodateien – Transkript, Zusammenfassung, Notizen und Sprecher bleiben. „Audio behalten“ in einer Besprechung nimmt sie aus. Beim ersten Mal fragt die App vorher.")),
+                v_flex().gap_2().child(h_flex().flex_wrap().gap_1().children(presets)).child(custom).into_any_element(),
+                &theme,
+            ))
+            .child(info)
+    }
 }
 
 // ── Begleiterin: the bar's recording indicator ──

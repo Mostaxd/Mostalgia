@@ -7,6 +7,7 @@ pub mod assist;
 pub mod audio;
 pub mod callwatch;
 pub mod chunker;
+pub mod cleanup;
 pub mod companion;
 pub mod cloud_stt;
 pub mod config;
