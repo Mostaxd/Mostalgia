@@ -1,5 +1,7 @@
 //! "Fragen": ask questions about all meetings; answers stream in with
-//! clickable sources that open the meeting at that moment.
+//! clickable sources that open the meeting at that moment. A question can
+//! also be about one collection of documents or one document only (picked
+//! next to the input; coming from "Dokumente", the selected one comes first).
 
 use std::time::Duration;
 
@@ -7,6 +9,7 @@ use crossbeam_channel::Receiver;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, StyledExt, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -15,6 +18,7 @@ use mostalgia_core::ask::{self, AskEvent};
 use mostalgia_core::paths;
 use mostalgia_core::store::Store;
 use mostalgia_core::config::Config;
+use mostalgia_core::docs::{self, Within};
 use mostalgia_core::i18n::{self, tr, trf};
 
 use crate::ui;
@@ -42,8 +46,14 @@ pub struct AskView {
     input: Entity<InputState>,
     rx: Option<Receiver<AskEvent>>,
     scroll: ScrollHandle,
-    /// Language the input placeholder was last set in.
-    lang_seen: Option<i18n::Lang>,
+    /// What questions are about (`None`: all meetings and documents).
+    within: Option<Within>,
+    /// Scopes offered first (from the selection in "Dokumente").
+    offers: Vec<Within>,
+    /// The document collections (read when the screen opens).
+    collections: Vec<docs::Collection>,
+    /// Language and scope the input placeholder was last set for.
+    lang_seen: Option<(i18n::Lang, Option<Within>)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -69,6 +79,9 @@ impl AskView {
             input,
             rx: None,
             scroll: ScrollHandle::new(),
+            within: None,
+            offers: Vec::new(),
+            collections: docs::collections().unwrap_or_default(),
             lang_seen: None,
             _subscriptions: vec![sub],
         }
@@ -91,6 +104,28 @@ impl AskView {
         cx.notify();
     }
 
+    /// Offers these scopes first and picks the first one (or, with none,
+    /// all meetings and documents); a conversation keeps its scope.
+    pub fn offer(&mut self, offers: Vec<Within>, cx: &mut Context<Self>) {
+        if self.turns.is_empty() {
+            self.within = offers.first().copied();
+        }
+        self.offers = offers;
+        self.collections = docs::collections().unwrap_or_default();
+        if let Some(Within::Collection(id)) = self.within
+            && !self.collections.iter().any(|k| k.id == id)
+        {
+            self.within = None;
+        }
+        cx.notify();
+    }
+
+    /// Asks about these documents from now on.
+    pub fn set_within(&mut self, within: Option<Within>, cx: &mut Context<Self>) {
+        self.within = within;
+        cx.notify();
+    }
+
     fn busy(&self) -> bool {
         self.rx.is_some()
     }
@@ -109,16 +144,19 @@ impl AskView {
         self.turns.push(Turn {
             question: question.clone(),
             answer: String::new(),
-            status: Some(tr("Durchsuche Besprechungen …").into()),
+            status: Some(if self.within.is_some() { tr("Durchsuche Dokumente …") } else { tr("Durchsuche Besprechungen …") }.into()),
             error: None,
             done: false,
         });
         let (tx, rx) = crossbeam_channel::unbounded();
         self.rx = Some(rx);
+        let within = self.within;
         std::thread::spawn(move || {
             // Make sure recent meetings are searchable (cheap if nothing changed).
-            let _ = ask::index_pending();
-            ask::ask(&question, &history, &tx);
+            if within.is_none() {
+                let _ = ask::index_pending();
+            }
+            ask::ask_within(&question, &history, within, &tx);
         });
         self.scroll.scroll_to_bottom();
         cx.notify();
@@ -192,6 +230,68 @@ impl AskView {
                 Target::Time { .. } => {}
             }
         })
+    }
+}
+
+/// "Sammlung „Projekt X“" / "Dokument „Spec“" / everything.
+fn scope_label(within: Option<Within>, collections: &[docs::Collection]) -> String {
+    match within {
+        Some(Within::Collection(id)) => {
+            let name = collections.iter().find(|k| k.id == id).map_or("", |k| k.name.as_str());
+            trf("Sammlung „{}“", &[&name])
+        }
+        Some(Within::Document(id)) => trf("Dokument „{}“", &[&document_label(id).0]),
+        _ => tr("Alle Besprechungen und Dokumente").to_string(),
+    }
+}
+
+fn scope_icon(within: Option<Within>) -> IconName {
+    match within {
+        Some(Within::Collection(_)) => IconName::Folder,
+        Some(Within::Document(_)) => IconName::FileText,
+        _ => IconName::Library,
+    }
+}
+
+const DOC_SUGGESTIONS: [&str; 3] = [
+    "Fasse die wichtigsten Punkte zusammen.",
+    "Welche offenen Fragen oder Risiken werden genannt?",
+    "Erkläre den Aufbau in einfachen Worten.",
+];
+
+impl AskView {
+    /// The scope picker next to the input.
+    fn scope_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut choices: Vec<Option<Within>> = self.offers.iter().copied().map(Some).collect();
+        choices.push(None);
+        for k in &self.collections {
+            let w = Some(Within::Collection(k.id));
+            if !choices.contains(&w) {
+                choices.push(w);
+            }
+        }
+        let offered = self.offers.len();
+        let choices: Vec<(Option<Within>, String)> = choices.into_iter().map(|w| (w, scope_label(w, &self.collections))).collect();
+        let current = self.within;
+        let weak = cx.entity().downgrade();
+        Button::new("ask-scope")
+            .outline()
+            .icon(scope_icon(current))
+            .label(shorten(&scope_label(current, &self.collections), 34))
+            .tooltip(tr("Worauf sich die Frage bezieht"))
+            .dropdown_menu(move |menu, _, _| {
+                let mut menu = menu.scrollable(true).max_h(px(360.));
+                for (i, (w, label)) in choices.iter().enumerate() {
+                    if i == offered && offered > 0 {
+                        menu = menu.separator();
+                    }
+                    let (w, weak) = (*w, weak.clone());
+                    menu = menu.item(PopupMenuItem::new(label.clone()).icon(scope_icon(w)).checked(w == current).on_click(move |_, _, cx| {
+                        weak.update(cx, |this, cx| this.set_within(w, cx)).ok();
+                    }));
+                }
+                menu
+            })
     }
 }
 
@@ -491,10 +591,17 @@ pub fn cited_answer(answer: &str, key: &str, cx: &App, on_cite: impl Fn(Target, 
 
 impl Render for AskView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.lang_seen != Some(i18n::lang()) {
-            self.lang_seen = Some(i18n::lang());
-            self.input.update(cx, |s, cx| s.set_placeholder(tr("Frage zu deinen Besprechungen …"), window, cx));
+        if self.lang_seen != Some((i18n::lang(), self.within)) {
+            self.lang_seen = Some((i18n::lang(), self.within));
+            let placeholder = match self.within {
+                Some(Within::Collection(_)) => tr("Frage zu dieser Sammlung …"),
+                Some(Within::Document(_)) => tr("Frage zu diesem Dokument …"),
+                _ => tr("Frage zu deinen Besprechungen …"),
+            };
+            self.input.update(cx, |s, cx| s.set_placeholder(placeholder, window, cx));
         }
+        let scoped = self.within.is_some();
+        let suggestions: Vec<&str> = if scoped { DOC_SUGGESTIONS.to_vec() } else { SUGGESTIONS.to_vec() };
         let theme = cx.theme().clone();
         let config = Config::load();
         // Which connection and model answer, shown in the header; a missing
@@ -518,17 +625,21 @@ impl Render for AskView {
                     .items_center()
                     .gap_3()
                     .child(Icon::new(IconName::Sparkles).large().text_color(theme.primary))
-                    .child(div().text_xl().font_semibold().child(tr("Frag deine Besprechungen")))
+                    .child(div().text_xl().font_semibold().child(if scoped { trf("Frag: {}", &[&scope_label(self.within, &self.collections)]) } else { tr("Frag deine Besprechungen").to_string() }))
                     .child(
                         div()
                             .max_w(px(520.))
                             .text_center()
                             .text_sm()
                             .text_color(theme.muted_foreground)
-                            .child(tr("Die Suche läuft lokal über alle Transkripte und Zusammenfassungen. An das Sprachmodell gehen nur die gefundenen Abschnitte, nie Audio. Jede Aussage verweist auf die Stelle in der Aufnahme.")),
+                            .child(if scoped {
+                                tr("Die Suche läuft lokal nur über diese Dokumente – auch wenn sie für Antworten ausgeschaltet sind. An das Sprachmodell gehen nur die gefundenen Abschnitte. Jede Aussage verweist auf die Stelle im Dokument.")
+                            } else {
+                                tr("Die Suche läuft lokal über alle Transkripte und Zusammenfassungen. An das Sprachmodell gehen nur die gefundenen Abschnitte, nie Audio. Jede Aussage verweist auf die Stelle in der Aufnahme.")
+                            }),
                     )
                     .child(
-                        v_flex().pt_2().gap_2().children(SUGGESTIONS.iter().enumerate().map(|(i, s)| {
+                        v_flex().pt_2().gap_2().children(suggestions.into_iter().enumerate().map(|(i, s)| {
                             let q = tr(s).to_string();
                             div()
                                 .id(("suggest", i))
@@ -638,6 +749,7 @@ impl Render for AskView {
                         h_flex()
                             .gap_2()
                             .max_w(px(860.))
+                            .child(self.scope_button(cx))
                             .child(Input::new(&self.input).flex_1())
                             .child(
                                 Button::new("ask-send")

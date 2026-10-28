@@ -266,6 +266,12 @@ impl MostalgiaApp {
                 v
             }
         };
+        // Coming from "Dokumente", its selection is offered first.
+        let offers = match &self.screen {
+            Screen::Documents(d) => d.read(cx).ask_offers(),
+            _ => Vec::new(),
+        };
+        view.update(cx, |v, cx| v.offer(offers, cx));
         let focus = view.read(cx).focus_handle(cx);
         focus.focus(window, cx);
         self.screen = Screen::Ask(view);
@@ -274,7 +280,25 @@ impl MostalgiaApp {
 
     /// Opens the "Dokumente" screen, keeping its state.
     pub fn open_documents(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<crate::documents::DocumentsView> {
-        let view = self.documents_view.get_or_insert_with(|| cx.new(|cx| crate::documents::DocumentsView::new(window, cx))).clone();
+        let view = match &self.documents_view {
+            Some(v) => v.clone(),
+            None => {
+                let v = cx.new(|cx| crate::documents::DocumentsView::new(window, cx));
+                // "Ask about this": the Ask screen, about that document or collection.
+                let sub = cx.subscribe_in(&v, window, |this, _, event: &crate::documents::DocumentsEvent, window, cx| match event {
+                    crate::documents::DocumentsEvent::Ask(within) => {
+                        let within = *within;
+                        this.open_ask(window, cx);
+                        if let Some(a) = &this.ask_view {
+                            a.update(cx, |a, cx| a.set_within(Some(within), cx));
+                        }
+                    }
+                });
+                self._subscriptions.push(sub);
+                self.documents_view = Some(v.clone());
+                v
+            }
+        };
         self.screen = Screen::Documents(view.clone());
         cx.notify();
         view

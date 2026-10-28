@@ -7,7 +7,7 @@
 //! (say, one per project), each switched on or off for answers as a whole;
 //! a document is moved by dragging it onto a collection or from the reader.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -16,10 +16,12 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::component::text::TextView;
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, StyledExt, h_flex, switch::Switch, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use mostalgia_core::docs::{self, Chunk, Collection, DocHit, Document, Kind};
+use mostalgia_core::docs::extract::Section;
+use mostalgia_core::docs::{self, Collection, DocHit, Document, Kind, Within};
 use mostalgia_core::i18n::{self, tr, trf};
 
 use crate::ui;
@@ -77,6 +79,13 @@ struct NameEdit {
     _subscription: Subscription,
 }
 
+pub enum DocumentsEvent {
+    /// Ask questions about these documents (opens "Fragen").
+    Ask(Within),
+}
+
+impl EventEmitter<DocumentsEvent> for DocumentsView {}
+
 pub struct DocumentsView {
     docs: Vec<Document>,
     collections: Vec<Collection>,
@@ -84,8 +93,13 @@ pub struct DocumentsView {
     folded: HashSet<Option<i64>>,
     name_edit: Option<NameEdit>,
     selected: Option<i64>,
-    /// The selected document's text, and the location to highlight.
-    chunks: Vec<Chunk>,
+    /// A collection picked in the list (instead of a document).
+    selected_collection: Option<i64>,
+    /// The selected document's text (`None` while it is read), and the
+    /// location to highlight.
+    sections: Option<Vec<Section>>,
+    /// Documents' text read before (until they are read in again).
+    section_cache: HashMap<i64, Vec<Section>>,
     highlight: Option<u32>,
     /// Scroll the reader to the highlighted location at the next render.
     scroll_to_highlight: bool,
@@ -123,7 +137,9 @@ impl DocumentsView {
             folded: HashSet::new(),
             name_edit: None,
             selected: None,
-            chunks: Vec::new(),
+            selected_collection: None,
+            sections: None,
+            section_cache: HashMap::new(),
             highlight: None,
             scroll_to_highlight: false,
             reader_scroll: ScrollHandle::new(),
@@ -151,22 +167,64 @@ impl DocumentsView {
         }
         if self.selected.is_some_and(|id| !self.docs.iter().any(|d| d.id == id)) {
             self.selected = None;
-            self.chunks.clear();
+            self.sections = None;
+        }
+        if self.selected_collection.is_some_and(|id| !self.collections.iter().any(|k| k.id == id)) {
+            self.selected_collection = None;
         }
         cx.notify();
     }
 
     /// Opens a document in the reader, at a page or section if given.
     pub fn open(&mut self, id: i64, loc: Option<u32>, cx: &mut Context<Self>) {
+        let same = self.selected == Some(id) && self.sections.is_some();
         self.selected = Some(id);
+        self.selected_collection = None;
         self.highlight = loc;
         self.scroll_to_highlight = loc.is_some();
         self.confirm_delete = None;
-        self.chunks = docs::chunks(id).unwrap_or_default();
-        if loc.is_none() {
+        if loc.is_none() && !same {
             self.reader_scroll.set_offset(point(px(0.), px(0.)));
         }
+        if let Some(sections) = self.section_cache.get(&id) {
+            self.sections = Some(sections.clone());
+        } else if !same {
+            // Read from the file again (a big PDF takes a moment).
+            self.sections = None;
+            cx.spawn(async move |this, cx| {
+                let sections = cx.background_spawn(async move { docs::sections(id).unwrap_or_default() }).await;
+                this.update(cx, |this, cx| {
+                    this.section_cache.insert(id, sections.clone());
+                    if this.selected == Some(id) {
+                        this.sections = Some(sections);
+                        cx.notify();
+                    }
+                })
+                .ok();
+            })
+            .detach();
+        }
         cx.notify();
+    }
+
+    /// Shows a collection (its summary and "ask") instead of a document.
+    fn select_collection(&mut self, id: i64, cx: &mut Context<Self>) {
+        self.selected_collection = Some(id);
+        self.selected = None;
+        self.sections = None;
+        self.confirm_delete = None;
+        cx.notify();
+    }
+
+    /// What "Fragen" offers first: the picked collection, or the selected
+    /// document's collection and then the document.
+    pub fn ask_offers(&self) -> Vec<Within> {
+        if let Some(k) = self.selected_collection {
+            return vec![Within::Collection(k)];
+        }
+        let Some(d) = self.selected.and_then(|id| self.docs.iter().find(|d| d.id == id)) else { return Vec::new() };
+        let collection = d.collection_id.filter(|k| self.collections.iter().any(|c| c.id == *k));
+        collection.map(Within::Collection).into_iter().chain([Within::Document(d.id)]).collect()
     }
 
     fn run_search(&mut self, cx: &mut Context<Self>) {
@@ -301,8 +359,10 @@ impl DocumentsView {
                         let title = docs::get(id).ok().flatten().map_or(String::new(), |d| d.title);
                         self.errors.push(format!("{title}: {e}"));
                     }
+                    self.section_cache.remove(&id);
                     if self.selected == Some(id) {
                         let loc = self.highlight;
+                        self.sections = None;
                         self.open(id, loc, cx);
                     }
                 }
@@ -452,7 +512,7 @@ impl DocumentsView {
         }
         if self.selected == Some(id) {
             self.selected = None;
-            self.chunks.clear();
+            self.sections = None;
         }
         self.reload(cx);
         self.run_search(cx);
@@ -579,7 +639,22 @@ impl DocumentsView {
             .rounded(theme.radius)
             .cursor_pointer()
             .hover(|s| s.bg(theme.muted))
-            .child(Icon::new(if folded { IconName::ChevronRight } else { IconName::ChevronDown }).xsmall().text_color(theme.muted_foreground))
+            .when(k.is_some() && self.selected_collection == key, |el| el.bg(theme.accent))
+            .child(
+                div()
+                    .id(("doc-group-fold", gid))
+                    .p_0p5()
+                    .rounded(theme.radius)
+                    .hover(|s| s.bg(theme.muted))
+                    .child(Icon::new(if folded { IconName::ChevronRight } else { IconName::ChevronDown }).xsmall().text_color(theme.muted_foreground))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        if !this.folded.remove(&key) {
+                            this.folded.insert(key);
+                        }
+                        cx.notify();
+                    })),
+            )
             .child(Icon::new(if k.is_some() { IconName::Folder } else { IconName::FileText }).small().text_color(if on && k.is_some() { theme.primary } else { theme.muted_foreground }))
             .when(renaming, |el| el.child(self.name_row(cx)))
             .when(!renaming, |el| {
@@ -599,7 +674,11 @@ impl DocumentsView {
                 el.child(
                     Button::new(("doc-collection-menu", id as usize)).xsmall().ghost().icon(IconName::Ellipsis).dropdown_menu(move |menu, _, _| {
                         let (rename, add, delete) = (weak.clone(), weak.clone(), weak.clone());
-                        menu.item(PopupMenuItem::new(tr("Umbenennen")).icon(IconName::Pencil).on_click(move |_, window, cx| {
+                        let ask = weak.clone();
+                        menu.item(PopupMenuItem::new(tr("Fragen zu dieser Sammlung")).icon(IconName::Sparkles).on_click(move |_, _, cx| {
+                            ask.update(cx, |_, cx| cx.emit(DocumentsEvent::Ask(Within::Collection(id)))).ok();
+                        }))
+                        .item(PopupMenuItem::new(tr("Umbenennen")).icon(IconName::Pencil).on_click(move |_, window, cx| {
                             rename.update(cx, |this, cx| this.begin_name_edit(Some(id), None, window, cx)).ok();
                         }))
                         .item(PopupMenuItem::new(tr("Dateien hinzufügen…")).icon(IconName::Upload).on_click(move |_, _, cx| {
@@ -623,11 +702,15 @@ impl DocumentsView {
                         .on_change(cx.listener(move |this, on: &bool, _, cx| this.set_collection_active(id, *on, cx))),
                 )
             })
-            .on_click(cx.listener(move |this, _, _, cx| {
-                if !this.folded.remove(&key) {
-                    this.folded.insert(key);
+            .on_click(cx.listener(move |this, _, _, cx| match key {
+                // A collection: show it (and "ask about it").
+                Some(id) => this.select_collection(id, cx),
+                None => {
+                    if !this.folded.remove(&key) {
+                        this.folded.insert(key);
+                    }
+                    cx.notify();
                 }
-                cx.notify();
             }));
         v_flex()
             .id(("doc-group-drop", gid))
@@ -715,8 +798,49 @@ impl DocumentsView {
             .into_any_element()
     }
 
+    /// The reader's place when a collection is picked: what it holds and
+    /// "ask about it".
+    fn render_collection(&self, k: &Collection, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let id = k.id;
+        let titles: Vec<String> = self.docs.iter().filter(|d| d.collection_id == Some(id)).map(|d| d.title.clone()).collect();
+        let count = if titles.len() == 1 { tr("1 Dokument").to_string() } else { trf("{} Dokumente", &[&titles.len()]) };
+        v_flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .px_8()
+            .child(Icon::new(IconName::Folder).large().text_color(if k.active { theme.primary } else { theme.muted_foreground }))
+            .child(div().text_xl().font_semibold().child(k.name.clone()))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child(format!("{count} · {}", if k.active { tr("Für Antworten") } else { tr("Sammlung aus") })),
+            )
+            .child(
+                v_flex()
+                    .max_w(px(420.))
+                    .gap_0p5()
+                    .text_sm()
+                    .children(titles.into_iter().take(12).map(|t| h_flex().gap_1p5().child(Icon::new(IconName::FileText).xsmall().text_color(theme.muted_foreground)).child(div().truncate().child(t)))),
+            )
+            .child(
+                Button::new("doc-collection-ask")
+                    .primary()
+                    .icon(IconName::Sparkles)
+                    .label(tr("Fragen zu dieser Sammlung"))
+                    .on_click(cx.listener(move |_, _, _, cx| cx.emit(DocumentsEvent::Ask(Within::Collection(id))))),
+            )
+            .into_any_element()
+    }
+
     fn render_reader(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
+        if let Some(k) = self.selected_collection.and_then(|id| self.collections.iter().find(|k| k.id == id)) {
+            return self.render_collection(&k.clone(), cx);
+        }
         let Some(doc) = self.selected.and_then(|id| self.docs.iter().find(|d| d.id == id).cloned()) else {
             return v_flex()
                 .size_full()
@@ -758,6 +882,14 @@ impl DocumentsView {
                     )
                     .child(self.collection_menu(&doc, cx))
                     .child(
+                        Button::new("doc-ask")
+                            .small()
+                            .ghost()
+                            .icon(IconName::Sparkles)
+                            .tooltip(tr("Fragen zu diesem Dokument"))
+                            .on_click(cx.listener(move |_, _, _, cx| cx.emit(DocumentsEvent::Ask(Within::Document(id))))),
+                    )
+                    .child(
                         Button::new("doc-open-file")
                             .small()
                             .ghost()
@@ -795,20 +927,41 @@ impl DocumentsView {
             )
             .when_some(doc.error.clone().filter(|_| !busy), |el, e| el.child(div().text_xs().text_color(theme.danger).child(e)));
 
-        // The text grouped by page / section, the cited one highlighted.
+        // The text by page / section, the cited one highlighted; Markdown
+        // rendered as such.
         let mut blocks: Vec<AnyElement> = Vec::new();
         let mut highlight_ix = None;
-        let mut last: Option<(u32, String)> = None;
-        for c in &self.chunks {
-            let lit = self.highlight == Some(c.loc);
+        let mut last_heading = String::new();
+        let markdown = doc.kind == Kind::Markdown;
+        let loading = self.sections.is_none();
+        for (ix, sec) in self.sections.iter().flatten().enumerate() {
+            let lit = self.highlight == Some(sec.loc);
             if lit && highlight_ix.is_none() {
                 highlight_ix = Some(blocks.len());
             }
-            let new_loc = last.as_ref().is_none_or(|(l, _)| *l != c.loc);
-            let new_heading = last.as_ref().is_none_or(|(_, h)| *h != c.heading);
-            let label = (new_loc && doc.kind.paged()).then(|| docs::loc_label(doc.kind, c.loc));
-            let heading = (new_heading && !c.heading.is_empty()).then(|| c.heading.clone());
-            last = Some((c.loc, c.heading.clone()));
+            let label = doc.kind.paged().then(|| docs::loc_label(doc.kind, sec.loc));
+            // The heading path's last part, sized by its depth.
+            let heading = (sec.heading != last_heading && !sec.heading.is_empty()).then(|| {
+                let depth = sec.heading.split(" › ").count();
+                let title = sec.heading.rsplit(" › ").next().unwrap_or_default().to_string();
+                let el = div().font_semibold().pt_1().child(title);
+                match depth {
+                    1 => el.text_xl(),
+                    2 => el.text_lg(),
+                    _ => el.text_base(),
+                }
+            });
+            last_heading = sec.heading.clone();
+            let body = if markdown && !ui::is_rtl(&sec.text) {
+                div().text_sm().child(TextView::markdown(("doc-md", ix), sec.text.clone()).selectable(true)).into_any_element()
+            } else if markdown {
+                ui::rtl_markdown(&sec.text, cx).text_sm().into_any_element()
+            } else {
+                v_flex()
+                    .gap_2()
+                    .children(sec.text.split("\n\n").filter(|p| !p.trim().is_empty()).map(|p| ui::bidi_text(p.replace('\n', " "), true).text_sm().line_height(relative(1.55))))
+                    .into_any_element()
+            };
             blocks.push(
                 v_flex()
                     .gap_1()
@@ -817,15 +970,19 @@ impl DocumentsView {
                     .rounded(theme.radius)
                     .when(lit, |el| el.bg(theme.warning.opacity(0.12)).border_l_2().border_color(theme.warning))
                     .when_some(label, |el, l| el.child(div().text_xs().font_semibold().text_color(theme.muted_foreground).child(l)))
-                    .when_some(heading, |el, h| el.child(div().text_sm().font_semibold().child(h)))
-                    .children(c.text.split("\n\n").filter(|p| !p.trim().is_empty()).map(|p| ui::bidi_text(p.replace('\n', " "), true).text_sm().line_height(relative(1.55))))
+                    .when_some(heading, |el, h| el.child(h))
+                    .child(body)
                     .into_any_element(),
             );
         }
-        if blocks.is_empty() && !busy {
+        if loading {
+            blocks.push(h_flex().p_4().gap_2().text_sm().text_color(theme.muted_foreground).child(gpui_kit::component::spinner::Spinner::new().small()).child(tr("Wird gelesen …")).into_any_element());
+        }
+        if blocks.is_empty() && !busy && !loading {
             blocks.push(div().p_4().text_sm().text_color(theme.muted_foreground).child(tr("Kein Text gefunden.")).into_any_element());
         }
-        if std::mem::take(&mut self.scroll_to_highlight)
+        if !loading
+            && std::mem::take(&mut self.scroll_to_highlight)
             && let Some(ix) = highlight_ix
         {
             self.reader_scroll.scroll_to_top_of_item(ix);

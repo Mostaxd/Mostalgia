@@ -16,6 +16,7 @@ use crate::i18n::{tr, trf};
 use crate::store::Store;
 use crate::connections::{Api, api_error, unreachable};
 use crate::llm::{ANTHROPIC_VERSION, effort_hint};
+use crate::docs::Within;
 use crate::paths;
 use crate::summary::SummaryRequest;
 
@@ -54,10 +55,20 @@ pub enum Piece {
 thread_local! {
     /// Mori's persona for the answer being produced on this thread, if any.
     static PERSONA: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    /// The documents the answer being produced on this thread is limited to
+    /// (`None`: meetings and all documents answers use).
+    static SCOPE: std::cell::Cell<Option<Within>> = const { std::cell::Cell::new(None) };
+}
+
+fn scope() -> Option<Within> {
+    SCOPE.with(|s| s.get())
 }
 
 fn system_prompt() -> String {
-    let base = base_system_prompt();
+    let base = match scope() {
+        Some(within) => scoped_system_prompt(within),
+        None => base_system_prompt(),
+    };
     match PERSONA.with(|p| p.borrow().clone()) {
         Some(persona) => format!("{persona}\n\n{base}"),
         None => base,
@@ -88,7 +99,66 @@ other languages): use it when the question may be about them or the meetings don
     )
 }
 
+/// The system prompt when the question is about one document or one
+/// collection only.
+fn scoped_system_prompt(within: Within) -> String {
+    let docs: Vec<crate::docs::Document> = crate::docs::list()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|d| match within {
+            Within::Document(id) => d.id == id,
+            Within::Collection(id) => d.collection_id == Some(id),
+            Within::Used => d.used,
+            Within::Drive => true,
+        })
+        .collect();
+    let list = docs.iter().map(|d| format!("- document_id {}: \"{}\" ({})", d.id, d.title, d.kind.id())).collect::<Vec<_>>().join("\n");
+    let what = match within {
+        Within::Collection(id) => {
+            let name = crate::docs::collections().unwrap_or_default().into_iter().find(|k| k.id == id).map_or_else(String::new, |k| k.name);
+            format!("the documents in the user's collection \"{name}\"")
+        }
+        Within::Document(_) => "one of the user's documents".to_string(),
+        _ => "the user's documents".to_string(),
+    };
+    format!(
+        "You answer questions about {what}. Today is {today}. The documents:\n{list}\n\n\
+Use the tools to find the answer: search_documents for passages (try several search terms and \
+paraphrases, in the documents' language), read_document to read a document in full or a range of \
+its sections or pages (for overviews, summaries or when a hit needs more context). Don't write \
+text before tool calls.\n\n\
+Answer only from the tool results, concretely, in the language of the question. Cite sources sparingly with the marker [[d:<document_id>@<loc>]] (loc as given in the \
+result): at most one marker per sentence or bullet, placed at its end before the final \
+punctuation. Use no other citation format. If the documents don't contain the answer, say so \
+plainly and don't guess.",
+        today = Local::now().format("%A, %d.%m.%Y"),
+    )
+}
+
+/// The tools for the current question: only the document ones when it is
+/// about some documents.
 fn tools_claude() -> Value {
+    let all = all_tools_claude();
+    if scope().is_none() {
+        return all;
+    }
+    let read = json!({
+        "name": "read_document",
+        "description": "Reads a document's text section by section (page by page for a PDF), optionally only a range of locs. Each part starts with its loc.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "document_id": {"type": "integer"},
+                "from_loc": {"type": "integer"},
+                "to_loc": {"type": "integer"}
+            },
+            "required": ["document_id"]
+        }
+    });
+    Value::Array(all.as_array().into_iter().flatten().filter(|t| t["name"] == "search_documents").cloned().chain([read]).collect())
+}
+
+fn all_tools_claude() -> Value {
     json!([
         {
             "name": "search_meetings",
@@ -178,10 +248,26 @@ fn run_tool(name: &str, input: &Value) -> (String, String) {
             "search_documents" => {
                 let q = input["query"].as_str().unwrap_or_default();
                 let t = std::time::Instant::now();
-                let out = document_hits(q, 10)?;
+                let out = document_hits(q, scope().unwrap_or_default(), 10)?;
                 let ms = t.elapsed().as_millis();
                 let n = out.as_array().map_or(0, Vec::len);
                 Ok((serde_json::to_string(&out)?, trf("Dokumente: {} ({} Treffer, {} ms)", &[&q, &n, &ms])))
+            }
+            "read_document" => {
+                let id = input["document_id"].as_i64().context("document_id missing")?;
+                let from = input["from_loc"].as_u64().unwrap_or(0) as u32;
+                let to = input["to_loc"].as_u64().map_or(u32::MAX, |l| l as u32);
+                let doc = crate::docs::get(id)?.context(tr("Dokument nicht gefunden"))?;
+                let mut out = format!("{} ({})\n", doc.title, if doc.kind.paged() { "loc = page" } else { "loc = section" });
+                for sec in crate::docs::sections(id)?.iter().filter(|s| s.loc >= from && s.loc <= to) {
+                    let heading = if sec.heading.is_empty() { String::new() } else { format!(" · {}", sec.heading) };
+                    out.push_str(&format!("\n[loc {}{heading}]\n{}\n", sec.loc, sec.text));
+                    if out.len() > 40_000 {
+                        out.push_str("… (truncated; read a smaller range)\n");
+                        break;
+                    }
+                }
+                Ok((out, trf("Lese Dokument: {}", &[&doc.title])))
             }
             "list_meetings" => {
                 let filter = Filter {
@@ -238,6 +324,14 @@ fn run_tool(name: &str, input: &Value) -> (String, String) {
 /// `events`; always ends with `Done` or `Error`.
 pub fn ask(question: &str, history: &[(String, String)], events: &Sender<AskEvent>) {
     ask_with(question, history, false, events)
+}
+
+/// [`ask`] about some documents only (one, or a collection's), switched
+/// off or not; `None` is [`ask`].
+pub fn ask_within(question: &str, history: &[(String, String)], within: Option<Within>, events: &Sender<AskEvent>) {
+    SCOPE.with(|s| s.set(within));
+    ask_with(question, history, false, events);
+    SCOPE.with(|s| s.set(None));
 }
 
 /// [`ask`] in Mori's voice (her persona before the search instructions).
@@ -473,9 +567,15 @@ fn ask_openai(question: &str, history: &[(String, String)], req: &SummaryRequest
 /// first and hand the hits to the model with the question.
 fn retrieve_then_answer(question: &str, history: &[(String, String)], req: &SummaryRequest, events: &Sender<AskEvent>) -> Result<String> {
     let _ = events.send(AskEvent::Status(trf("{} kann keine Werkzeuge nutzen – suche vorab", &[&req.model])));
-    let (hits, status) = run_tool("search_meetings", &json!({ "query": question }));
-    let _ = events.send(AskEvent::Status(status));
-    let doc_hits = if crate::docs::any() {
+    let scoped = scope().is_some();
+    let hits = if scoped {
+        "[]".to_string()
+    } else {
+        let (hits, status) = run_tool("search_meetings", &json!({ "query": question }));
+        let _ = events.send(AskEvent::Status(status));
+        hits
+    };
+    let doc_hits = if scoped || crate::docs::any() {
         let (hits, status) = run_tool("search_documents", &json!({ "query": question }));
         let _ = events.send(AskEvent::Status(status));
         format!("\n\nSearch results from the documents (JSON):\n{hits}")
@@ -498,8 +598,8 @@ Answer only from these results; cite with at most one [[m:<meeting_id>@<start_se
 }
 
 /// Document search hits as the tools give them to the model.
-pub(crate) fn document_hits(query: &str, limit: usize) -> Result<Value> {
-    let hits = crate::docs::search(query, None, limit)?;
+pub(crate) fn document_hits(query: &str, within: Within, limit: usize) -> Result<Value> {
+    let hits = crate::docs::search_within(query, within, limit)?;
     Ok(Value::Array(
         hits.iter()
             .map(|h| {

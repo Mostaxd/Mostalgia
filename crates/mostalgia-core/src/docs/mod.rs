@@ -408,17 +408,55 @@ fn fts_query(query: &str) -> Option<String> {
     (!terms.is_empty()).then(|| terms.join(" OR "))
 }
 
+/// Which documents a search looks at.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Within {
+    /// Those answers use (switched on, in a switched-on collection or none).
+    #[default]
+    Used,
+    /// Every document in the drive.
+    Drive,
+    /// One document, or one collection's documents, switched off or not:
+    /// asked about explicitly.
+    Document(i64),
+    Collection(i64),
+}
+
+impl Within {
+    /// SQL condition on documents `d`.
+    fn condition(self) -> String {
+        match self {
+            Within::Used => USED.to_string(),
+            Within::Drive => "1".to_string(),
+            Within::Document(id) => format!("d.id = {id}"),
+            Within::Collection(id) => format!("d.collection_id = {id}"),
+        }
+    }
+}
+
 /// Hybrid search over the drive (keywords + meaning, fused like the
 /// meeting search), for answers: switched-off documents are left out.
 /// `only` limits it to one document.
 pub fn search(query: &str, only: Option<i64>, limit: usize) -> Result<Vec<DocHit>> {
-    search_in(query, only, false, limit)
+    search_within(query, only.map_or(Within::Used, Within::Document), limit)
 }
 
 /// Like [`search`], over every document in the drive (switched off too),
 /// for the Documents screen.
 pub fn search_drive(query: &str, limit: usize) -> Result<Vec<DocHit>> {
-    search_in(query, None, true, limit)
+    search_within(query, Within::Drive, limit)
+}
+
+/// A document's text in reading order, section by section (page by page
+/// for a PDF), read from its copy again: unlike the chunks, without
+/// overlap and with its Markdown intact. Falls back to the chunks when the
+/// file is gone or unreadable.
+pub fn sections(id: i64) -> Result<Vec<extract::Section>> {
+    let doc = get(id)?.with_context(|| tr("Dokument nicht gefunden"))?;
+    match extract::extract(&doc.path, doc.kind) {
+        Ok((sections, _)) if !sections.is_empty() => Ok(sections.into_iter().filter(|s| !s.text.trim().is_empty()).collect()),
+        _ => Ok(chunks(id)?.into_iter().map(|c| extract::Section { loc: c.loc, heading: c.heading, text: c.text }).collect()),
+    }
 }
 
 /// Switches a document on or off for answers.
@@ -484,26 +522,25 @@ pub fn set_collection(id: i64, collection: Option<i64>) -> Result<()> {
     Ok(())
 }
 
-fn search_in(query: &str, only: Option<i64>, inactive_too: bool, limit: usize) -> Result<Vec<DocHit>> {
+/// Hybrid search over the documents `within`.
+pub fn search_within(query: &str, within: Within, limit: usize) -> Result<Vec<DocHit>> {
     let store = Store::open(&paths::database())?;
     let conn = store.conn();
+    let condition = within.condition();
     let allowed: HashSet<i64> = {
-        let mut stmt = conn.prepare(&format!(
-            "SELECT c.id FROM doc_chunks c JOIN documents d ON d.id = c.document_id WHERE (?1 IS NULL OR c.document_id = ?1) AND (?2 OR {USED})"
-        ))?;
-        stmt.query_map(params![only, inactive_too], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+        let mut stmt = conn.prepare(&format!("SELECT c.id FROM doc_chunks c JOIN documents d ON d.id = c.document_id WHERE {condition}"))?;
+        stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
     };
     if allowed.is_empty() {
         return Ok(Vec::new());
     }
     let mut bm25: Vec<i64> = Vec::new();
     if let Some(q) = fts_query(query) {
-        let mut stmt = conn.prepare(
-            "SELECT c.id FROM doc_chunks_fts f JOIN doc_chunks c ON c.id = f.rowid
-             WHERE doc_chunks_fts MATCH ?1 AND (?2 IS NULL OR c.document_id = ?2) ORDER BY rank LIMIT ?3",
-        )?;
-        bm25 = stmt.query_map(params![q, only, CANDIDATES as i64], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
-        bm25.retain(|id| allowed.contains(id));
+        let mut stmt = conn.prepare(&format!(
+            "SELECT c.id FROM doc_chunks_fts f JOIN doc_chunks c ON c.id = f.rowid JOIN documents d ON d.id = c.document_id
+             WHERE doc_chunks_fts MATCH ?1 AND {condition} ORDER BY rank LIMIT ?2"
+        ))?;
+        bm25 = stmt.query_map(params![q, CANDIDATES as i64], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
     }
     let mut semantic: Vec<i64> = Vec::new();
     if let Some(qv) = embed::embed(&[format!("query: {query}")])?.and_then(|mut v| v.pop()) {
@@ -611,6 +648,9 @@ mod tests {
         let doc = get(id).unwrap().unwrap();
         assert!(doc.active && !doc.used && doc.collection_id == Some(k));
         assert!(search("VPN", None, 5).unwrap().is_empty());
+        // Asked about explicitly, a switched-off collection is searched.
+        assert_eq!(search_within("VPN", Within::Collection(k), 5).unwrap().len(), 1);
+        assert_eq!(sections(id).unwrap()[1].text, "The VPN password rotates every 90 days.");
         assert_eq!(search_drive("VPN", 5).unwrap().len(), 1);
         let c = &collections().unwrap()[0];
         assert_eq!((c.name.as_str(), c.active, c.documents), ("IT", false, 1));
