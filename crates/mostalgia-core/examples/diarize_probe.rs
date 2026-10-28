@@ -4,7 +4,9 @@
 //! where N is the number of people on the system track. Set
 //! `MOSTALGIA_DIARIZE_THRESHOLD` to try another clustering threshold, and
 //! `PROBE_DB=<copy of mostalgia.db> PROBE_MEETING=<id>` to print that
-//! meeting's system lines as the separation would label them.
+//! meeting's system lines as the separation would label them. With
+//! `PROBE_APPLY=1` as well, those labels are written into that database
+//! (speaker names only, the text stays; back the database up first).
 
 use mostalgia_core::diarize::{Speakers, separate};
 use mostalgia_core::voices::Voices;
@@ -36,6 +38,7 @@ fn main() -> anyhow::Result<()> {
             let store = mostalgia_core::store::Store::open(std::path::Path::new(&db))?;
             let meeting = store.get(id.parse()?)?.expect("meeting");
             let mut changes = std::collections::BTreeMap::<(String, String), usize>::new();
+            let mut apply = std::collections::BTreeMap::<String, Vec<i64>>::new();
             for seg in meeting.segments.iter().filter(|s| s.source == mostalgia_core::Source::System) {
                 let mut best = (0.0f64, None);
                 for t in &sep.turns {
@@ -46,10 +49,19 @@ fn main() -> anyhow::Result<()> {
                 }
                 let new = best.1.map(|s| sep.label(s as usize)).unwrap_or_else(|| "-".into());
                 *changes.entry((seg.speaker_label().to_string(), new.clone())).or_default() += 1;
+                if best.1.is_some() {
+                    apply.entry(new.clone()).or_default().push(seg.id);
+                }
                 println!("    {:>7.1} {:<12} -> {:<12} {}", seg.start_secs, seg.speaker_label(), new, seg.text.chars().take(90).collect::<String>());
             }
             for ((old, new), n) in changes {
                 println!("  {old} -> {new}: {n} lines");
+            }
+            if std::env::var("PROBE_APPLY").is_ok_and(|v| v == "1") {
+                for (name, ids) in &apply {
+                    store.set_segments_speaker(meeting.id, ids, name)?;
+                    println!("  wrote {name}: {} lines", ids.len());
+                }
             }
         }
         for i in 0..sep.prints.len() {

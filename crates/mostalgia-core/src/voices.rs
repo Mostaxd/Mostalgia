@@ -468,6 +468,23 @@ mod tests {
     }
 
     #[test]
+    fn unknown_third_voice_is_not_given_a_known_name() {
+        // Meeting of Oct 28, 13:01: Markus and Jasmin known, Tina not. Her
+        // cluster measured Markus 0.832 / Jasmin 0.814; the old matcher
+        // (best above 0.5, no margin, not one-to-one) called her Markus.
+        let mut v = Voices::default();
+        v.learn("Markus", Some(1), vec![1.0, 0.0, 0.0], 30.0);
+        v.learn("Jasmin", Some(1), vec![0.809, 0.588, 0.0], 30.0);
+        let prints = vec![
+            Some(normalize(vec![0.965, 0.039, 0.26])),
+            Some(normalize(vec![0.832, 0.240, 0.500])),
+            Some(normalize(vec![0.810, 0.541, 0.226])),
+        ];
+        assert_eq!(v.best_match(prints[1].as_ref().unwrap(), 0.5, 0.0).map(|m| m.0), Some("Markus"), "the old rule");
+        assert_eq!(named(&v.assign(&prints, 0.6, 0.08)), [Some("Markus"), None, Some("Jasmin")]);
+    }
+
+    #[test]
     fn correcting_lines_fixes_both_profiles() {
         let mut v = Voices::default();
         v.learn("Markus", Some(3), at(0.0), 60.0);
