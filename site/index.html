@@ -1,0 +1,710 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mostalgia: meetings you can recall in full</title>
+<meta name="description" content="Mostalgia is a local-first meeting recorder for Linux: live Whisper transcription in any language, summaries that know who promised what, Ask across all your meetings, and five animated companions who take notes with you.">
+<meta name="theme-color" content="#2B1730">
+<meta property="og:title" content="Mostalgia: nostalgia, but for meetings you can actually recall in full">
+<meta property="og:description" content="Local-first meeting recorder for Linux. Whisper on your GPU, summaries, Ask, documents and animated note-taking companions.">
+<meta property="og:image" content="assets/brand/og.png">
+<link rel="icon" href="assets/brand/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&family=Zen+Maru+Gothic:wght@500;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="petals" aria-hidden="true"></canvas>
+
+<header class="topbar" id="topbar">
+  <a class="brand" href="#top" aria-label="Mostalgia home">
+    <img src="assets/brand/icon.svg" alt="" width="30" height="30">
+    <span>Most<b>algia</b></span>
+  </a>
+  <nav class="toplinks" aria-label="Sections">
+    <a href="#ep1">Episodes</a>
+    <a href="#ep7">Cast</a>
+    <a href="#ep8">Privacy</a>
+    <a href="#install">Install</a>
+  </nav>
+  <a class="btn btn-small" href="https://github.com/Mostaxd/Mostalgia">GitHub</a>
+</header>
+
+<nav class="episode-rail" id="rail" aria-label="Episodes">
+  <a href="#ep1" data-ep="ep1"><span>一</span><em>Record</em></a>
+  <a href="#ep2" data-ep="ep2"><span>二</span><em>Transcribe</em></a>
+  <a href="#ep3" data-ep="ep3"><span>三</span><em>Speakers</em></a>
+  <a href="#ep4" data-ep="ep4"><span>四</span><em>Summaries</em></a>
+  <a href="#ep5" data-ep="ep5"><span>五</span><em>Ask</em></a>
+  <a href="#ep6" data-ep="ep6"><span>六</span><em>Documents</em></a>
+  <a href="#ep7" data-ep="ep7"><span>七</span><em>Cast</em></a>
+  <a href="#ep8" data-ep="ep8"><span>八</span><em>Privacy</em></a>
+  <a href="#ep9" data-ep="ep9"><span>九</span><em>Themes</em></a>
+</nav>
+
+<main id="top">
+
+<!-- ───────────────────────── OPENING ───────────────────────── -->
+<section class="hero" id="hero">
+  <div class="sky" aria-hidden="true">
+    <div class="stars"></div>
+    <div class="sun"></div>
+    <svg class="skyline" viewBox="0 0 1440 360" preserveAspectRatio="xMidYMax slice">
+      <path class="far" d="M0 250 L60 250 L60 210 L110 210 L110 235 L160 235 L160 180 L200 180 L200 150 L230 150 L230 180 L270 180 L270 225 L330 225 L330 195 L380 195 L380 240 L440 240 L440 170 L470 170 L470 130 L500 130 L500 170 L530 170 L530 230 L600 230 L600 205 L660 205 L660 245 L720 245 L720 190 L760 190 L760 160 L800 160 L800 200 L850 200 L850 235 L910 235 L910 185 L960 185 L960 220 L1010 220 L1010 140 L1040 140 L1040 110 L1070 110 L1070 140 L1100 140 L1100 230 L1160 230 L1160 200 L1220 200 L1220 245 L1280 245 L1280 175 L1330 175 L1330 225 L1390 225 L1390 205 L1440 205 L1440 360 L0 360 Z"/>
+      <path class="near" d="M0 300 L90 300 L90 270 L150 270 L150 290 L240 290 L240 255 L300 255 L300 285 L420 285 L420 265 L470 265 L470 295 L600 295 L600 275 L680 275 L680 300 L820 300 L820 262 L880 262 L880 290 L1000 290 L1000 270 L1080 270 L1080 298 L1200 298 L1200 258 L1260 258 L1260 288 L1440 288 L1440 360 L0 360 Z"/>
+      <g class="wires">
+        <path d="M120 140 L120 300 M100 150 L140 150 M104 165 L136 165"/>
+        <path d="M1310 120 L1310 300 M1288 130 L1332 130 M1292 146 L1328 146"/>
+        <path d="M-20 158 Q 540 230 1310 131" fill="none"/>
+        <path d="M-20 172 Q 560 250 1310 147" fill="none"/>
+        <path d="M140 150 Q 700 215 1440 120" fill="none"/>
+      </g>
+    </svg>
+  </div>
+
+  <div class="hero-inner">
+    <p class="kicker"><span class="dot"></span> Local-first meeting recorder · Linux</p>
+    <h1 class="title">
+      <span class="jp" aria-hidden="true">モスタルジア</span>
+      <span class="word">Mostalgia</span>
+    </h1>
+    <p class="tagline">Nostalgia, but for meetings you can <em>actually recall in full</em>.</p>
+    <p class="lede">Live Whisper transcription in any language, summaries that know who promised what, and a search box that answers <q>wait, what did we decide?</q> with a link to the exact second it was said. Five little companions take notes with you.</p>
+    <div class="cta">
+      <a class="btn btn-primary" href="#install">Get it for Linux</a>
+      <a class="btn btn-ghost" href="#prologue">Watch the episodes ↓</a>
+    </div>
+    <p class="platforms">Linux with PipeWire today · Windows planned</p>
+  </div>
+
+  <div class="lineup" id="lineup" aria-label="The companions: Mori, Tsumugi, Hoshi, Kaito and Jin">
+    <figure data-depth="1.4"><img src="assets/cast/tsumugi-idle.webp" alt="Tsumugi" width="300" height="480"><figcaption>Tsumugi</figcaption></figure>
+    <figure data-depth="0.9"><img src="assets/cast/hoshi-idle.webp" alt="Hoshi" width="300" height="480"><figcaption>Hoshi</figcaption></figure>
+    <figure class="lead" data-depth="0.5"><img src="assets/cast/mori-idle.webp" alt="Mori" width="300" height="480"><figcaption>Mori</figcaption></figure>
+    <figure data-depth="1.1"><img src="assets/cast/kaito-idle.webp" alt="Kaito" width="300" height="480"><figcaption>Kaito</figcaption></figure>
+    <figure data-depth="1.6"><img src="assets/cast/jin-idle.webp" alt="Jin" width="300" height="480"><figcaption>Jin</figcaption></figure>
+  </div>
+  <div class="scroll-hint" aria-hidden="true"><span></span></div>
+</section>
+
+<!-- ───────────────────────── PROLOGUE (manga strip) ───────────────────────── -->
+<section class="prologue" id="prologue">
+  <div class="wrap">
+    <p class="section-kicker">プロローグ · Prologue</p>
+    <h2 class="section-title">You were <em>in</em> the meeting.</h2>
+    <div class="manga">
+      <div class="panel p1 reveal">
+        <span class="caption">Tuesday, 10:03</span>
+        <div class="speech left">Then we freeze marketing spend until the end of June.</div>
+        <div class="speech right small">Agreed.</div>
+        <div class="crowd" aria-hidden="true"><i></i><i></i><i></i></div>
+      </div>
+      <div class="panel p2 reveal">
+        <span class="caption">Friday</span>
+        <img src="assets/cast/kaito-thinking.webp" alt="Kaito thinking" loading="lazy" width="300" height="480">
+        <div class="thought">Was it <b>until</b> June… or <b>in</b> June?</div>
+        <span class="sfx" aria-hidden="true">ザワ…</span>
+      </div>
+      <div class="panel p3 reveal">
+        <span class="caption">With Mostalgia</span>
+        <img src="assets/cast/mori-talking.webp" alt="Mori talking" loading="lazy" width="300" height="480">
+        <div class="speech left accent">“Until the end of June.” Said at <span class="ts">00:27</span>. Want to hear it?</div>
+        <span class="sfx big" aria-hidden="true">キラッ</span>
+      </div>
+    </div>
+    <p class="prologue-copy reveal">Mostalgia sits quietly next to your call, writes everything down as it happens, and turns it into something you can use: a summary with decisions and owners, a transcript you can click to hear, and an assistant that answers questions across all your meetings. By default the audio is transcribed on your own GPU and stays on your disk.</p>
+  </div>
+</section>
+
+<!-- ───────────────────────── EPISODE 1 ───────────────────────── -->
+<section class="episode" id="ep1" data-char="mori">
+  <header class="ep-card">
+    <div class="burst" aria-hidden="true"></div>
+    <span class="ep-no" aria-hidden="true">01</span>
+    <div class="ep-text">
+      <p class="ep-label">Episode 1 · 第一話 <span class="jpw">録音</span></p>
+      <h2>Press record. <span>Or don't. It starts with your call.</span></h2>
+    </div>
+  </header>
+  <div class="ep-body">
+    <aside class="stage" aria-hidden="true">
+      <div class="bubble"><span class="who">Mori</span><p class="say"></p></div>
+      <div class="actor"><img alt="" width="300" height="480"></div>
+      <div class="shadow"></div>
+    </aside>
+    <div class="steps">
+      <article class="step" data-pose="listening" data-say="Your mic and the call, on separate tracks. So I always know who's talking.">
+        <div class="step-text">
+          <h3>Two tracks, always</h3>
+          <p>Mostalgia records <b>your microphone and the other side of the call</b> (desktop audio) as separate tracks, so every line knows if it came from <i>Me</i> or <i>Others</i>. Readable device names, live level meters, and a nudge when your mic has gone suspiciously quiet.</p>
+        </div>
+        <figure class="shot"><img src="assets/shots/recording.webp" alt="Live recording with speaker chips and provisional text" loading="lazy" width="1240" height="820"></figure>
+      </article>
+      <article class="step" data-pose="talking" data-say="Call starts, I start. Call ends, I stop. That's the whole deal.">
+        <div class="step-text">
+          <h3>Auto-start with calls</h3>
+          <p>Mostalgia notices when a call app grabs the mic and offers to record (or just starts), then stops when the call ends.</p>
+          <ul class="chips"><li>Zoom</li><li>Teams</li><li>Meet</li><li>Discord</li><li>Slack</li><li>Signal</li><li>Element</li><li>Jitsi</li><li>Webex</li><li>Telegram</li><li>WhatsApp</li><li>any call in your browser</li></ul>
+        </div>
+        <figure class="shot"><img src="assets/shots/new-recording.webp" alt="New recording screen with microphone and desktop audio toggles" loading="lazy" width="1240" height="820"></figure>
+      </article>
+      <article class="step" data-pose="writing" data-say="Something important? Hit Mark. I'll pin it to the second.">
+        <div class="step-text">
+          <h3>Stay in the moment</h3>
+          <ul class="ticks">
+            <li><b>Mark</b> a moment as a bookmark, <b>pause</b> when you need to.</li>
+            <li>Switch the <b>mic or desktop audio on and off</b> mid-recording; the transcript shows where.</li>
+            <li>Tray icon and a global shortcut: <kbd>Super</kbd> + <kbd>Shift</kbd> + <kbd>R</kbd>.</li>
+            <li>After Stop, the meeting appears straight away with <b>real progress</b> while it's processed.</li>
+          </ul>
+        </div>
+      </article>
+      <article class="step" data-pose="error" data-say="Power cut?! Okay, okay… at most two seconds lost. I'll recover the rest at launch.">
+        <div class="step-text">
+          <h3>Crash-safe recording</h3>
+          <p>Tracks are flushed and synced to disk <b>every 2 seconds</b>, from their own threads, and never wait for transcription. If the app or the laptop dies mid-meeting, Mostalgia repairs the tracks at the next launch and runs the normal final pass, so you lose seconds, not the meeting.</p>
+        </div>
+      </article>
+      <article class="step" data-pose="writing" data-say="Old recordings and chat exports? Hand them over. I'll treat them like any meeting.">
+        <div class="step-text">
+          <h3>Bring the meetings you already have</h3>
+          <p><b>Import recordings</b>: any audio or video file becomes a meeting, with speakers, summary and notes. Or create a <b>meeting from text</b>: paste or open a Teams, Zoom or Meet export, WebVTT/SRT subtitles or plain notes.</p>
+          <ul class="chips"><li>MP3</li><li>M4A / AAC</li><li>MP4</li><li>MOV</li><li>FLAC</li><li>WAV</li><li>AIFF</li><li>Ogg</li><li>MKV / WebM</li><li>Opus (via ffmpeg)</li><li>.txt · .md · .vtt · .srt</li></ul>
+        </div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────── EPISODE 2 ───────────────────────── -->
+<section class="episode alt night" id="ep2" data-char="hoshi">
+  <header class="ep-card">
+    <div class="burst" aria-hidden="true"></div>
+    <span class="ep-no" aria-hidden="true">02</span>
+    <div class="ep-text">
+      <p class="ep-label">Episode 2 · 第二話 <span class="jpw">文字起こし</span></p>
+      <h2>Every word, as it's spoken. <span>Whisper turbo on your own GPU.</span></h2>
+    </div>
+  </header>
+  <div class="ep-body">
+    <aside class="stage" aria-hidden="true">
+      <div class="bubble"><span class="who">Hoshi</span><p class="say"></p></div>
+      <div class="actor"><img alt="" width="300" height="480"></div>
+      <div class="shadow"></div>
+    </aside>
+    <div class="steps">
+      <article class="step" data-pose="writing" data-say="Whisper turbo, right on your graphics card. About thirty times faster than you can talk.">
+        <div class="step-text">
+          <h3>Whisper, locally, fast</h3>
+          <p><b>Whisper large-v3-turbo</b> through whisper.cpp on <b>Vulkan</b> (NVIDIA, AMD and Intel, no extra toolkits), CUDA, or the CPU. Around <b>30× faster than real time</b> on a laptop GPU, multilingual, and nothing leaves your machine.</p>
+        </div>
+        <figure class="shot"><img src="assets/shots/transcript.webp" alt="Transcript with timestamps and speaker chips in the night theme" loading="lazy" width="1240" height="820"></figure>
+      </article>
+      <article class="step" data-pose="listening" data-say="I don't wait for the sentence to end. You see the words while they're still being said.">
+        <div class="step-text">
+          <h3>Words in about a second</h3>
+          <p><b>Provisional text appears after ~1 s</b> while someone is still talking, then is replaced by the clean line when they pause.</p>
+          <div class="live-demo" id="liveDemo" aria-label="A demonstration of provisional text turning into a final line">
+            <div class="ld-line"><span class="ld-ts">00:15</span><span class="ld-chip others">Others</span><span class="ld-text final">We're about ten percent under plan right now.</span></div>
+            <div class="ld-line"><span class="ld-ts">00:27</span><span class="ld-chip me">Me</span><span class="ld-text" id="ldType"></span></div>
+          </div>
+        </div>
+      </article>
+      <article class="step" data-pose="thinking" data-say="Silence stays silence. No phantom “Thanks for watching!” in your notes.">
+        <div class="step-text">
+          <h3>Clean by design</h3>
+          <ul class="ticks">
+            <li><b>Silero VAD</b> decides what's speech, so silence never turns into hallucinated lines.</li>
+            <li>Optional <b>noise suppression</b> (RNNoise) for fans and keyboard clicks; raw tracks stay untouched.</li>
+            <li>After you stop, a <b>final pass</b> re-transcribes the full tracks for the archive.</li>
+          </ul>
+        </div>
+      </article>
+      <article class="step" data-pose="talking" data-say="Any language Whisper speaks. Right-to-left too. I'll detect it, or you pin it.">
+        <div class="step-text">
+          <h3>Any language</h3>
+          <p>Mostalgia auto-detects the language or lets you pin one. Right-to-left transcripts like Arabic render properly, and the summary is written in the meeting's own language.</p>
+        </div>
+        <figure class="shot"><img src="assets/shots/arabic.webp" alt="An Arabic transcript rendered right to left" loading="lazy" width="1240" height="820"></figure>
+      </article>
+      <article class="step" data-pose="idle" data-say="Need the words in front of you? Live captions float above every window.">
+        <div class="step-text">
+          <h3>Floating live captions</h3>
+          <p>An optional always-on-top caption window shows the latest lines and who spoke, above Teams or Zoom, without stealing keyboard focus. Flag a line to bookmark it; place, size and opacity are remembered.</p>
+          <div class="captions-mock" aria-hidden="true">
+            <div class="cm-bar"><span class="rec"></span> Live · 12:41 <span class="cm-op">◐</span></div>
+            <p><b>Anna</b> Could you send a new forecast by Friday?</p>
+            <p><b>Me</b> Sure, I just need the numbers from sales<span class="caret"></span></p>
+          </div>
+        </div>
+      </article>
+      <article class="step" data-pose="error" data-say="If an engine fails, I say which one and why. Your audio stays safe on disk.">
+        <div class="step-text">
+          <h3>Local, Hybrid or Cloud, and no silent fallbacks</h3>
+          <p>Use Whisper on your GPU, a self-hosted Whisper server, or a cloud service (OpenAI, Groq) for machines without a GPU, chosen separately for live text and the final pass, with the <b>cost per hour shown</b>. If a provider fails you see which one and why, the audio stays on disk, and <b>Transcribe again</b> lets you pick another engine. Nothing switches behind your back.</p>
+        </div>
+        <figure class="shot"><img src="assets/shots/engine-error.webp" alt="A clear error naming the transcription provider that failed" loading="lazy" width="1240" height="820"></figure>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────── EPISODE 3 ───────────────────────── -->
+<section class="episode" id="ep3" data-char="jin">
+  <header class="ep-card">
+    <div class="burst" aria-hidden="true"></div>
+    <span class="ep-no" aria-hidden="true">03</span>
+    <div class="ep-text">
+      <p class="ep-label">Episode 3 · 第三話 <span class="jpw">話者</span></p>
+      <h2>Who said it? <span>Named once, remembered next time.</span></h2>
+    </div>
+  </header>
+  <div class="ep-body">
+    <aside class="stage" aria-hidden="true">
+      <div class="bubble"><span class="who">Jin</span><p class="say"></p></div>
+      <div class="actor"><img alt="" width="300" height="480"></div>
+      <div class="shadow"></div>
+    </aside>
+    <div class="steps">
+      <article class="step" data-pose="listening" data-say="You. Them. Two tracks. No guessing.">
+        <div class="step-text">
+          <h3><i>Me</i> and <i>Others</i>, for free</h3>
+          <p>Because your mic and the call are recorded separately, every line is already split into what <b>you</b> said and what <b>the others</b> said. No model needed.</p>
+        </div>
+        <figure class="shot"><img src="assets/shots/audio.webp" alt="Audio tab with a waveform per track" loading="lazy" width="1240" height="820"></figure>
+      </article>
+      <article class="step" data-pose="thinking" data-say="Three voices on the other side. I split them. Cleanly.">
+        <div class="step-text">
+          <h3>Speaker diarization</h3>
+          <p>Optional <b>offline diarization</b> (sherpa-onnx with pyannote segmentation and WeSpeaker embeddings) splits the other side into Speaker 1, Speaker 2 and so on.</p>
+        </div>
+      </article>
+      <article class="step" data-pose="talking" data-say="“Speaker 2” is Felix? Noted. Next meeting, he's Felix from the start.">
+        <div class="step-text">
+          <h3>Rename once, known forever</h3>
+          <p>Rename a speaker and every line follows. The voice is remembered: <i>Speaker 2</i> → <i>Felix</i> today is labelled <i>Felix</i> automatically in the next meeting. Only a voice print is kept, never audio, and you can manage or forget known voices in Settings → Speakers.</p>
+          <div class="rename-demo" aria-hidden="true">
+            <span class="chip-a">Speaker 2</span><span class="arrow">→</span><span class="chip-b">Felix</span>
+          </div>
+        </div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────── EPISODE 4 ───────────────────────── -->
+<section class="episode alt" id="ep4" data-char="kaito">
+  <header class="ep-card">
+    <div class="burst" aria-hidden="true"></div>
+    <span class="ep-no" aria-hidden="true">04</span>
+    <div class="ep-text">
+      <p class="ep-label">Episode 4 · 第四話 <span class="jpw">要約</span></p>
+      <h2>The highlights, <span>freshly brewed.</span></h2>
+    </div>
+  </header>
+  <div class="ep-body">
+    <aside class="stage" aria-hidden="true">
+      <div class="bubble"><span class="who">Kaito</span><p class="say"></p></div>
+      <div class="actor"><img alt="" width="300" height="480"></div>
+      <div class="shadow"></div>
+    </aside>
+    <div class="steps">
+      <article class="step" data-pose="thinking" data-say="Let it steep a moment… Decisions, owners, deadlines. Served.">
+        <div class="step-text">
+          <h3>Summaries that know who promised what</h3>
+          <p>A title, a short overview, key points, <b>decisions</b>, <b>action items with owners and deadlines</b>, and open questions, in the meeting's own language, whatever language the UI is in.</p>
+        </div>
+        <figure class="shot"><img src="assets/shots/summary.webp" alt="Summary with decisions and action items" loading="lazy" width="1240" height="820"></figure>
+      </article>
+      <article class="step" data-pose="idle" data-say="Your kitchen, your tea. Pick any AI you like, local or cloud.">
+        <div class="step-text">
+          <h3>Bring your own AI</h3>
+          <p>Connect as many providers as you like and choose separately which one writes summaries and which one answers questions. Each connection shows a <b>local</b> or <b>cloud</b> badge and whether it's connected, not set up, or failing, and why. Pick the model and, where supported, the <b>thinking level</b>; responses stream.</p>
+          <ul class="chips"><li>Ollama</li><li>LM Studio</li><li>vLLM</li><li>LiteLLM</li><li>any OpenAI-compatible URL</li><li>Claude</li><li>OpenAI</li><li>DeepSeek</li><li>OpenRouter</li><li>Groq</li><li>Together</li></ul>
+        </div>
+        <figure class="shot"><img src="assets/shots/settings-ai.webp" alt="AI connections and processing modes in settings" loading="lazy" width="1400" height="1040"></figure>
+      </article>
+      <article class="step" data-pose="talking" data-say="One click, and the recap is ready to pour into Teams or an email.">
+        <div class="step-text">
+          <h3>Copy recap and export</h3>
+          <p><b>Copy recap</b> puts a short, clean summary on your clipboard (key points, decisions, action items with owners and due dates), short or full, as text or Markdown. Or export the whole meeting as <b>Markdown, text, SRT or Word</b>.</p>
+          <pre class="recap" aria-label="An example recap">Next quarter's budget · 13 min
+• Marketing spend frozen until end of June
+☐ Anna: new forecast, due Friday
+☐ Me: send sales numbers this afternoon</pre>
+        </div>
+      </article>
+      <article class="step" data-pose="writing" data-say="Every decision, every meeting, newest first. I keep the ledger.">
+        <div class="step-text">
+          <h3>Decision log</h3>
+          <p>An optional <b>Decisions</b> page lists every decision across all your meetings, newest first, each tied to the line where it was said and who said it. Search and filter by meeting, person and date, edit entries, or mark one as <b>superseded</b> by a later decision.</p>
+        </div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────── EPISODE 5 ───────────────────────── -->
+<section class="episode night" id="ep5" data-char="tsumugi">
+  <header class="ep-card">
+    <div class="burst" aria-hidden="true"></div>
+    <span class="ep-no" aria-hidden="true">05</span>
+    <div class="ep-text">
+      <p class="ep-label">Episode 5 · 第五話 <span class="jpw">質問</span></p>
+      <h2>Ask your meetings. <span>They remember everything.</span></h2>
+    </div>
+  </header>
+  <div class="ep-body">
+    <aside class="stage" aria-hidden="true">
+      <div class="bubble"><span class="who">Tsumugi</span><p class="say"></p></div>
+      <div class="actor"><img alt="" width="300" height="480"></div>
+      <div class="shadow"></div>
+    </aside>
+    <div class="steps">
+      <article class="step" data-pose="talking" data-say="“What did Anna promise last week?” Let me pick up that thread… here, with the exact moment.">
+        <div class="step-text">
+          <h3>Answers with sources you can play</h3>
+          <p>Ask in plain words. Answers come with <b>clickable sources</b> that open the meeting at that line and play the audio.</p>
+          <div class="ask-demo" aria-hidden="true">
+            <div class="q">What did Anna promise last week?</div>
+            <div class="a">A new forecast by Friday <span class="src">1</span>, once she has the numbers from sales <span class="src">2</span>.</div>
+          </div>
+        </div>
+        <figure class="shot"><img src="assets/shots/ask.webp" alt="Ask view with answers and source chips" loading="lazy" width="1240" height="820"></figure>
+      </article>
+      <article class="step" data-pose="thinking" data-say="Keywords and meaning, woven together. All on your machine, in about 25 ms.">
+        <div class="step-text">
+          <h3>Hybrid search, all local</h3>
+          <p>BM25 keywords plus multilingual e5 embeddings, fused with reciprocal rank fusion, in about <b>25 ms</b> over your whole library. Cloud models only see the few passages they look up. Local models work too: one without tool calling simply gets the search results up front.</p>
+        </div>
+      </article>
+      <article class="step" data-pose="idle" data-say="If nobody said it, I'll tell you so. No confident inventions.">
+        <div class="step-text">
+          <h3>Honest when nobody said it</h3>
+          <blockquote class="honest">Nobody said that, at least not while Mostalgia was listening.</blockquote>
+        </div>
+      </article>
+      <article class="step" data-pose="listening" data-say="Mid-meeting and lost the thread? Ask me about the live meeting, this one, or all of them.">
+        <div class="step-text">
+          <h3>Ask live, mid-meeting</h3>
+          <p>Click your companion and ask about the <b>live meeting</b> (“What did we decide so far?”), the meeting that's open, or <b>all meetings</b>. Answers stream in with numbered sources that jump to the moment; every recording keeps its own chat.</p>
+        </div>
+        <figure class="shot"><img src="assets/shots/mori-chat.webp" alt="Chat with the companion during a meeting" loading="lazy" width="1240" height="820"></figure>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────── EPISODE 6 ───────────────────────── -->
+<section class="episode alt" id="ep6" data-char="mori">
+  <header class="ep-card">
+    <div class="burst" aria-hidden="true"></div>
+    <span class="ep-no" aria-hidden="true">06</span>
+    <div class="ep-text">
+      <p class="ep-label">Episode 6 · 第六話 <span class="jpw">資料</span></p>
+      <h2>Your documents, <span>in the conversation.</span></h2>
+    </div>
+  </header>
+  <div class="ep-body">
+    <aside class="stage" aria-hidden="true">
+      <div class="bubble"><span class="who">Mori</span><p class="say"></p></div>
+      <div class="actor"><img alt="" width="300" height="480"></div>
+      <div class="shadow"></div>
+    </aside>
+    <div class="steps">
+      <article class="step" data-pose="writing" data-say="Handbooks, specs, notes. Drop them in, I'll read them all.">
+        <div class="step-text">
+          <h3>A documents drive</h3>
+          <p>Add your own files and Mostalgia indexes them with the same local hybrid search. Markdown renders properly in the built-in reader.</p>
+          <ul class="chips"><li>.md</li><li>.txt</li><li>.pdf</li><li>.docx</li><li>.odt</li><li>.html</li></ul>
+        </div>
+        <figure class="shot"><img src="assets/shots/documents-markdown.webp" alt="Documents reader showing a Markdown file" loading="lazy" width="1400" height="926"></figure>
+      </article>
+      <article class="step" data-pose="thinking" data-say="Old drafts? Switch that collection off, and I won't quote from it.">
+        <div class="step-text">
+          <h3>Collections, switched on or off</h3>
+          <p>Group documents into <b>collections</b> and drag files straight onto one. Switch a whole collection, or a single document, <b>on or off for answers</b> in Ask, the chat and live suggestions.</p>
+        </div>
+        <figure class="shot"><img src="assets/shots/documents.webp" alt="Document collections with on and off switches" loading="lazy" width="1400" height="926"></figure>
+      </article>
+      <article class="step" data-pose="talking" data-say="Ask about one collection, or one document. I'll cite the page.">
+        <div class="step-text">
+          <h3>Ask one collection, or one document</h3>
+          <p>Narrow a question to a single collection or document, offered first right from the Documents screen. Answers cite the exact passage.</p>
+        </div>
+        <figure class="shot"><img src="assets/shots/ask-collection.webp" alt="Asking a question about one collection" loading="lazy" width="1400" height="926"></figure>
+      </article>
+      <article class="step" data-pose="listening" data-say="Someone just asked you a question? Here's the answer from your docs, before you even reach for them.">
+        <div class="step-text">
+          <h3>Live answers</h3>
+          <p>During a recording, when someone asks a question that your documents answer, a <b>suggested-answer card</b> appears next to your companion, with the source. Copy it, or wave it away.</p>
+        </div>
+        <figure class="shot"><img src="assets/shots/live-answer.webp" alt="A suggested answer card next to Mori during a recording" loading="lazy" width="1400" height="926"></figure>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────── EPISODE 7: CAST ───────────────────────── -->
+<section class="cast-section" id="ep7">
+  <header class="ep-card">
+    <div class="burst" aria-hidden="true"></div>
+    <span class="ep-no" aria-hidden="true">07</span>
+    <div class="ep-text">
+      <p class="ep-label">Episode 7 · 第七話 <span class="jpw">仲間</span></p>
+      <h2>Meet the cast. <span>Pick who takes your notes.</span></h2>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="select" id="castSelect">
+      <div class="roster" role="tablist" aria-label="Companions">
+        <button role="tab" data-c="mori" aria-selected="true"><img src="assets/cast/mori-idle.webp" alt="" loading="lazy"><span>Mori</span></button>
+        <button role="tab" data-c="tsumugi" aria-selected="false"><img src="assets/cast/tsumugi-idle.webp" alt="" loading="lazy"><span>Tsumugi</span></button>
+        <button role="tab" data-c="hoshi" aria-selected="false"><img src="assets/cast/hoshi-idle.webp" alt="" loading="lazy"><span>Hoshi</span></button>
+        <button role="tab" data-c="kaito" aria-selected="false"><img src="assets/cast/kaito-idle.webp" alt="" loading="lazy"><span>Kaito</span></button>
+        <button role="tab" data-c="jin" aria-selected="false"><img src="assets/cast/jin-idle.webp" alt="" loading="lazy"><span>Jin</span></button>
+      </div>
+
+      <div class="profile" role="tabpanel" aria-live="polite">
+        <div class="profile-art">
+          <span class="profile-kana" id="pKana">モリ</span>
+          <img id="pImg" src="assets/cast/mori-idle.webp" alt="Mori" width="300" height="480">
+          <div class="poses" role="group" aria-label="Poses">
+            <button data-p="idle" class="on">Idle</button>
+            <button data-p="listening">Listening</button>
+            <button data-p="writing">Writing</button>
+            <button data-p="thinking">Thinking</button>
+            <button data-p="talking">Talking</button>
+            <button data-p="sleeping">Sleeping</button>
+            <button data-p="error">Worried</button>
+          </div>
+        </div>
+        <div class="profile-info">
+          <p class="p-role" id="pRole">The note-taker</p>
+          <h3 id="pName">Mori</h3>
+          <p class="p-tag" id="pTag">Takes notes on her notepad</p>
+          <p class="p-bio" id="pBio"></p>
+          <div class="p-notes" id="pNotesWrap">
+            <p class="mini">How notes appear</p>
+            <img id="pNotes" src="assets/shots/mori-points.webp" alt="" loading="lazy">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="cast-features">
+      <div class="cf reveal">
+        <span class="cf-ico">📌</span>
+        <h3>Live notes</h3>
+        <p>Every 90 seconds or so (or as it happens) your companion pins up decisions, action items with owners, open questions, numbers and key points. Pick <i>Default</i> or <i>Modern detailed</i>, add a focus hint, pin what matters. Everything is saved in the meeting's Notes tab.</p>
+      </div>
+      <div class="cf reveal">
+        <span class="cf-ico">🪟</span>
+        <h3>On your desktop</h3>
+        <p>Drag them out of the window and they float above everything, your call app included, anywhere across your monitors. Hide them into a slim bar with record, pause and mic controls.</p>
+      </div>
+      <div class="cf reveal">
+        <span class="cf-ico">🔁</span>
+        <h3>Regenerate after the meeting</h3>
+        <p>Not happy with the notes? Regenerate them with a new focus or style, undo, or restore earlier ones.</p>
+      </div>
+      <div class="cf reveal">
+        <span class="cf-ico">💬</span>
+        <h3>Honest about what they do</h3>
+        <p>The bubble shows whether a local or cloud model is answering. No model set up? They say so. A provider fails? You get a worried face and the reason, never a pretend answer.</p>
+      </div>
+      <div class="cf reveal">
+        <span class="cf-ico">😴</span>
+        <h3>Alive, but calm</h3>
+        <p>They idle, listen, write, think, talk, doze off when you pause, and look worried when something breaks. Small next to the transcript, never on top of it.</p>
+      </div>
+      <div class="cf reveal">
+        <span class="cf-ico">🎛️</span>
+        <h3>Entirely optional</h3>
+        <p>Off by default. Switch on in Settings → Companion, choose placement (app window or desktop), size and how often notes are taken.</p>
+      </div>
+    </div>
+
+    <div class="duo reveal">
+      <figure class="shot"><img src="assets/shots/mori-points.webp" alt="Mori pinning live notes next to the transcript" loading="lazy" width="1240" height="820"><figcaption>Live notes, pinned beside the transcript</figcaption></figure>
+      <figure class="shot tall"><img src="assets/shots/mori-desktop.webp" alt="Mori on the desktop with live notes" loading="lazy" width="628" height="860"><figcaption>On the desktop, always on top</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────── EPISODE 8: PRIVACY ───────────────────────── -->
+<section class="episode night" id="ep8" data-char="jin">
+  <header class="ep-card">
+    <div class="burst" aria-hidden="true"></div>
+    <span class="ep-no" aria-hidden="true">08</span>
+    <div class="ep-text">
+      <p class="ep-label">Episode 8 · 第八話 <span class="jpw">秘密</span></p>
+      <h2>Your meetings stay yours. <span>You always see where data goes.</span></h2>
+    </div>
+  </header>
+  <div class="ep-body">
+    <aside class="stage" aria-hidden="true">
+      <div class="bubble"><span class="who">Jin</span><p class="say"></p></div>
+      <div class="actor"><img alt="" width="300" height="480"></div>
+      <div class="shadow"></div>
+    </aside>
+    <div class="steps">
+      <article class="step" data-pose="idle" data-say="Three modes. You choose. The badge never lies.">
+        <div class="step-text">
+          <h3>Local, Hybrid or Cloud</h3>
+          <div class="modes">
+            <div class="mode"><span class="badge local">Local</span><p>Whisper on your GPU, a local model for summaries and Ask.</p><p class="leaves">Leaves your laptop: <b>nothing</b></p></div>
+            <div class="mode hl"><span class="badge">Hybrid · default</span><p>Whisper on your GPU, a cloud provider for summaries and Ask.</p><p class="leaves">Leaves: meeting <b>text</b> for summaries, only the <b>few passages</b> Ask looks up</p></div>
+            <div class="mode"><span class="badge cloud">Cloud</span><p>A cloud speech-to-text service, any AI provider.</p><p class="leaves">Leaves: <b>audio</b> to the transcription provider, text as above</p></div>
+          </div>
+        </div>
+      </article>
+      <article class="step" data-pose="thinking" data-say="Recordings on your disk. Index on your disk. Keys in your keyring.">
+        <div class="step-text">
+          <h3>Where everything lives</h3>
+          <ul class="ticks">
+            <li><b>Recordings</b> always stay on your disk, whatever the mode.</li>
+            <li>The <b>search index</b> for Ask (BM25 + embeddings) is always local.</li>
+            <li><b>API keys</b> live in the GNOME keyring and go only to their own provider.</li>
+          </ul>
+        </div>
+      </article>
+      <article class="step" data-pose="writing" data-say="Old audio, cut after N days. The notes stay.">
+        <div class="step-text">
+          <h3>Auto cleanup</h3>
+          <p>Delete meeting audio after 7, 14, 30 or 90 days (or any number), and keep everything else: transcript, summary, notes. It asks the first time, never touches a meeting that's open or pinned with <b>Keep audio</b>, and logs what it removed.</p>
+        </div>
+      </article>
+      <article class="step" data-pose="talking" data-say="Want a meeting gone? Gone. Index and all.">
+        <div class="step-text">
+          <h3>Forget a meeting, completely</h3>
+          <p>Delete a meeting and it's removed from the library, the search index and, if you tick the box, the disk.</p>
+        </div>
+        <figure class="shot"><img src="assets/shots/delete.webp" alt="Dialog asking to forget a meeting for good" loading="lazy" width="1240" height="820"></figure>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────── EPISODE 9: THEMES ───────────────────────── -->
+<section class="themes-section" id="ep9">
+  <header class="ep-card">
+    <div class="burst" aria-hidden="true"></div>
+    <span class="ep-no" aria-hidden="true">09</span>
+    <div class="ep-text">
+      <p class="ep-label">Episode 9 · 第九話 <span class="jpw">テーマ</span></p>
+      <h2>Twenty themes. <span>From warm Mostalgia to Blockworld pixels.</span></h2>
+    </div>
+  </header>
+  <div class="marquee" aria-label="All twenty themes">
+    <div class="track" id="trackA"></div>
+    <div class="track rev" id="trackB"></div>
+  </div>
+  <div class="wrap polish">
+    <div class="polish-grid">
+      <div class="pg reveal"><h3>Little animated scenes</h3><p>Each theme brings its own palette, corners, fonts, speaker colours and a small scene while you wait for the first word. All of it respects “reduce motion”.</p></div>
+      <div class="pg reveal"><h3>Text size, your way</h3><p>Scale the app from 90 to 150 % and the transcript separately, live, with <kbd>Ctrl</kbd> <kbd>=</kbd> / <kbd>−</kbd> / <kbd>0</kbd>. The companions follow.</p></div>
+      <div class="pg reveal"><h3>English and German</h3><p>Switch the UI language live. Settings are grouped into categories with search.</p></div>
+      <div class="pg reveal"><h3>Make your own</h3><p>Drop a JSON file into <code>~/.config/mostalgia/themes/</code> and it shows up next to the others.</p></div>
+    </div>
+    <figure class="shot wide reveal"><img src="assets/shots/themes-scenes.webp" alt="The animated scenes of each theme" loading="lazy" width="1400" height="1157"></figure>
+  </div>
+</section>
+
+<!-- ───────────────────────── NUMBERS ───────────────────────── -->
+<section class="numbers" id="numbers">
+  <div class="wrap">
+    <p class="section-kicker">パワー · Power level</p>
+    <h2 class="section-title">Measured on a laptop GPU.</h2>
+    <div class="stats">
+      <div class="stat reveal"><b data-count="30" data-prefix="~" data-suffix="×">~30×</b><span>faster than real time</span></div>
+      <div class="stat reveal"><b data-count="1" data-prefix="~" data-suffix=" s">~1 s</b><span>to the first provisional words</span></div>
+      <div class="stat reveal"><b>0.2–0.4 s</b><span>per live 9-second chunk</span></div>
+      <div class="stat reveal"><b data-count="25" data-prefix="~" data-suffix=" ms">~25 ms</b><span>Ask search across your whole library</span></div>
+      <div class="stat reveal"><b data-count="20">20</b><span>themes</span></div>
+      <div class="stat reveal"><b data-count="5">5</b><span>companions</span></div>
+    </div>
+    <p class="fine">Numbers from an RTX PRO 3000 laptop. Final pass: a second or two per minute of audio. Optional diarization: about 5 minutes of CPU per hour of audio.</p>
+  </div>
+</section>
+
+<!-- ───────────────────────── INSTALL ───────────────────────── -->
+<section class="install" id="install">
+  <div class="wrap install-grid">
+    <div>
+      <p class="section-kicker">はじめよう · Let's begin</p>
+      <h2 class="section-title">Get Mostalgia.</h2>
+      <p class="platform-row">
+        <span class="plat now">🐧 Linux · PipeWire / Pulse <b>available</b></span>
+        <span class="plat soon">Windows <b>planned</b></span>
+      </p>
+      <p>Built in Rust with GPUI. Vulkan works on NVIDIA, AMD and Intel without extra toolkits; no GPU at all works too, on the CPU or with a cloud engine.</p>
+      <a class="btn btn-primary" href="https://github.com/Mostaxd/Mostalgia">Source and full guide on GitHub</a>
+    </div>
+    <div class="terminal">
+      <div class="term-bar"><i></i><i></i><i></i><span>bash</span><button class="copy" id="copyBtn" type="button">Copy</button></div>
+<pre id="installCmd"><span class="c"># 1. Models: Whisper, Silero VAD, speaker + search models</span>
+./scripts/download-model.sh
+
+<span class="c"># 2. Build (add the Vulkan feature for your GPU)</span>
+cargo build --release --features vulkan
+
+<span class="c"># 3. App grid entry and the Super+Shift+R shortcut</span>
+./scripts/install-desktop.sh
+./scripts/install-gnome-shortcut.sh
+
+<span class="c"># 4. Connect an AI for summaries and Ask</span>
+mostalgia connections add ollama</pre>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────── NEXT EPISODE ───────────────────────── -->
+<section class="next" id="next">
+  <div class="wrap">
+    <p class="next-label">次回予告 · Next time on Mostalgia</p>
+    <ul class="next-list">
+      <li class="reveal"><b>Windows</b> joins the cast</li>
+      <li class="reveal"><b>Meeting templates</b>: stand-up, 1:1, customer call, interview</li>
+      <li class="reveal"><b>Action-item tracker</b> across meetings, with a weekly digest</li>
+    </ul>
+    <p class="tbc">To be continued…</p>
+  </div>
+</section>
+
+</main>
+
+<!-- ───────────────────────── ENDING CREDITS ───────────────────────── -->
+<footer class="credits">
+  <div class="sleepers" aria-hidden="true">
+    <img src="assets/cast/tsumugi-sleeping.webp" alt="" loading="lazy">
+    <img src="assets/cast/mori-sleeping.webp" alt="" loading="lazy">
+    <img src="assets/cast/kaito-sleeping.webp" alt="" loading="lazy">
+  </div>
+  <div class="wrap">
+    <p class="saved">Saved. This meeting is now unforgettable.</p>
+    <div class="roll">
+      <p><span>Speech</span> whisper.cpp · whisper-rs · OpenAI Whisper models</p>
+      <p><span>Voice detection</span> Silero VAD</p>
+      <p><span>Speakers</span> sherpa-onnx · pyannote segmentation 3.0 · WeSpeaker</p>
+      <p><span>Search</span> multilingual-e5-small via candle</p>
+      <p><span>Noise</span> nnnoiseless (RNNoise)</p>
+      <p><span>UI</span> GPUI · gpui-component · Lucide icons</p>
+      <p><span>Starring</span> Mori · Tsumugi · Hoshi · Kaito · Jin</p>
+    </div>
+    <p class="foot">Mostalgia · built with Rust · <a href="https://github.com/Mostaxd/Mostalgia">GitHub</a></p>
+  </div>
+</footer>
+
+<!-- Mobile companion (the side stages are hidden on small screens) -->
+<div class="mini-guide" id="miniGuide" aria-hidden="true">
+  <p class="say"></p>
+  <img alt="" width="300" height="480">
+</div>
+
+<script src="main.js"></script>
+</body>
+</html>

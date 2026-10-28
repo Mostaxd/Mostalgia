@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="sunset" x1="0" y1="0" x2="0.25" y2="1">
+      <stop offset="0" stop-color="#F7C26B"/>
+      <stop offset="0.55" stop-color="#D9653B"/>
+      <stop offset="1" stop-color="#B8472A"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.3" cy="0.18" r="0.7">
+      <stop offset="0" stop-color="#FFF4D6" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#FFF4D6" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#sunset)"/>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#glow)"/>
+  <!-- cassette shadow -->
+  <rect x="80" y="166" width="352" height="214" rx="36" fill="#2B1730" opacity="0.22"/>
+  <!-- cassette -->
+  <rect x="76" y="150" width="360" height="218" rx="36" fill="#FBF3E4"/>
+  <rect x="104" y="172" width="304" height="30" rx="10" fill="#D9653B" opacity="0.9"/>
+  <rect x="124" y="226" width="264" height="100" rx="50" fill="#2B1730"/>
+  <circle cx="178" cy="276" r="30" fill="#FBF3E4"/>
+  <circle cx="334" cy="276" r="30" fill="#FBF3E4"/>
+  <circle cx="178" cy="276" r="11" fill="#5B2A4E"/><circle cx="334" cy="276" r="11" fill="#5B2A4E"/>
+  <rect x="220" y="267.0" width="7" height="18" rx="3.5" fill="#F2A541"/><rect x="232" y="259.0" width="7" height="34" rx="3.5" fill="#F2A541"/><rect x="244" y="250.0" width="7" height="52" rx="3.5" fill="#F2A541"/><rect x="256" y="261.0" width="7" height="30" rx="3.5" fill="#F2A541"/><rect x="268" y="254.0" width="7" height="44" rx="3.5" fill="#F2A541"/><rect x="280" y="265.0" width="7" height="22" rx="3.5" fill="#F2A541"/><rect x="292" y="269.0" width="7" height="14" rx="3.5" fill="#F2A541"/>
+  <path d="M152 368 L172 338 H340 L360 368 Z" fill="#F0DFC2"/>
+</svg>
