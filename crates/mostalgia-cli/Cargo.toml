@@ -3,6 +3,8 @@ name = "mostalgia"
 description = "Local meeting recorder with live Whisper transcription"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"

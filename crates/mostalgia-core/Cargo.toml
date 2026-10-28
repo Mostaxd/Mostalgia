@@ -3,6 +3,8 @@ name = "mostalgia-core"
 description = "Capture, live + final transcription, storage and summaries for Mostalgia"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"

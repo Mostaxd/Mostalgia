@@ -324,3 +324,26 @@ from the library, the search index and — if you tick the box — the disk.
 - Fonts (SIL OFL): Inter, JetBrains Mono, IBM Plex Sans, Atkinson Hyperlegible, Noto Sans Arabic, Pixelify Sans, VT323
 
 Brand, icon and palette: see [`assets/brand/BRANDING.md`](assets/brand/BRANDING.md).
+
+## Contributing
+
+Bug reports, ideas and pull requests are welcome. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test and open a pull
+request, and the [Code of Conduct](CODE_OF_CONDUCT.md) for how we treat each other.
+
+## License
+
+Mostalgia is licensed under either of
+
+- [Apache License, Version 2.0](LICENSE-APACHE)
+- [MIT license](LICENSE-MIT)
+
+at your option. Copyright 2026 Mostafa Ahmed ([github.com/Mostaxd](https://github.com/Mostaxd)).
+
+**Forks are welcome.** If you share or ship a copy or a changed version, keep
+the [NOTICE](NOTICE) file and credit the original project, for example in your
+README or About screen: *"Based on Mostalgia by github.com/Mostaxd"*. Please
+don't present a fork as the official Mostalgia.
+
+Third-party code, models and fonts listed under [Credits](#credits) keep their
+own licenses.
