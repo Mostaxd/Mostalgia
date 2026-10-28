@@ -94,4 +94,9 @@ pub const EN: &[(&str, &str)] = &[
     ("Gilt ab dem nächsten Satz. Wahrscheinlichkeit: {}", "Applies from the next sentence. Likelihood: {}"),
     ("Gilt ab dem nächsten Satz.", "Applies from the next sentence."),
     ("Weitere Sprachen", "More languages"),
+    ("Sprache wird gesucht …", "Finding speech …"),
+    ("Transkribiere … {} %", "Transcribing … {} %"),
+    ("Sprecher werden erkannt …", "Finding speakers …"),
+    ("Wird gespeichert …", "Saving …"),
+    ("Live-Transkript – wird durch das fertige ersetzt, sobald es gespeichert ist.", "Live transcript – replaced by the final one once it's saved."),
 ];

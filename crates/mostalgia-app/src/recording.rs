@@ -35,6 +35,7 @@ pub enum RecordingEvent {
 
 impl EventEmitter<RecordingEvent> for RecordingView {}
 
+#[derive(Clone)]
 struct LiveLine {
     source: Source,
     speaker: Option<String>,
@@ -69,7 +70,9 @@ enum Phase {
     Setup,
     Loading,
     Recording(Box<Live>),
-    Finalizing { what: &'static str, detail: SharedString },
+    /// The final pass after Stop: its progress is in
+    /// [`crate::processing`]; the live transcript stays readable meanwhile.
+    Finalizing { what: &'static str, detail: SharedString, title: String, lines: Vec<LiveLine> },
 }
 
 struct Live {
@@ -269,6 +272,26 @@ impl RecordingView {
     /// Shows a recording in progress with the given lines, without any
     /// audio — for screenshots of the UI.
     #[doc(hidden)]
+    /// Screenshots: after Stop, the final pass `fraction` of the way
+    /// through, over the demo's live lines.
+    #[doc(hidden)]
+    pub fn demo_finalizing(&mut self, fraction: f32, cx: &mut Context<Self>) {
+        let lines = match &self.phase {
+            Phase::Recording(live) => live.lines.clone(),
+            _ => Vec::new(),
+        };
+        let title = trf("Besprechung {}", &[&i18n::date_time(&chrono::Local::now())]);
+        let stage = finalize::Stage::Transcribing { track: 1, tracks: 2, done: (fraction as f64 * 2.0 - 1.0).max(0.0) * 100.0, total: 100.0 };
+        crate::processing::set(crate::processing::Key::Recording, crate::processing::Job { title: title.clone(), stage: stage.label(), fraction: stage.fraction() });
+        self.phase = Phase::Finalizing {
+            what: tr("Transkript wird fertiggestellt …"),
+            detail: trf("Feinschliff mit {}", &[&"Whisper large-v3-turbo"]).into(),
+            title,
+            lines,
+        };
+        cx.notify();
+    }
+
     pub fn demo(&mut self, secs: u64, lines: &[(Source, f64, &str)], cx: &mut Context<Self>) {
         let (tx, rx) = crossbeam_channel::unbounded();
         drop(tx);
@@ -820,14 +843,22 @@ impl RecordingView {
 
     pub fn stop(&mut self, cx: &mut Context<Self>) {
         let final_label = self.config.engine_label(&self.config.final_engine);
+        let Phase::Recording(live) = &self.phase else { return };
+        let started = chrono::Local::now() - chrono::Duration::milliseconds(live.started.elapsed().as_millis() as i64);
+        let title = trf("Besprechung {}", &[&i18n::date_time(&started)]);
         let busy = Phase::Finalizing {
             what: tr("Transkript wird fertiggestellt …"),
             detail: trf("Feinschliff mit {}", &[&final_label]).into(),
+            title: title.clone(),
+            lines: live.lines.clone(),
         };
         let Phase::Recording(live) = std::mem::replace(&mut self.phase, busy) else {
             return;
         };
         let live = *live;
+        use crate::processing::{self, Job, Key};
+        processing::set(Key::Recording, Job { title, stage: tr("Transkript wird fertiggestellt …").to_string(), fraction: None });
+        let progress = finalize::Progress::new(|stage| processing::stage(Key::Recording, stage.label(), stage.fraction()));
         let Some(recorder) = live.recorder else {
             self.phase = Phase::Setup;
             return;
@@ -850,6 +881,7 @@ impl RecordingView {
                 diarize: config.diarize,
                 denoise_mic: config.denoise,
                 people,
+                progress,
             };
             let language = config.language.as_str();
             let final_choice = &config.final_engine;
@@ -882,6 +914,7 @@ impl RecordingView {
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
+            crate::processing::clear(crate::processing::Key::Recording);
             this.update(cx, |this, cx| match result {
                 Ok(saved) => {
                     if let Some(e) = &saved.error {
@@ -1116,6 +1149,65 @@ impl RecordingView {
             .child(gpui_kit::component::spinner::Spinner::new().large())
             .child(div().text_color(cx.theme().muted_foreground).child(text))
             .when_some(detail, |el, d| el.child(div().text_xs().text_color(cx.theme().muted_foreground).child(d)))
+    }
+
+    /// After Stop: the meeting's title, what the final pass is doing (with
+    /// how far, when known) and the live transcript, which the final one
+    /// replaces once it's saved.
+    fn render_finalizing(&self, what: &'static str, detail: SharedString, title: String, lines: &[LiveLine], cx: &App) -> impl IntoElement {
+        let theme = cx.theme();
+        let job = crate::processing::get(crate::processing::Key::Recording);
+        let stage = job.as_ref().map_or_else(|| what.to_string(), |j| j.stage.clone());
+        let fraction = job.and_then(|j| j.fraction);
+        let speaker_labels = self.config.speaker_labels;
+        v_flex()
+            .size_full()
+            .child(
+                v_flex()
+                    .px_6()
+                    .py_4()
+                    .gap_2()
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .child(div().text_lg().font_semibold().child(title))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(gpui_kit::component::spinner::Spinner::new().small().color(theme.primary))
+                            .child(div().text_sm().font_medium().child(stage))
+                            .child(div().text_xs().text_color(theme.muted_foreground).child(detail)),
+                    )
+                    .child(ui::progress_bar(fraction, cx)),
+            )
+            .child(
+                div()
+                    .px_6()
+                    .pt_3()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(tr("Live-Transkript – wird durch das fertige ersetzt, sobald es gespeichert ist.")),
+            )
+            .child(
+                v_flex()
+                    .id("finalizing-lines")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px_6()
+                    .py_2()
+                    .gap_1()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .children(lines.iter().map(|l| {
+                        let who = l.speaker.as_deref().unwrap_or(l.source.speaker_label());
+                        h_flex()
+                            .gap_3()
+                            .items_start()
+                            .child(div().flex_none().w(px(52.)).text_xs().font_family(theme.mono_font_family.clone()).child(ui::hms(l.start_secs)))
+                            .when(speaker_labels, |el| el.child(div().flex_none().text_xs().font_medium().child(ui::speaker_display(who))))
+                            .child(div().flex_1().min_w_0().child(l.text.clone()))
+                    })),
+            )
     }
 
     fn render_live(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1517,7 +1609,7 @@ impl Render for RecordingView {
                 let detail = self.config.engine_label(&self.config.live_engine).into();
                 self.render_busy(tr("Erinnerungen werden geladen …"), Some(detail), false, cx).into_any_element()
             }
-            Phase::Finalizing { what, detail } => self.render_busy(what, Some(detail.clone()), true, cx).into_any_element(),
+            Phase::Finalizing { what, detail, title, lines } => self.render_finalizing(what, detail.clone(), title.clone(), lines, cx).into_any_element(),
             Phase::Recording(_) => self.render_live(cx).into_any_element(),
         };
         div().size_full().track_focus(&self.focus).child(content)

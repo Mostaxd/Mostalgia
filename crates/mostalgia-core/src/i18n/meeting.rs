@@ -124,4 +124,7 @@ pub const EN: &[(&str, &str)] = &[
     ("{} Zeilen jetzt bei {}", "{} lines now with {}"),
     ("Korrigiert — die Stimme von {} ist jetzt genauer gemerkt.", "Corrected — {}’s voice is now remembered more accurately."),
     ("Nur einzelne Zeilen? Rechtsklick auf eine Zeile.", "Only some lines? Right-click a line."),
+    ("Zusammenfassung wird geschrieben …", "Writing summary …"),
+    ("{} schreibt Notizen …", "{} is taking notes …"),
+    ("{} schreibt Notizen … (Teil {} von {})", "{} is taking notes … (part {} of {})"),
 ];

@@ -287,6 +287,16 @@ pub fn level_meter(level: f32, active: bool, cx: &App) -> Div {
         )
 }
 
+/// A thin progress bar: filled to `fraction`, or a faint full bar while
+/// how far is unknown (the spinner next to it shows it's working).
+pub fn progress_bar(fraction: Option<f32>, cx: &App) -> Div {
+    let theme = cx.theme();
+    div().w_full().h(px(4.)).rounded_full().bg(theme.muted).child(match fraction {
+        Some(f) => div().h_full().rounded_full().bg(theme.primary).w(relative(f.clamp(0.0, 1.0))),
+        None => div().h_full().rounded_full().bg(theme.primary.opacity(0.25)).w_full(),
+    })
+}
+
 pub fn hms(secs: f64) -> String {
     let s = secs.max(0.0) as u64;
     if s >= 3600 {

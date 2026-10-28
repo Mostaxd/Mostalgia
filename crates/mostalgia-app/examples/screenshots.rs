@@ -157,6 +157,18 @@ fn main() {
         // Let the line fade-ins finish.
         std::thread::sleep(std::time::Duration::from_millis(600));
         shot("2-recording", &mut cx);
+        // After Stop: the final pass under way, in the library and here.
+        if std::env::var_os("FINALIZING").is_some() {
+            cx.update_window(handle, |_, _, cx| {
+                let rec = view.read(cx).recording_view();
+                rec.update(cx, |r, cx| r.demo_finalizing(0.71, cx));
+                view.update(cx, |_, cx| cx.notify());
+            })
+            .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            shot("2f-finalizing", &mut cx);
+            mostalgia_app::processing::clear(mostalgia_app::processing::Key::Recording);
+        }
         // Mori on the recording screen: writing, with live points, with an
         // answer in her bubble (no network). Needs `companion: true` in the config.
         if full && cx.update(|cx| view.read(cx).companion_view().read(cx).is_enabled()) {
