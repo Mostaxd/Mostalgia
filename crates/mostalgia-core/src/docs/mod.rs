@@ -61,7 +61,24 @@ pub struct Document {
     /// Answers (Ask, the chat, live suggestions) search it; switched off,
     /// it stays in the drive but isn't used.
     pub active: bool,
+    /// The collection it belongs to (`None`: none).
+    pub collection_id: Option<i64>,
+    /// Answers use it: it is switched on and so is its collection.
+    pub used: bool,
 }
+
+/// A group of documents (say, one project's), switched on or off for
+/// answers as a whole.
+#[derive(Clone, Debug)]
+pub struct Collection {
+    pub id: i64,
+    pub name: String,
+    pub active: bool,
+    pub documents: usize,
+}
+
+/// SQL: whether answers use document `d` (it and its collection are on).
+const USED: &str = "(d.active AND COALESCE((SELECT k.active FROM doc_collections k WHERE k.id = d.collection_id), 1))";
 
 impl Document {
     /// "p. 4" for a PDF page, "§4" for a section.
@@ -287,7 +304,9 @@ pub fn index_pending(cancel: &std::sync::atomic::AtomicBool) -> Result<usize> {
 const SELECT: &str = "SELECT d.id, d.title, d.file_name, d.path, d.kind, d.language, d.size_bytes, d.pages, d.added_at, d.indexed_at, d.error,
     (SELECT COUNT(*) FROM doc_chunks c WHERE c.document_id = d.id),
     EXISTS (SELECT 1 FROM doc_chunks c WHERE c.document_id = d.id AND c.embedding IS NOT NULL),
-    d.active
+    d.active, d.collection_id,
+    -- USED
+    (d.active AND COALESCE((SELECT k.active FROM doc_collections k WHERE k.id = d.collection_id), 1))
     FROM documents d";
 
 fn row(r: &rusqlite::Row) -> rusqlite::Result<Document> {
@@ -306,6 +325,8 @@ fn row(r: &rusqlite::Row) -> rusqlite::Result<Document> {
         chunks: r.get::<_, i64>(11)? as usize,
         embedded: r.get(12)?,
         active: r.get(13)?,
+        collection_id: r.get(14)?,
+        used: r.get(15)?,
     })
 }
 
@@ -328,7 +349,7 @@ pub fn get(id: i64) -> Result<Option<Document>> {
 pub fn any() -> bool {
     Store::open(&paths::database())
         .and_then(|s| {
-            Ok(s.conn().query_row("SELECT EXISTS (SELECT 1 FROM doc_chunks c JOIN documents d ON d.id = c.document_id WHERE d.active)", [], |r| r.get::<_, bool>(0))?)
+            Ok(s.conn().query_row(&format!("SELECT EXISTS (SELECT 1 FROM doc_chunks c JOIN documents d ON d.id = c.document_id WHERE {USED})"), [], |r| r.get::<_, bool>(0))?)
         })
         .unwrap_or(false)
 }
@@ -406,13 +427,70 @@ pub fn set_active(id: i64, active: bool) -> Result<()> {
     Ok(())
 }
 
+/// All collections by name, with how many documents each holds.
+pub fn collections() -> Result<Vec<Collection>> {
+    let store = Store::open(&paths::database())?;
+    let mut stmt = store.conn().prepare(
+        "SELECT k.id, k.name, k.active, (SELECT COUNT(*) FROM documents d WHERE d.collection_id = k.id)
+         FROM doc_collections k ORDER BY k.name COLLATE NOCASE",
+    )?;
+    Ok(stmt
+        .query_map([], |r| Ok(Collection { id: r.get(0)?, name: r.get(1)?, active: r.get(2)?, documents: r.get::<_, i64>(3)? as usize }))?
+        .collect::<rusqlite::Result<_>>()?)
+}
+
+fn collection_name(name: &str) -> Result<&str> {
+    let name = name.trim();
+    anyhow::ensure!(!name.is_empty(), "{}", tr("Der Name darf nicht leer sein"));
+    Ok(name)
+}
+
+/// A new collection (or the one with that name); returns its id.
+pub fn create_collection(name: &str) -> Result<i64> {
+    let name = collection_name(name)?;
+    let store = Store::open(&paths::database())?;
+    let conn = store.conn();
+    if let Some(id) = conn.query_row("SELECT id FROM doc_collections WHERE name = ?1", [name], |r| r.get(0)).optional()? {
+        return Ok(id);
+    }
+    conn.execute("INSERT INTO doc_collections (name, created_at) VALUES (?1, ?2)", params![name, Local::now().timestamp()])?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn rename_collection(id: i64, name: &str) -> Result<()> {
+    let name = collection_name(name)?;
+    let store = Store::open(&paths::database())?;
+    let taken: bool = store.conn().query_row("SELECT EXISTS (SELECT 1 FROM doc_collections WHERE name = ?1 AND id != ?2)", params![name, id], |r| r.get(0))?;
+    anyhow::ensure!(!taken, "{}", trf("Es gibt schon eine Sammlung „{}“", &[&name]));
+    store.conn().execute("UPDATE doc_collections SET name = ?2 WHERE id = ?1", params![id, name])?;
+    Ok(())
+}
+
+/// Switches a whole collection on or off for answers (each document keeps
+/// its own switch).
+pub fn set_collection_active(id: i64, active: bool) -> Result<()> {
+    Store::open(&paths::database())?.conn().execute("UPDATE doc_collections SET active = ?2 WHERE id = ?1", params![id, active])?;
+    Ok(())
+}
+
+/// Removes a collection; its documents stay in the drive, in none.
+pub fn delete_collection(id: i64) -> Result<bool> {
+    Ok(Store::open(&paths::database())?.conn().execute("DELETE FROM doc_collections WHERE id = ?1", [id])? > 0)
+}
+
+/// Puts a document into a collection (`None`: into none).
+pub fn set_collection(id: i64, collection: Option<i64>) -> Result<()> {
+    Store::open(&paths::database())?.conn().execute("UPDATE documents SET collection_id = ?2 WHERE id = ?1", params![id, collection])?;
+    Ok(())
+}
+
 fn search_in(query: &str, only: Option<i64>, inactive_too: bool, limit: usize) -> Result<Vec<DocHit>> {
     let store = Store::open(&paths::database())?;
     let conn = store.conn();
     let allowed: HashSet<i64> = {
-        let mut stmt = conn.prepare(
-            "SELECT c.id FROM doc_chunks c JOIN documents d ON d.id = c.document_id WHERE (?1 IS NULL OR c.document_id = ?1) AND (?2 OR d.active)",
-        )?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT c.id FROM doc_chunks c JOIN documents d ON d.id = c.document_id WHERE (?1 IS NULL OR c.document_id = ?1) AND (?2 OR {USED})"
+        ))?;
         stmt.query_map(params![only, inactive_too], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
     };
     if allowed.is_empty() {
@@ -524,6 +602,23 @@ mod tests {
         assert!(!any());
         assert_eq!(search_drive("VPN", 5).unwrap().len(), 1);
         set_active(id, true).unwrap();
+        assert_eq!(search("VPN", None, 5).unwrap().len(), 1);
+        // A collection switched off takes its documents with it.
+        let k = create_collection(" IT ").unwrap();
+        assert_eq!(create_collection("it").unwrap(), k);
+        set_collection(id, Some(k)).unwrap();
+        set_collection_active(k, false).unwrap();
+        let doc = get(id).unwrap().unwrap();
+        assert!(doc.active && !doc.used && doc.collection_id == Some(k));
+        assert!(search("VPN", None, 5).unwrap().is_empty());
+        assert_eq!(search_drive("VPN", 5).unwrap().len(), 1);
+        let c = &collections().unwrap()[0];
+        assert_eq!((c.name.as_str(), c.active, c.documents), ("IT", false, 1));
+        let k2 = create_collection("Onboarding").unwrap();
+        assert!(rename_collection(k2, "it").is_err());
+        assert!(delete_collection(k).unwrap());
+        let doc = get(id).unwrap().unwrap();
+        assert!(doc.used && doc.collection_id.is_none());
         assert_eq!(search("VPN", None, 5).unwrap().len(), 1);
         assert!(delete(id).unwrap());
         assert!(search("VPN", None, 5).unwrap().is_empty());

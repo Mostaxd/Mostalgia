@@ -338,6 +338,9 @@ enum DocsAction {
     Add {
         #[arg(required = true)]
         files: Vec<PathBuf>,
+        /// Put them into this collection (created if needed)
+        #[arg(long)]
+        collection: Option<String>,
     },
     /// Search the documents
     Search {
@@ -350,6 +353,20 @@ enum DocsAction {
     Reindex { id: i64 },
     /// Remove a document (and its copy in the data directory)
     Remove { id: i64 },
+    /// Use a document for answers again
+    On { id: i64 },
+    /// Keep a document but leave it out of answers
+    Off { id: i64 },
+    /// Put a document into a collection (created if needed); no name: into none
+    Move { id: i64, collection: Option<String> },
+    /// List the collections
+    Collections,
+    /// Use a collection's documents for answers again
+    CollectionOn { name: String },
+    /// Leave a whole collection out of answers
+    CollectionOff { name: String },
+    /// Remove a collection (its documents stay, in none)
+    CollectionRemove { name: String },
 }
 
 #[derive(Subcommand)]
@@ -1040,9 +1057,16 @@ fn reindex(all: bool) -> Result<()> {
 
 fn docs_cmd(action: DocsAction) -> Result<()> {
     use mostalgia_core::docs;
+    let collection = |name: &str| -> Result<docs::Collection> {
+        docs::collections()?
+            .into_iter()
+            .find(|k| k.name.eq_ignore_ascii_case(name.trim()))
+            .with_context(|| trf("Keine Sammlung „{}“", &[&name]))
+    };
     match action {
         DocsAction::List => {
             let list = docs::list()?;
+            let names: std::collections::HashMap<i64, String> = docs::collections()?.into_iter().map(|k| (k.id, k.name)).collect();
             if list.is_empty() {
                 println!("{}", tr("Noch keine Dokumente."));
             }
@@ -1053,15 +1077,22 @@ fn docs_cmd(action: DocsAction) -> Result<()> {
                     (None, Some(_)) => trf("{} Abschnitte", &[&d.chunks]),
                 };
                 let lang = if d.language.is_empty() { "–" } else { d.language.as_str() };
-                println!("#{:<4} {:<5} {lang:<3} {}  {}  ({state})", d.id, d.kind.id(), i18n::date(&d.added_at), d.title);
+                let place = d.collection_id.and_then(|k| names.get(&k)).map_or(String::new(), |n| format!("  [{n}]"));
+                let off = if d.used { String::new() } else { format!("  – {}", tr("Aus")) };
+                println!("#{:<4} {:<5} {lang:<3} {}  {}{place}  ({state}){off}", d.id, d.kind.id(), i18n::date(&d.added_at), d.title);
             }
         }
-        DocsAction::Add { files } => {
+        DocsAction::Add { files, collection } => {
             if !mostalgia_core::ask::embed::available() {
                 eprintln!("[mostalgia] {}", tr("Bedeutungsmodell fehlt (scripts/download-model.sh) — nur Stichwortsuche"));
             }
+            let collection = collection.map(|n| docs::create_collection(&n)).transpose()?;
             for f in files {
-                match docs::add(&f) {
+                let added = docs::add(&f);
+                if let (Ok((id, _)), Some(_)) = (&added, collection) {
+                    docs::set_collection(*id, collection)?;
+                }
+                match added {
                     Ok((id, false)) => println!("{}", trf("{} ist schon da (#{})", &[&f.display(), &id])),
                     Ok((id, true)) => match docs::index(id) {
                         Ok(n) => println!("{}", trf("#{} {}: {} Abschnitte", &[&id, &f.display(), &n])),
@@ -1087,6 +1118,21 @@ fn docs_cmd(action: DocsAction) -> Result<()> {
             if !docs::delete(id)? {
                 anyhow::bail!("{}", tr("Dokument nicht gefunden"));
             }
+        }
+        DocsAction::On { id } => docs::set_active(id, true)?,
+        DocsAction::Off { id } => docs::set_active(id, false)?,
+        DocsAction::Move { id, collection } => docs::set_collection(id, collection.map(|n| docs::create_collection(&n)).transpose()?)?,
+        DocsAction::Collections => {
+            for k in docs::collections()? {
+                let off = if k.active { String::new() } else { format!("  – {}", tr("Aus")) };
+                let n = if k.documents == 1 { tr("1 Dokument").to_string() } else { trf("{} Dokumente", &[&k.documents]) };
+                println!("{}  ({n}){off}", k.name);
+            }
+        }
+        DocsAction::CollectionOn { name } => docs::set_collection_active(collection(&name)?.id, true)?,
+        DocsAction::CollectionOff { name } => docs::set_collection_active(collection(&name)?.id, false)?,
+        DocsAction::CollectionRemove { name } => {
+            docs::delete_collection(collection(&name)?.id)?;
         }
     }
     Ok(())
