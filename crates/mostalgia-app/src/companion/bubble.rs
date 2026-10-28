@@ -13,7 +13,7 @@ use mostalgia_core::ask::{self, AskEvent};
 use mostalgia_core::companion::{self, AnswerEvent};
 use mostalgia_core::config::Config;
 use mostalgia_core::connections;
-use mostalgia_core::i18n::tr;
+use mostalgia_core::i18n::{tr, trf};
 
 use mostalgia_core::ask::cite::Target;
 
@@ -88,9 +88,9 @@ impl Companion {
     /// recording (question, answer with `[[t:…]]` citations) out of the
     /// bubble, to save with the meeting (`Store::add_companion_chat`).
     pub fn take_session_chat(&mut self) -> Vec<(String, String)> {
-        let (session, rest): (Vec<Turn>, Vec<Turn>) = std::mem::take(&mut self.turns).into_iter().partition(|t| t.scope == Scope::Meeting);
+        let (session, rest): (Vec<Turn>, Vec<Turn>) = std::mem::take(&mut self.turns).into_iter().partition(|t| t.scope == Scope::Live);
         self.turns = rest;
-        if self.bubble.undo.as_ref().is_some_and(|u| u.turns.iter().any(|t| t.scope == Scope::Meeting)) {
+        if self.bubble.undo.as_ref().is_some_and(|u| u.turns.iter().any(|t| t.scope == Scope::Live)) {
             self.bubble.undo = None;
         }
         session
@@ -153,11 +153,22 @@ impl Companion {
     /// meeting while recording and all meetings otherwise.
     pub(super) fn scope(&self, cx: &App) -> Scope {
         let recording = self.recording.read(cx).is_recording();
+        let open = self.open_meeting.is_some();
         match self.scope_choice {
-            Some(Scope::Meeting) if recording => Scope::Meeting,
+            Some(Scope::Live) if recording => Scope::Live,
+            Some(Scope::Open) if open => Scope::Open,
             Some(Scope::Library) => Scope::Library,
-            _ if recording => Scope::Meeting,
+            _ if recording => Scope::Live,
+            _ if open => Scope::Open,
             _ => Scope::Library,
+        }
+    }
+
+    /// The meeting open in the app changed (`None`: no meeting screen).
+    pub fn set_open_meeting(&mut self, meeting: Option<(i64, String)>, cx: &mut Context<Self>) {
+        if self.open_meeting != meeting {
+            self.open_meeting = meeting;
+            cx.notify();
         }
     }
 
@@ -167,29 +178,38 @@ impl Companion {
             return;
         }
         let scope = self.scope(cx);
+        let meeting = (scope == Scope::Open).then(|| self.open_meeting.as_ref().map(|(id, _)| *id)).flatten();
         let history: Vec<(String, String)> = self
             .turns
             .iter()
-            .filter(|t| t.scope == scope && t.done && t.error.is_none())
+            .filter(|t| t.scope == scope && t.meeting == meeting && t.done && t.error.is_none())
             .map(|t| (t.question.clone(), t.answer.clone()))
             .collect();
         self.turns.push(Turn {
             scope,
+            meeting,
             question: question.clone(),
             answer: String::new(),
             status: Some(match scope {
-                Scope::Meeting => tr("Mori liest das Live-Transkript …").into(),
+                Scope::Live => tr("Mori liest das Live-Transkript …").into(),
+                Scope::Open => tr("Mori liest die Besprechung …").into(),
                 Scope::Library => tr("Durchsuche Besprechungen …").into(),
             }),
             error: None,
             done: false,
         });
         match scope {
-            Scope::Meeting => {
+            Scope::Live => {
                 let lines = self.recording.read(cx).transcript_lines(0.);
                 let transcript = companion::transcript_context(&lines, 200_000);
                 let (tx, rx) = crossbeam_channel::unbounded();
                 std::thread::spawn(move || companion::ask_live(&question, &history, &transcript, &tx));
+                self.chat_rx = Some(ChatRx::Live(rx));
+            }
+            Scope::Open => {
+                let id = meeting.unwrap_or_default();
+                let (tx, rx) = crossbeam_channel::unbounded();
+                std::thread::spawn(move || companion::ask_meeting(&question, &history, id, &tx));
                 self.chat_rx = Some(ChatRx::Live(rx));
             }
             Scope::Library => {
@@ -260,6 +280,19 @@ impl Companion {
                 Ok(()) => {
                     self.error = None;
                     self.talking_until = Some(Instant::now() + Duration::from_secs(3));
+                    // "This meeting" chats are kept with that meeting right away.
+                    if let (Scope::Open, Some(id)) = (turn.scope, turn.meeting) {
+                        let chat = [(turn.question.clone(), turn.answer.clone())];
+                        match mostalgia_core::store::Store::open(&mostalgia_core::paths::database()).and_then(|mut s| s.add_companion_chat(id, &chat)) {
+                            Ok(()) => _cx.emit(MoriEvent::NotesSaved { meeting_id: id }),
+                            Err(e) => {
+                                self.error = Some(MoriError {
+                                    message: mostalgia_core::i18n::trf("Der Chat konnte nicht gespeichert werden: {}", &[&format!("{e:#}")]),
+                                    points: false,
+                                })
+                            }
+                        }
+                    }
                 }
                 Err(e) => {
                     turn.error = Some(e.clone());
@@ -276,10 +309,11 @@ impl Companion {
     /// Shows a finished question and answer without asking (screenshots).
     #[doc(hidden)]
     pub fn demo_chat(&mut self, meeting: bool, question: &str, answer: &str, cx: &mut Context<Self>) {
-        let scope = if meeting { Scope::Meeting } else { Scope::Library };
+        let scope = if meeting { Scope::Live } else { Scope::Library };
         self.scope_choice = Some(scope);
         self.turns.push(Turn {
             scope,
+            meeting: None,
             question: question.into(),
             answer: answer.into(),
             status: None,
@@ -294,12 +328,17 @@ impl Companion {
 
     fn render_answer(&self, ti: usize, turn: &Turn, cx: &mut Context<Self>) -> Div {
         let weak = cx.entity().downgrade();
-        let live = turn.scope == Scope::Meeting;
+        let live = turn.scope == Scope::Live;
+        let saved = turn.meeting;
         crate::ask_view::cited_answer(&turn.answer, &format!("mori-{ti}"), cx, move |target, _, cx| {
             weak.update(cx, |_, cx| match target {
                 Target::Meeting { meeting_id, secs } => cx.emit(MoriEvent::OpenCitation { meeting_id, secs }),
                 Target::Time { secs, .. } if live => cx.emit(ShowLiveMoment { secs }),
-                Target::Time { .. } => {}
+                Target::Time { secs, .. } => {
+                    if let Some(meeting_id) = saved {
+                        cx.emit(MoriEvent::OpenCitation { meeting_id, secs });
+                    }
+                }
             })
             .ok();
         })
@@ -393,37 +432,38 @@ impl Companion {
                 cx.notify();
             })));
 
+        let open_title = self.open_meeting.as_ref().map(|(_, t)| t.clone());
+        let scope_button = |id: &'static str, label: &'static str, tip: String, this_scope: Scope, enabled: bool, cx: &mut Context<Self>| {
+            Button::new(id)
+                .xsmall()
+                .label(tr(label))
+                .selected(scope == this_scope)
+                .when(scope == this_scope, |b| b.primary())
+                .when(scope != this_scope, |b| b.ghost())
+                .disabled(!enabled)
+                .tooltip(tip)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.scope_choice = Some(this_scope);
+                    cx.notify();
+                }))
+        };
         let scope_toggle = h_flex()
             .gap_1()
             .px_3()
             .py_2()
-            .child(
-                Button::new("mori-scope-meeting")
-                    .xsmall()
-                    .label(tr("Diese Besprechung"))
-                    .selected(scope == Scope::Meeting)
-                    .when(scope == Scope::Meeting, |b| b.primary())
-                    .when(scope != Scope::Meeting, |b| b.ghost())
-                    .disabled(!recording)
-                    .tooltip(if recording { tr("Fragt das Live-Transkript der laufenden Aufnahme") } else { tr("Nur während einer Aufnahme") })
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.scope_choice = Some(Scope::Meeting);
-                        cx.notify();
-                    })),
-            )
-            .child(
-                Button::new("mori-scope-library")
-                    .xsmall()
-                    .label(tr("Alle Besprechungen"))
-                    .selected(scope == Scope::Library)
-                    .when(scope == Scope::Library, |b| b.primary())
-                    .when(scope != Scope::Library, |b| b.ghost())
-                    .tooltip(tr("Durchsucht alle gespeicherten Besprechungen, mit Quellen"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.scope_choice = Some(Scope::Library);
-                        cx.notify();
-                    })),
-            );
+            .flex_wrap()
+            .when(recording, |el| {
+                el.child(scope_button("mori-scope-live", "Live-Besprechung", tr("Fragt das Live-Transkript der laufenden Aufnahme").to_string(), Scope::Live, true, cx))
+            })
+            .when_some(open_title.clone(), |el, title| {
+                el.child(scope_button("mori-scope-open", "Diese Besprechung", trf("Fragt die geöffnete Besprechung: {}", &[&title]), Scope::Open, true, cx))
+            })
+            .child(scope_button("mori-scope-library", "Alle Besprechungen", tr("Durchsucht alle gespeicherten Besprechungen, mit Quellen").to_string(), Scope::Library, true, cx))
+            .when(scope == Scope::Open, |el| {
+                el.when_some(open_title, |el, title| {
+                    el.child(div().w_full().text_xs().text_color(theme.muted_foreground).truncate().child(title))
+                })
+            });
 
         let mut body: Vec<AnyElement> = Vec::new();
         if let Some(problem) = &setup.problem {
@@ -474,7 +514,8 @@ impl Companion {
                     .text_sm()
                     .text_color(theme.muted_foreground)
                     .child(match scope {
-                        Scope::Meeting => tr("Frag mich zu dieser Besprechung, z. B. „Was wurde gerade entschieden?“ Ich lese das Live-Transkript mit."),
+                        Scope::Live => tr("Frag mich zu dieser Besprechung, z. B. „Was wurde gerade entschieden?“ Ich lese das Live-Transkript mit."),
+                        Scope::Open => tr("Frag mich zur geöffneten Besprechung – ich kenne Transkript, Zusammenfassung und Notizen und zeige dir die Stellen."),
                         Scope::Library => tr("Frag mich zu deinen gespeicherten Besprechungen. Ich suche passende Stellen und zeige die Quellen."),
                     })
                     .into_any_element(),
@@ -498,7 +539,8 @@ impl Companion {
                     .into_any_element(),
             );
             let label = match turn.scope {
-                Scope::Meeting => tr("Diese Besprechung"),
+                Scope::Live => tr("Live-Besprechung"),
+                Scope::Open => tr("Diese Besprechung"),
                 Scope::Library => tr("Alle Besprechungen"),
             };
             body.push(

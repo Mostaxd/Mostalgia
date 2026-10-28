@@ -97,6 +97,71 @@ time of the transcript line (a span as [[t:hh:mm:ss-hh:mm:ss]]): at most one cit
 sentence or bullet, placed at its end before the final punctuation. Write no other times in \
 brackets. If the transcript doesn't say, say so plainly and don't guess.";
 
+const MEETING_SYSTEM: &str = "\
+The user has a recorded meeting open in Mostalgia and asks you about it. You get its \
+transcript (from automatic speech recognition, so silently correct obviously misheard words), \
+and its summary and notes if it has them. Speakers: \"Me\" is the user, \"Others\" is \
+everyone else on the call, \"Speaker N\" are separated voices, other labels are names.
+
+Answer only from this meeting, concisely (a few sentences or short bullets), in the language \
+of the question. Cite the moment sparingly as [[t:hh:mm:ss]] with the time of the transcript \
+line (a span as [[t:hh:mm:ss-hh:mm:ss]]): at most one citation per sentence or bullet, placed \
+at its end before the final punctuation. Write no other times in brackets. If the meeting \
+doesn't say, say so plainly and don't guess.";
+
+/// Characters of a saved meeting sent with a "This meeting" question.
+const MEETING_CONTEXT_CHARS: usize = 120_000;
+
+/// Answers a question about a saved meeting (the one open in the app) from
+/// its transcript, summary and notes. Streams to `events`; always ends
+/// with `Done` or `Error`.
+pub fn ask_meeting(question: &str, history: &[(String, String)], meeting_id: i64, events: &Sender<AnswerEvent>) {
+    let result = (|| -> Result<llm::Completion> {
+        let req = Config::load().ask_request()?;
+        let store = crate::store::Store::open(&crate::paths::database())?;
+        let meeting = store.get(meeting_id)?.context(tr("Besprechung nicht gefunden"))?;
+        drop(store);
+        let lines: Vec<ContextLine> = meeting
+            .segments
+            .iter()
+            .map(|s| ContextLine { at_secs: s.start_secs, speaker: crate::summary::llm_speaker(s.speaker_label()), text: s.text.clone(), interim: false })
+            .collect();
+        let mut context = format!(
+            "Meeting \"{}\" on {}, {} min.\n\n",
+            meeting.title,
+            meeting.started_at.format("%Y-%m-%d %H:%M"),
+            (meeting.duration_secs / 60.0).round()
+        );
+        if let Some(summary) = &meeting.summary {
+            context.push_str(&format!("Summary:\n{}\n\n", summary.markdown.trim()));
+        }
+        if !meeting.notes.is_empty() {
+            context.push_str("Notes taken during the meeting:\n");
+            for n in &meeting.notes {
+                context.push_str(&format!("[{}] {}: {}\n", format_ts(n.at_secs), n.kind, n.text));
+            }
+            context.push('\n');
+        }
+        let budget = MEETING_CONTEXT_CHARS.saturating_sub(context.len()).max(10_000);
+        context.push_str(&format!("Transcript:\n{}", transcript_context(&lines, budget)));
+        let mut messages = Vec::new();
+        for (q, a) in history {
+            messages.push(Message::user(q.clone()));
+            messages.push(Message::assistant(a.clone()));
+        }
+        messages.push(Message::user(format!("{context}\n\nQuestion: {question}")));
+        let system = format!("{}\n\n{MEETING_SYSTEM}", persona(&req));
+        let mut on_delta = |d: &str| {
+            let _ = events.send(AnswerEvent::Delta(d.to_string()));
+        };
+        llm::chat(&req.connection, &req.model, req.effort.as_deref(), &system, &messages, 16_000, &mut on_delta)
+    })();
+    let _ = events.send(match result {
+        Ok(done) => AnswerEvent::Done(done.text.trim().to_string()),
+        Err(e) => AnswerEvent::Error(format!("{e:#}")),
+    });
+}
+
 /// Characters of transcript sent with a live question (the newest part).
 const LIVE_CONTEXT_CHARS: usize = 60_000;
 

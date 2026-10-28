@@ -60,6 +60,8 @@ pub struct MostalgiaApp {
     companion: Entity<Companion>,
     /// Mori on the desktop (her own process), when she's put there.
     mori_host: crate::companion::host::DesktopHost,
+    /// The open meeting as last told to Mori (for her "This meeting" scope).
+    mori_open_meeting: Option<Option<(i64, String)>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -144,6 +146,7 @@ impl MostalgiaApp {
             library_focus: cx.focus_handle(),
             companion,
             mori_host: Default::default(),
+            mori_open_meeting: None,
             _subscriptions: subs,
         };
         this.reload(cx);
@@ -270,6 +273,21 @@ impl MostalgiaApp {
         cx.notify();
     }
 
+    /// Tells Mori (in the window and on the desktop) which meeting is open.
+    fn tell_mori_open_meeting(&mut self, cx: &mut Context<Self>) {
+        let open = self.meeting_view().map(|v| {
+            let id = v.read(cx).id;
+            (id, self.meetings.iter().find(|m| m.id == id).map(|m| m.title.clone()).unwrap_or_default())
+        });
+        if self.mori_open_meeting.as_ref() == Some(&open) {
+            return;
+        }
+        self.mori_open_meeting = Some(open.clone());
+        let for_window = open.clone();
+        self.companion.update(cx, |c, cx| c.set_open_meeting(for_window, cx));
+        self.mori_host.send(&crate::companion::ipc::ToMori::OpenMeeting { meeting: open });
+    }
+
     /// Starts or ends Mori's desktop process to match the settings.
     fn sync_mori(&mut self, settings_changed: bool) {
         let config = mostalgia_core::config::Config::load();
@@ -287,7 +305,8 @@ impl MostalgiaApp {
         let had_problem = self.mori_host.problem.is_some();
         for event in self.mori_host.poll() {
             match event {
-                FromMori::Ready => {}
+                // A (re)started Mori learns the open meeting again.
+                FromMori::Ready => self.mori_open_meeting = None,
                 FromMori::OpenMeeting { meeting_id, secs } => {
                     self.open_meeting(meeting_id, window, cx);
                     if let Some(m) = self.meeting_view() {
@@ -922,6 +941,7 @@ impl Render for MostalgiaApp {
             self.lang_seen = Some(i18n::lang());
             self.search.update(cx, |s, cx| s.set_placeholder(tr("Transkripte durchsuchen"), window, cx));
         }
+        self.tell_mori_open_meeting(cx);
         let sidebar = self.render_sidebar(cx);
         let call_prompt = self.render_call_prompt(cx);
         let content: AnyView = match &self.screen {

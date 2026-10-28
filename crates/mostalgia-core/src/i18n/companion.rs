@@ -85,4 +85,9 @@ pub const EN: &[(&str, &str)] = &[
     ("Mori ist auf dem Desktop mehrmals abgestürzt ({}). Schalte sie in den Einstellungen aus und wieder ein, um es erneut zu versuchen.", "Mori crashed several times on the desktop ({}). Turn her off and on again in Settings to retry."),
     ("Zurück ins Mostalgia-Fenster", "Back into the Mostalgia window"),
     ("Aus dem Fenster ziehen bringt Mori auf den Desktop.", "Drag Mori out of the window to put her on the desktop."),
+    ("Live-Besprechung", "Live meeting"),
+    ("Fragt die geöffnete Besprechung: {}", "Asks about the open meeting: {}"),
+    ("Mori liest die Besprechung …", "Mori is reading the meeting …"),
+    ("Frag mich zur geöffneten Besprechung – ich kenne Transkript, Zusammenfassung und Notizen und zeige dir die Stellen.", "Ask me about the open meeting – I know its transcript, summary and notes and point you to the moments."),
+    ("Der Chat konnte nicht gespeichert werden: {}", "Couldn't save the chat: {}"),
 ];

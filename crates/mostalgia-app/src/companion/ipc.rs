@@ -51,6 +51,8 @@ pub enum ToMori {
     /// A recording was saved as this meeting: store pinned points and the
     /// chat with it.
     Saved { meeting_id: i64 },
+    /// The meeting open in the app (id, title), for "This meeting".
+    OpenMeeting { meeting: Option<(i64, String)> },
     /// Settings changed (language, theme, Mori's options).
     ReloadConfig,
     Quit,

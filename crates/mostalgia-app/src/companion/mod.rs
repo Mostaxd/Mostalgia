@@ -72,13 +72,17 @@ const DOZE_AFTER: Duration = Duration::from_secs(300);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Scope {
     /// The live transcript of the recording in progress.
-    Meeting,
+    Live,
+    /// The saved meeting open in the app.
+    Open,
     /// All saved meetings (the "Fragen" search pipeline).
     Library,
 }
 
 pub(crate) struct Turn {
     scope: Scope,
+    /// For `Scope::Open`: the meeting asked about.
+    meeting: Option<i64>,
     question: String,
     /// Answer so far (library answers carry [[m:ID@SECS]] markers).
     answer: String,
@@ -170,6 +174,8 @@ pub struct Companion {
     turns: Vec<Turn>,
     chat_rx: Option<ChatRx>,
     scope_choice: Option<Scope>,
+    /// The meeting open in the app (id, title), for the "This meeting" scope.
+    open_meeting: Option<(i64, String)>,
     chat_scroll: ScrollHandle,
     setup: Option<Setup>,
     bubble: bubble::BubbleState,
@@ -256,6 +262,7 @@ impl Companion {
             turns: Vec::new(),
             chat_rx: None,
             scope_choice: None,
+            open_meeting: None,
             chat_scroll: ScrollHandle::new(),
             setup: None,
             bubble: Default::default(),

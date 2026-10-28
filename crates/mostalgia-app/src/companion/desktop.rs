@@ -297,6 +297,7 @@ impl DesktopMori {
                     // arrive after this.)
                     self.companion.update(cx, |c, cx| c.recording_saved(meeting_id, cx));
                 }
+                ToMori::OpenMeeting { meeting } => self.companion.update(cx, |c, cx| c.set_open_meeting(meeting, cx)),
                 ToMori::ReloadConfig => {
                     let config = Config::load();
                     mostalgia_core::i18n::set_lang(mostalgia_core::i18n::resolve(&config.ui_language));
