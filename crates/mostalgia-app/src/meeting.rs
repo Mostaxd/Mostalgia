@@ -1787,9 +1787,11 @@ impl MeetingView {
                     .p_3()
                     .gap_2()
                     .rounded(theme.radius)
+                    .flex_wrap()
                     .bg(theme.muted)
                     .child(div().text_sm().child(trf("„{}“ umbenennen in", &[&ui::speaker_display(current)])))
-                    .child(Input::new(input).w(px(220.)).small())
+                    // Never squeezed by the hints next to it; they wrap instead.
+                    .child(Input::new(input).w(px(240. * ui::ui_scale())).flex_none().small())
                     .child(Button::new("spk-save").small().primary().label(tr("Speichern")).on_click(cx.listener(|this, _, _, cx| this.commit_edit(cx))))
                     .child(Button::new("spk-cancel").small().ghost().label(tr("Abbrechen")).on_click(cx.listener(|this, _, _, cx| this.cancel_edit(cx))))
                     .when(current != "Ich" && mostalgia_core::diarize::available(), |el| {
@@ -1811,7 +1813,7 @@ impl MeetingView {
                     .rounded(theme.radius)
                     .bg(theme.muted)
                     .child(div().text_sm().child(if n == 1 { tr("Diese Zeile gehört zu").to_string() } else { trf("Diese {} Zeilen gehören zu", &[&n]) }))
-                    .child(Input::new(input).w(px(220.)).small())
+                    .child(Input::new(input).w(px(240. * ui::ui_scale())).flex_none().small())
                     .child(Button::new("reassign-save").small().primary().label(tr("Speichern")).on_click(cx.listener(|this, _, _, cx| this.commit_edit(cx))))
                     .child(Button::new("reassign-cancel").small().ghost().label(tr("Abbrechen")).on_click(cx.listener(|this, _, _, cx| this.cancel_edit(cx))))
                     .into_any_element(),
