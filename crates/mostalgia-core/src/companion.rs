@@ -419,7 +419,11 @@ what and about what, with names and the subject instead of pronouns or \"it\" / 
 (\"Anna sends the revised Q3 forecast by Friday\", not \"She'll send it Friday\"). Use the \
 earlier part of the meeting to resolve who and what is meant. Write the user (\"Me\") \
 as \"I\" in the notes' language, with matching grammar (\"I write the copy for the last two \
-onboarding screens today\", not \"Me writes ...\"); never use \"Me\" or \"the user\" as a name.
+onboarding screens today\", not \"Me writes ...\"); never use \"Me\" or \"the user\" as a name. Attribute only when it matters: name who decided, owns or asked something when \
+people are named or several speakers take part; when one unnamed voice is talking (a talk, \
+video or lecture; labels like \"Speaker 3\" or \"Others\"), state the content directly \
+(\"10,000 steps burn about 300-500 calories\", not \"Speaker 3 says 10,000 steps burn ...\"); \
+never write \"Speaker N\" into a note.
 
 The transcript comes from speech recognition (silently correct obviously misheard \
 words); \"Me\" is the user, \"Others\" everyone else on the call. Only take notes from \
@@ -941,7 +945,11 @@ const REGEN_RULES: &str = "
 Each note must make sense on its own, read days later without the transcript: say who, what \
 and about what, with names and the subject instead of pronouns or \"it\" / \"that\" (\"Anna \
 sends the revised Q3 forecast by Friday\", not \"She'll send it Friday\"). Write the user \
-(\"Me\") as \"I\" in the notes' language (\"I tell support about the new date today\").
+(\"Me\") as \"I\" in the notes' language (\"I tell support about the new date today\"). Attribute only when it matters: name who decided, owns or asked something when \
+people are named or several speakers take part; when one unnamed voice is talking (a talk, \
+video or lecture; labels like \"Speaker 3\" or \"Others\"), state the content directly \
+(\"10,000 steps burn about 300-500 calories\", not \"Speaker 3 says 10,000 steps burn ...\"); \
+never write \"Speaker N\" into a note.
 
 Reply with ONLY a JSON object, no other text, the notes in the order things happened:
 {\"notes\": [{\"kind\": \"decision\" | \"action\" | \"question\" | \"fact\" | \"point\", \"text\": \"...\", \"at_secs\": <seconds of the transcript line it comes from, a number>}]}
