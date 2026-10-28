@@ -163,4 +163,13 @@ pub const EN: &[(&str, &str)] = &[
     ("Serviert jede Notiz wie eine Tasse Tee", "Serves each note like a cup of tea"),
     ("Schneidet jede Notiz auf einen Papierstreifen", "Cuts each note onto a paper strip"),
     ("Personen im Gespräch (mit dir):", "People in the call (including you):"),
+    ("Live-Untertitel", "Live captions"),
+    ("Markiert", "Flagged"),
+    ("Diese Stelle markieren", "Flag this line"),
+    ("Live", "Live"),
+    ("Deckkraft {} %", "Opacity {} %"),
+    ("Mostalgia öffnen", "Open Mostalgia"),
+    ("Warte auf die ersten Worte …", "Waiting for the first words …"),
+    ("Schwebendes Untertitel-Fenster", "Floating caption window"),
+    ("Während einer Aufnahme ein kleines Fenster über allen anderen (auch über Teams oder Zoom) mit den letzten Zeilen. Zeilen per Lesezeichen markieren, Mikrofon und Pause schalten – ohne den Fokus wegzunehmen. Verschiebbar an der oberen Leiste, Größe an der Ecke.", "During a recording, a small window above all others (also above Teams or Zoom) with the latest lines. Flag lines with a bookmark, switch the mic or pause – without taking the focus. Move it by its top bar, resize it at the corner."),
 ];

@@ -434,6 +434,24 @@ impl RecordingView {
         cx.notify();
     }
 
+    /// A bookmark at `secs` (a line flagged in the live captions); it
+    /// goes into the meeting with the others.
+    pub fn flag_at(&mut self, secs: f64, cx: &mut Context<Self>) {
+        let Phase::Recording(live) = &mut self.phase else { return };
+        if live.bookmarks.iter().any(|b| b.kind == MarkKind::Moment && (b.at_secs - secs).abs() < 0.5) {
+            return;
+        }
+        let n = live.bookmarks.iter().filter(|b| b.kind == MarkKind::Moment).count() + 1;
+        live.add_mark(Bookmark { at_secs: secs, label: trf("Markierung {}", &[&n]), kind: MarkKind::Moment });
+        cx.notify();
+    }
+
+    /// Seconds the live transcriber has been stuck, while it is.
+    pub fn stalled_secs(&self) -> Option<u64> {
+        let Phase::Recording(live) = &self.phase else { return None };
+        live.stalled_secs
+    }
+
     /// Identifies the recording in progress (changes with every new one).
     pub fn session_id(&self) -> Option<u64> {
         let Phase::Recording(live) = &self.phase else { return None };

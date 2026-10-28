@@ -163,6 +163,16 @@ pub struct Config {
     pub decision_log: bool,
     /// Earlier meetings were taken into the log (offered once).
     pub decision_log_built: bool,
+
+    // ── Live captions ──
+    /// A small always-on-top window with the live transcript during a
+    /// recording (to follow and flag lines over a call). Off by default.
+    pub live_captions: bool,
+    /// Its top-left (X11 root pixels) and size (logical px), once moved.
+    pub live_captions_pos: Option<(i32, i32)>,
+    pub live_captions_size: Option<(f32, f32)>,
+    /// Its background opacity, 0.4–1.0.
+    pub live_captions_opacity: f32,
 }
 
 /// When Mori looks for live notes during a recording.
@@ -325,6 +335,10 @@ impl Default for Config {
             audio_cleanup_confirmed: false,
             decision_log: false,
             decision_log_built: false,
+            live_captions: false,
+            live_captions_pos: None,
+            live_captions_size: None,
+            live_captions_opacity: 0.92,
         }
     }
 }

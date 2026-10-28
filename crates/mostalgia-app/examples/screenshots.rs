@@ -39,6 +39,40 @@ fn main() {
     let only: Option<Vec<String>> = std::env::var("THEMES").ok().map(|t| t.split(',').map(str::to_string).collect());
 
     // Every theme on the live-recording screen; the full tour in light and dark.
+    // CAPTIONS=1: only the live-caption window (demo lines).
+    if std::env::var_os("CAPTIONS").is_some() {
+        for (name, theme, stalled) in [("20-captions", "mostalgia", None), ("20b-captions-dark", "mostalgia-nacht", None), ("20c-captions-stalled", "mostalgia", Some(34))] {
+            let spec = mostalgia_app::themes::resolve(theme, false);
+            cx.update(|cx| mostalgia_app::themes::apply(&spec, cx));
+            let handle = cx
+                .update(|cx| {
+                    gpui_kit::open_window(
+                        WindowOptions {
+                            window_bounds: Some(WindowBounds::Windowed(Bounds { origin: Default::default(), size: size(px(560.), px(210.)) })),
+                            focus: false,
+                            show: false,
+                            ..Default::default()
+                        },
+                        cx,
+                        |window, cx| {
+                            let view = cx.new(|cx| mostalgia_app::companion::captions::Captions::demo(stalled, window, cx));
+                            cx.new(|cx| Root::new(view, window, cx))
+                        },
+                    )
+                    .unwrap()
+                    .0
+                })
+                ;
+            cx.update(|cx| mostalgia_app::themes::apply(&spec, cx));
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            cx.run_until_parked();
+            cx.update_window(handle, |_, window, _| window.refresh()).unwrap();
+            cx.run_until_parked();
+            let img = cx.capture_screenshot(handle).expect("offscreen rendering");
+            img.save(out.join(format!("{name}.png"))).unwrap();
+        }
+        return;
+    }
     let mut runs: Vec<(String, bool)> = vec![("mostalgia".into(), true), ("mostalgia-nacht".into(), true)];
     runs.extend(mostalgia_app::themes::all().into_iter().map(|t| (t.id, false)).filter(|(id, _)| id != "mostalgia" && id != "mostalgia-nacht"));
     for (theme, full) in runs {

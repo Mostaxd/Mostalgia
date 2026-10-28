@@ -223,7 +223,7 @@ pub fn run(demo: bool) {
     });
 }
 
-fn spawn_stdin_reader(demo: bool) -> Receiver<ToMori> {
+pub(crate) fn spawn_stdin_reader(demo: bool) -> Receiver<ToMori> {
     let (tx, rx) = crossbeam_channel::unbounded();
     std::thread::spawn(move || {
         let stdin = std::io::stdin();
@@ -319,6 +319,7 @@ impl DesktopMori {
                 }
                 ToMori::OpenMeeting { meeting } => self.companion.update(cx, |c, cx| c.set_open_meeting(meeting, cx)),
                 ToMori::StartFailed { message } => self.companion.update(cx, |c, cx| c.recording_start_failed(message, cx)),
+                ToMori::Stalled { .. } => {}
                 ToMori::ReloadConfig => {
                     let config = Config::load();
                     mostalgia_core::i18n::set_lang(mostalgia_core::i18n::resolve(&config.ui_language));
@@ -532,7 +533,7 @@ fn mmss(s: &str) -> Option<f64> {
 }
 
 /// The X11 window id behind a GPUI window.
-fn window_id(window: &Window) -> Option<u32> {
+pub(crate) fn window_id(window: &Window) -> Option<u32> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     match HasWindowHandle::window_handle(window).ok()?.as_raw() {
         RawWindowHandle::Xcb(h) => Some(h.window.get()),

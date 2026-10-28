@@ -104,6 +104,14 @@ impl X11 {
         Ok(())
     }
 
+    /// Never takes keyboard focus (clicks still work): the live captions
+    /// mustn't take it from the call window (ICCCM WM_HINTS input = false).
+    pub fn no_input_focus(&self) -> Result<()> {
+        self.conn.change_property32(PropMode::REPLACE, self.window, AtomEnum::WM_HINTS, AtomEnum::WM_HINTS, &[1, 0, 0, 0, 0, 0, 0, 0, 0])?;
+        self.conn.flush()?;
+        Ok(())
+    }
+
     /// The window's top-left on the root window.
     pub fn position(&self) -> Result<(i32, i32)> {
         let r = self.conn.translate_coordinates(self.window, self.root, 0, 0)?.reply()?;

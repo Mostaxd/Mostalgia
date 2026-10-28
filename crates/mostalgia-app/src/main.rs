@@ -11,6 +11,11 @@ fn main() {
         mostalgia_app::companion::desktop::run(std::env::args().any(|a| a == "--demo"));
         return;
     }
+    // The floating live captions (started by the app during a recording).
+    if std::env::args().any(|a| a == "--captions") {
+        mostalgia_app::companion::captions::run(std::env::args().any(|a| a == "--demo"));
+        return;
+    }
     gpui_kit::application().with_assets(AppAssets).run(|cx: &mut App| {
         gpui_kit::init(cx);
         let config = mostalgia_core::config::Config::load();

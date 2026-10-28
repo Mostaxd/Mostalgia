@@ -6,6 +6,7 @@
 
 mod answers;
 pub mod art;
+pub mod captions;
 pub mod cast;
 pub mod character;
 mod bubble;
