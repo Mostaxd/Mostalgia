@@ -103,7 +103,7 @@ pub const EN: &[(&str, &str)] = &[
     ("Chat", "Chat"),
     ("Verhalten", "Behaviour"),
     ("Gilt für die ganze App (auch unter Darstellung): {} bewegt sich kaum, neue Notizen erscheinen ohne Animation.", "Applies to the whole app (also under Appearance): {} barely moves, and new notes appear without animation."),
-    ("Eine kleine Figur im Fenster, die mitschreibt, solange gesprochen wird. Klick sie an, um Fragen zur laufenden Besprechung zu stellen; während der Aufnahme zeigt sie Entscheidungen, Aufgaben und offene Fragen, die du anheften kannst.", "A small character in the window who takes notes while people speak. Click her to ask about the meeting in progress; while recording she shows decisions, action items and open questions you can pin."),
+    ("Eine kleine Figur im Fenster, die mitschreibt, solange gesprochen wird. Klick sie an, um Fragen zur laufenden Besprechung zu stellen; während der Aufnahme zeigt sie Entscheidungen, Aufgaben und offene Fragen, die du anheften kannst.", "A small character in the window who takes notes while people speak. Click the character to ask about the meeting in progress; while recording it shows decisions, action items and open questions you can pin."),
     ("Größe", "Size"),
     ("Klein", "Small"),
     ("Mittel", "Medium"),
@@ -161,4 +161,6 @@ pub const EN: &[(&str, &str)] = &[
     ("Leiste", "Bar"),
     ("Anzeige während der Aufnahme", "While recording"),
     ("Wenn die Figur ausgeblendet ist: wie ihre Leiste zeigt, dass aufgenommen wird. Das Aufnahmefenster und das Tray-Symbol zeigen immer den roten Punkt.", "When the figure is hidden: how her bar shows that a recording is running. The recording screen and the tray icon always show the red dot."),
+    ("Serviert jede Notiz wie eine Tasse Tee", "Serves each note like a cup of tea"),
+    ("Schneidet jede Notiz auf einen Papierstreifen", "Cuts each note onto a paper strip"),
 ];

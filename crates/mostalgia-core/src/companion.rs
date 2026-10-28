@@ -72,10 +72,14 @@ pub enum Character {
     Tsumugi,
     /// Charts the notes as constellations.
     Hoshi,
+    /// Serves each note like a cup of tea.
+    Kaito,
+    /// Cuts each note onto a paper strip.
+    Jin,
 }
 
 impl Character {
-    pub const ALL: [Character; 3] = [Character::Mori, Character::Tsumugi, Character::Hoshi];
+    pub const ALL: [Character; 5] = [Character::Mori, Character::Tsumugi, Character::Hoshi, Character::Kaito, Character::Jin];
 
     /// The value stored in `Config::companion_character`.
     pub fn id(self) -> &'static str {
@@ -83,6 +87,8 @@ impl Character {
             Character::Mori => "mori",
             Character::Tsumugi => "tsumugi",
             Character::Hoshi => "hoshi",
+            Character::Kaito => "kaito",
+            Character::Jin => "jin",
         }
     }
 
@@ -97,6 +103,8 @@ impl Character {
             Character::Mori => "Mori",
             Character::Tsumugi => "Tsumugi",
             Character::Hoshi => "Hoshi",
+            Character::Kaito => "Kaito",
+            Character::Jin => "Jin",
         }
     }
 
@@ -106,6 +114,8 @@ impl Character {
             Character::Mori => tr("Schreibt auf ihrem Notizblock mit"),
             Character::Tsumugi => tr("Webt die Notizen in ihren Schal"),
             Character::Hoshi => tr("Zeichnet die Notizen als Sternbilder"),
+            Character::Kaito => tr("Serviert jede Notiz wie eine Tasse Tee"),
+            Character::Jin => tr("Schneidet jede Notiz auf einen Papierstreifen"),
         }
     }
 
@@ -130,6 +140,20 @@ telescope and star chart, and charts the notes as stars and constellations.",
                 "Your manner: curious, calm and precise, glad to notice how things connect, and \
 concise. A star or constellation image now and then is fine (how points line up, a guiding \
 star), but sparingly — never more than one in an answer, and never at the cost of clarity.",
+            ),
+            Character::Kaito => (
+                "You're a small animated tea host who sits next to the user's meetings with a tray and \
+teapot, and serves each note like a freshly poured cup of tea.",
+                "Your manner: calm, polite and gently hospitable, attentive to what the user needs, and \
+concise. A tea image now and then is fine (serving a point, letting something steep), but \
+sparingly — never more than one in an answer, and never at the cost of clarity.",
+            ),
+            Character::Jin => (
+                "You're a small animated wandering swordsman who sits next to the user's meetings and \
+cuts each note cleanly onto a paper strip.",
+                "Your manner: stoic, terse, concise and direct — you cut straight to the point, without small \
+talk, yet never rude. A blade image now and then is fine (a clean cut, cutting to the point), \
+but sparingly — never more than one in an answer, and never at the cost of clarity.",
             ),
         }
     }
@@ -1390,6 +1414,8 @@ mod tests {
         }
         assert!(persona_for(Character::Tsumugi, &req).contains("weav") && persona_for(Character::Hoshi, &req).contains("constellation"));
         assert_eq!(Character::parse(" Hoshi "), Some(Character::Hoshi));
+        assert!(persona_for(Character::Kaito, &req).contains("tea") && persona_for(Character::Jin, &req).contains("terse"));
+        assert_eq!(Character::parse("jin"), Some(Character::Jin));
         assert_eq!(Character::parse("off"), None);
     }
 

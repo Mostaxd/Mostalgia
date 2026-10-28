@@ -1,12 +1,12 @@
-//! The artwork of whichever companion is chosen: Mori (`art`), Tsumugi or
-//! Hoshi (`cast`). All three share the pose set and frame size, so the
-//! companion only asks this module for frames.
+//! The artwork of whichever companion is chosen: Mori (`art`), Tsumugi,
+//! Hoshi, Kaito or Jin (`cast`). All share the pose set and frame size, so
+//! the companion only asks this module for frames.
 
 use mostalgia_core::companion::PointKind;
 pub use mostalgia_core::companion::Character;
 
 use super::art::{self, Pose};
-use super::cast::{hoshi, tsumugi};
+use super::cast::{hoshi, jin, kaito, tsumugi};
 
 fn tsumugi_pose(pose: Pose) -> tsumugi::Pose {
     match pose {
@@ -32,12 +32,38 @@ fn hoshi_pose(pose: Pose) -> hoshi::Pose {
     }
 }
 
+fn kaito_pose(pose: Pose) -> kaito::Pose {
+    match pose {
+        Pose::Idle => kaito::Pose::Idle,
+        Pose::Listening => kaito::Pose::Listening,
+        Pose::Writing => kaito::Pose::Writing,
+        Pose::Thinking => kaito::Pose::Thinking,
+        Pose::Talking => kaito::Pose::Talking,
+        Pose::Sleeping => kaito::Pose::Sleeping,
+        Pose::Error => kaito::Pose::Error,
+    }
+}
+
+fn jin_pose(pose: Pose) -> jin::Pose {
+    match pose {
+        Pose::Idle => jin::Pose::Idle,
+        Pose::Listening => jin::Pose::Listening,
+        Pose::Writing => jin::Pose::Writing,
+        Pose::Thinking => jin::Pose::Thinking,
+        Pose::Talking => jin::Pose::Talking,
+        Pose::Sleeping => jin::Pose::Sleeping,
+        Pose::Error => jin::Pose::Error,
+    }
+}
+
 /// Frames in one loop of `pose`.
 pub fn frame_count(c: Character, pose: Pose) -> usize {
     match c {
         Character::Mori => art::frame_count(pose),
         Character::Tsumugi => tsumugi::frame_count(tsumugi_pose(pose)),
         Character::Hoshi => hoshi::frame_count(hoshi_pose(pose)),
+        Character::Kaito => kaito::frame_count(kaito_pose(pose)),
+        Character::Jin => jin::frame_count(jin_pose(pose)),
     }
 }
 
@@ -47,6 +73,8 @@ pub fn frame_svg(c: Character, pose: Pose, frame: usize) -> String {
         Character::Mori => art::frame_svg(pose, frame),
         Character::Tsumugi => tsumugi::frame_svg(tsumugi_pose(pose), frame),
         Character::Hoshi => hoshi::frame_svg(hoshi_pose(pose), frame),
+        Character::Kaito => kaito::frame_svg(kaito_pose(pose), frame),
+        Character::Jin => jin::frame_svg(jin_pose(pose), frame),
     }
 }
 
@@ -56,6 +84,8 @@ pub fn fps(c: Character) -> u32 {
         Character::Mori => art::FPS,
         Character::Tsumugi => tsumugi::FPS,
         Character::Hoshi => hoshi::FPS,
+        Character::Kaito => kaito::FPS,
+        Character::Jin => jin::FPS,
     }
 }
 
@@ -65,6 +95,8 @@ pub fn frame_size(c: Character) -> (f32, f32) {
         Character::Mori => (art::FRAME_W, art::FRAME_H),
         Character::Tsumugi => (tsumugi::FRAME_W, tsumugi::FRAME_H),
         Character::Hoshi => (hoshi::FRAME_W, hoshi::FRAME_H),
+        Character::Kaito => (kaito::FRAME_W, kaito::FRAME_H),
+        Character::Jin => (jin::FRAME_W, jin::FRAME_H),
     }
 }
 
@@ -75,6 +107,8 @@ pub fn pop_frames(c: Character) -> Option<usize> {
         Character::Mori => None,
         Character::Tsumugi => Some(tsumugi::POP_FRAMES),
         Character::Hoshi => Some(hoshi::POP_FRAMES),
+        Character::Kaito => Some(kaito::POP_FRAMES),
+        Character::Jin => Some(jin::POP_FRAMES),
     }
 }
 
@@ -85,6 +119,8 @@ pub fn pop_svg(c: Character, kind: PointKind, frame: usize) -> Option<(String, f
         Character::Mori => None,
         Character::Tsumugi => Some((tsumugi::note_pop_svg(kind, frame), tsumugi::POP_W)),
         Character::Hoshi => Some((hoshi::note_pop_svg(kind, frame), hoshi::POP_SIZE)),
+        Character::Kaito => Some((kaito::note_pop_svg(kind, frame), kaito::POP_SIZE)),
+        Character::Jin => Some((jin::note_pop_svg(kind, frame), jin::POP_SIZE)),
     }
 }
 
