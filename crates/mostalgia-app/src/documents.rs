@@ -327,12 +327,12 @@ impl DocumentsView {
         }
         let mut parts = Vec::new();
         if let Some(p) = d.pages {
-            parts.push(trf("{} Seiten", &[&p]));
+            parts.push(if p == 1 { tr("1 Seite").to_string() } else { trf("{} Seiten", &[&p]) });
         }
         if !d.language.is_empty() {
             parts.push(d.language.to_uppercase());
         }
-        parts.push(trf("{} Abschnitte", &[&d.chunks]));
+        parts.push(if d.chunks == 1 { tr("1 Abschnitt").to_string() } else { trf("{} Abschnitte", &[&d.chunks]) });
         parts.push(size(d.size_bytes));
         if d.chunks > 0 && !d.embedded {
             // Without the embedding model only keyword search finds it.

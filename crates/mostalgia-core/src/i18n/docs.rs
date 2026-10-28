@@ -35,6 +35,8 @@ pub const EN: &[(&str, &str)] = &[
     ("„{}“ ist schon in deinen Dokumenten", "“{}” is already in your documents"),
     ("Wird gelesen …", "Reading …"),
     ("{} Seiten", "{} pages"),
+    ("1 Seite", "1 page"),
+    ("1 Abschnitt", "1 chunk"),
     ("nur Stichwortsuche", "keyword search only"),
     ("Deine Dokumente", "Your documents"),
     ("Lege Handbücher, Spezifikationen, Notizen oder Berichte hier ab – Markdown, Text, PDF, Word, OpenDocument oder HTML, auf Deutsch, Englisch oder in anderen Sprachen. Sie werden lokal gelesen und durchsuchbar gemacht. Antworten in „Fragen“, im Chat und als Live-Antwortvorschläge können sie dann zitieren.", "Drop manuals, specs, notes or reports here – Markdown, text, PDF, Word, OpenDocument or HTML, in English, German or other languages. They're read and indexed on this computer. Answers in “Ask”, in the chat and live answer suggestions can then cite them."),

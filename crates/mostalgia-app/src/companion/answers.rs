@@ -17,7 +17,7 @@ use gpui_kit::*;
 use mostalgia_core::ask::cite::{self, Mark, Target};
 use mostalgia_core::assist::{self, Sources, Suggestion};
 use mostalgia_core::companion::{ContextLine, same_note};
-use mostalgia_core::i18n::tr;
+use mostalgia_core::i18n::{self, tr};
 
 use super::{Companion, MoriEvent};
 use crate::recording::LiveState;
@@ -287,7 +287,7 @@ impl Companion {
                             })),
                     ),
             )
-            .child(ui::bidi_text(format!("„{}“", a.question), true).text_xs().text_color(theme.muted_foreground))
+            .child(ui::bidi_text(if i18n::lang() == i18n::Lang::De { format!("„{}“", a.question) } else { format!("“{}”", a.question) }, true).text_xs().text_color(theme.muted_foreground))
             .child(body.text_sm())
             .into_any_element()
     }
