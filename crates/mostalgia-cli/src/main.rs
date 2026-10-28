@@ -1099,6 +1099,7 @@ fn export(id: i64, format: Option<&str>, output: Option<PathBuf>) -> Result<()> 
 }
 
 /// Sends a command to the running app, or launches it.
+#[cfg_attr(not(unix), allow(unused_variables))]
 fn control(cmd: &str, launch_args: &[&str]) -> Result<()> {
     #[cfg(unix)]
     if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(paths::control_socket()) {

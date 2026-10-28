@@ -14,7 +14,9 @@ use libpulse_binding::stream::Direction;
 #[cfg(target_os = "linux")]
 use libpulse_simple_binding::Simple;
 
-use crate::{BLOCK_SAMPLES, SAMPLE_RATE};
+#[cfg(any(target_os = "linux", test))]
+use crate::BLOCK_SAMPLES;
+use crate::SAMPLE_RATE;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Source {

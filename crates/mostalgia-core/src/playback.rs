@@ -1,4 +1,6 @@
+#[cfg(target_os = "linux")]
 use std::fs::File;
+#[cfg(target_os = "linux")]
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -15,7 +17,9 @@ use libpulse_binding::stream::Direction;
 #[cfg(target_os = "linux")]
 use libpulse_simple_binding::Simple;
 
-use crate::{BLOCK_SAMPLES, SAMPLE_RATE};
+#[cfg(target_os = "linux")]
+use crate::BLOCK_SAMPLES;
+use crate::SAMPLE_RATE;
 
 /// Plays a meeting's tracks mixed together from a given time, on the
 /// default output. Dropping it stops playback.

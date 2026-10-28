@@ -188,7 +188,6 @@ impl X11 {
 /// window" path (the window stays an ordinary one).
 #[cfg(not(target_os = "linux"))]
 pub struct X11 {
-    pub window: u32,
     never: std::convert::Infallible,
 }
 

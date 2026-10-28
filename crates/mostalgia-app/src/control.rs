@@ -9,6 +9,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc::Sender;
 
+#[cfg(target_os = "linux")]
 use mostalgia_core::i18n::tr;
 use mostalgia_core::paths;
 
@@ -26,6 +27,7 @@ pub enum Command {
 }
 
 impl Command {
+    #[cfg_attr(not(unix), allow(dead_code))]
     fn parse(s: &str) -> Option<Self> {
         Some(match s.trim() {
             "toggle" => Command::Toggle,

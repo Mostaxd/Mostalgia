@@ -357,9 +357,10 @@ pub(crate) fn quiet_native_logs() {
 
     unsafe extern "C" fn log(level: sys::ggml_log_level, text: *const c_char, _: *mut c_void) {
         let level = if level == sys::ggml_log_level_GGML_LOG_LEVEL_CONT {
-            LAST_LEVEL.load(Ordering::Relaxed)
+            // `ggml_log_level` is a C enum: u32 on Linux, i32 with MSVC.
+            LAST_LEVEL.load(Ordering::Relaxed) as sys::ggml_log_level
         } else {
-            LAST_LEVEL.store(level, Ordering::Relaxed);
+            LAST_LEVEL.store(level as u32, Ordering::Relaxed);
             level
         };
         if level >= sys::ggml_log_level_GGML_LOG_LEVEL_WARN && !text.is_null() {

@@ -2,15 +2,21 @@
 //! apps recording from a microphone, and reports when a call app starts and
 //! — after a grace period, so a brief stream restart doesn't count — stops.
 
+#[cfg(target_os = "linux")]
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+#[cfg(target_os = "linux")]
+use std::collections::HashSet;
+#[cfg(target_os = "linux")]
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context as _, Result};
+#[cfg(target_os = "linux")]
+use anyhow::Context as _;
+use anyhow::Result;
 use crossbeam_channel::Sender;
 #[cfg(target_os = "linux")]
 use libpulse_binding::callbacks::ListResult;
