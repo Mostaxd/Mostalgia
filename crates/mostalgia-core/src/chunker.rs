@@ -270,10 +270,15 @@ pub fn is_filler_hallucination(text: &str, samples: &[f32]) -> bool {
 /// relative to the recording start, or an empty list when Whisper's whole
 /// output was a filler hallucination.
 pub fn transcribe_utterance(engine: &mut Engine, utt: &Utterance) -> Result<Vec<Segment>> {
+    transcribe_utterance_as(engine, utt, None)
+}
+
+/// [`transcribe_utterance`] in `language` (see [`Engine::transcribe_as`]).
+pub fn transcribe_utterance_as(engine: &mut Engine, utt: &Utterance, language: Option<&str>) -> Result<Vec<Segment>> {
     if !utt.is_loud_enough() {
         return Ok(Vec::new());
     }
-    let mut segments = engine.transcribe(&utt.samples)?;
+    let mut segments = engine.transcribe_as(&utt.samples, language)?;
     if let [seg] = segments.as_slice() {
         if is_filler_hallucination(&seg.text, &utt.samples) {
             return Ok(Vec::new());

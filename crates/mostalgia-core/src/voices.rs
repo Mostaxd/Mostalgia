@@ -63,6 +63,14 @@ impl KnownVoice {
     }
 }
 
+/// The index of the highest of `sims` if it reaches `threshold` and beats
+/// the second highest by `margin`.
+fn clear_best(sims: &[f32], threshold: f32, margin: f32) -> Option<usize> {
+    let best = (0..sims.len()).max_by(|a, b| sims[*a].total_cmp(&sims[*b]))?;
+    let second = sims.iter().enumerate().filter(|(i, _)| *i != best).map(|(_, s)| *s).fold(f32::MIN, f32::max);
+    (sims[best] >= threshold && sims[best] - second >= margin).then_some(best)
+}
+
 /// Generic labels that aren't a person: never learned as a voice.
 pub fn is_generic_label(name: &str) -> bool {
     let name = name.trim();
@@ -108,13 +116,55 @@ impl Voices {
     }
 
     /// The known voice closest to `embedding` (normalized) if it is at
-    /// least `threshold` similar, with its similarity.
-    pub fn best_match(&self, embedding: &[f32], threshold: f32) -> Option<(&str, f32)> {
-        self.voices
-            .iter()
-            .map(|v| (v.name.as_str(), v.similarity(embedding)))
-            .filter(|(_, sim)| *sim >= threshold)
-            .max_by(|a, b| a.1.total_cmp(&b.1))
+    /// least `threshold` similar and beats every other known voice by
+    /// `margin`, with its similarity.
+    pub fn best_match(&self, embedding: &[f32], threshold: f32, margin: f32) -> Option<(&str, f32)> {
+        let sims: Vec<f32> = self.voices.iter().map(|v| v.similarity(embedding)).collect();
+        let best = clear_best(&sims, threshold, margin)?;
+        Some((self.voices[best].name.as_str(), sims[best]))
+    }
+
+    /// Names the speakers of one meeting from their voice prints. A
+    /// speaker gets a known voice's name only when that voice is similar
+    /// enough (`threshold`), clearly closer than every other known voice
+    /// (by `margin`), and clearly closer to this speaker than to every other
+    /// speaker of the meeting (by `margin`): over a call, different people
+    /// can be 0.8 alike, so a voice about as close to two speakers names
+    /// neither. Each name goes to at most one speaker, best pairs first.
+    pub fn assign(&self, prints: &[Option<Vec<f32>>], threshold: f32, margin: f32) -> Vec<Option<(String, f32)>> {
+        let sims: Vec<Option<Vec<f32>>> =
+            prints.iter().map(|p| p.as_ref().map(|p| self.voices.iter().map(|v| v.similarity(p)).collect())).collect();
+        let mut pairs: Vec<(usize, usize, f32)> = Vec::new();
+        for (spk, row) in sims.iter().enumerate() {
+            let Some(row) = row else { continue };
+            let Some(voice) = clear_best(row, threshold, margin) else { continue };
+            let sim = row[voice];
+            let closest_other = sims
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| *other != spk)
+                .filter_map(|(_, r)| Some(r.as_ref()?[voice]))
+                .fold(f32::MIN, f32::max);
+            if sim - closest_other >= margin {
+                pairs.push((spk, voice, sim));
+            }
+        }
+        pairs.sort_by(|a, b| b.2.total_cmp(&a.2));
+        let mut names = vec![None; prints.len()];
+        let mut used = vec![false; self.voices.len()];
+        for (spk, voice, sim) in pairs {
+            if !used[voice] && names[spk].is_none() {
+                used[voice] = true;
+                names[spk] = Some((self.voices[voice].name.clone(), sim));
+            }
+        }
+        names
+    }
+
+    /// Similarity of `embedding` to each known voice, by name (for
+    /// diagnostics).
+    pub fn similarities(&self, embedding: &[f32]) -> Vec<(&str, f32)> {
+        self.voices.iter().map(|v| (v.name.as_str(), v.similarity(embedding))).collect()
     }
 
     /// Adds a print for `name` (replacing one from the same meeting).
@@ -213,29 +263,108 @@ pub fn learn_from_meeting(meeting_id: i64, previous: &str, name: &str) -> Result
 }
 
 fn learn_voice(meeting_id: i64, name: &str, voices: &mut Voices, changed: &mut bool) -> Result<Learned> {
-    let store = crate::store::Store::open(&crate::paths::database())?;
-    let meeting = store.get(meeting_id)?.context(crate::i18n::tr("Besprechung nicht gefunden"))?;
-    let spans: Vec<(f64, f64)> = meeting
-        .segments
-        .iter()
-        .filter(|s| s.source == Source::System && s.speaker_label() == name)
-        .map(|s| (s.start_secs, s.end_secs))
-        .collect();
-    if spans.is_empty() {
-        return Ok(Learned::NotOnSystemTrack);
+    let mut prints = MeetingPrints::open(meeting_id)?;
+    let learned = learn_print(voices, meeting_id, name, prints.of(name)?);
+    *changed |= matches!(learned, Learned::Voice { .. });
+    Ok(learned)
+}
+
+/// Stores `print` (from [`MeetingPrints::of`]) as `name`'s voice in this
+/// meeting.
+fn learn_print(voices: &mut Voices, meeting_id: i64, name: &str, print: Option<(f64, Option<Vec<f32>>)>) -> Learned {
+    match print {
+        None => Learned::NotOnSystemTrack,
+        Some((secs, None)) => Learned::TooShort { secs },
+        Some((secs, Some(embedding))) => {
+            voices.learn(name, Some(meeting_id), embedding, secs);
+            Learned::Voice { secs }
+        }
     }
-    let path = meeting.dir.join(Source::System.file_name());
-    anyhow::ensure!(path.exists(), "{}", crate::i18n::tr("Die Audiodateien dieser Besprechung gibt es nicht mehr"));
-    let track = crate::finalize::read_wav(&path)?;
-    let audio = gather(&track, &spans, MAX_LEARN_SECS);
-    let secs = audio.len() as f64 / SAMPLE_RATE as f64;
-    if secs < MIN_LEARN_SECS {
-        return Ok(Learned::TooShort { secs });
+}
+
+/// After some lines of a meeting were given to `to` (they had been
+/// labelled with the names in `from`): learns `to`'s voice from all its
+/// lines there now, and every name in `from` that had learned from this
+/// meeting learns again from the lines it has left, so the other person's
+/// voice drops out of its print (with too few lines left, it forgets this
+/// meeting). Generic labels learn nothing.
+pub fn correct_from_meeting(meeting_id: i64, from: &[String], to: &str) -> Result<Learned> {
+    let mut voices = Voices::load();
+    let mut prints = MeetingPrints::open(meeting_id)?;
+    let (learned, changed) = correct_profiles(&mut voices, meeting_id, from, to.trim(), |name| prints.of(name))?;
+    if changed {
+        voices.save()?;
     }
-    let embedding = crate::diarize::voice_print(&audio)?;
-    voices.learn(name, Some(meeting_id), embedding, secs);
-    *changed = true;
-    Ok(Learned::Voice { secs })
+    Ok(learned)
+}
+
+/// [`correct_from_meeting`] with `print` giving a name's voice print in the
+/// meeting. Returns what `to` learned and whether anything changed.
+fn correct_profiles(
+    voices: &mut Voices,
+    meeting_id: i64,
+    from: &[String],
+    to: &str,
+    mut print: impl FnMut(&str) -> Result<Option<(f64, Option<Vec<f32>>)>>,
+) -> Result<(Learned, bool)> {
+    let mut changed = false;
+    for name in from {
+        let had = voices.get(name).is_some_and(|v| v.samples.iter().any(|s| s.meeting_id == Some(meeting_id)));
+        if name == to || !had {
+            continue;
+        }
+        changed |= match print(name)? {
+            Some((secs, Some(embedding))) if secs >= MIN_LEARN_SECS => {
+                voices.learn(name, Some(meeting_id), embedding, secs);
+                true
+            }
+            _ => voices.unlearn_meeting(name, meeting_id),
+        };
+    }
+    let learned = if is_generic_label(to) { Learned::Nothing } else { learn_print(voices, meeting_id, to, print(to)?) };
+    changed |= matches!(learned, Learned::Voice { .. });
+    Ok((learned, changed))
+}
+
+/// Voice prints of the people in one saved meeting, from its system track.
+struct MeetingPrints {
+    meeting: crate::store::Meeting,
+    track: Option<Vec<f32>>,
+}
+
+impl MeetingPrints {
+    fn open(meeting_id: i64) -> Result<Self> {
+        let store = crate::store::Store::open(&crate::paths::database())?;
+        let meeting = store.get(meeting_id)?.context(crate::i18n::tr("Besprechung nicht gefunden"))?;
+        Ok(Self { meeting, track: None })
+    }
+
+    /// `name`'s print from their lines on the system track, with the
+    /// seconds of speech: `None` without such lines, no print when that is
+    /// under [`MIN_LEARN_SECS`].
+    fn of(&mut self, name: &str) -> Result<Option<(f64, Option<Vec<f32>>)>> {
+        let spans: Vec<(f64, f64)> = self
+            .meeting
+            .segments
+            .iter()
+            .filter(|s| s.source == Source::System && s.speaker_label() == name)
+            .map(|s| (s.start_secs, s.end_secs))
+            .collect();
+        if spans.is_empty() {
+            return Ok(None);
+        }
+        if self.track.is_none() {
+            let path = self.meeting.dir.join(Source::System.file_name());
+            anyhow::ensure!(path.exists(), "{}", crate::i18n::tr("Die Audiodateien dieser Besprechung gibt es nicht mehr"));
+            self.track = Some(crate::finalize::read_wav(&path)?);
+        }
+        let audio = gather(self.track.as_deref().unwrap_or_default(), &spans, MAX_LEARN_SECS);
+        let secs = audio.len() as f64 / SAMPLE_RATE as f64;
+        if secs < MIN_LEARN_SECS {
+            return Ok(Some((secs, None)));
+        }
+        Ok(Some((secs, Some(crate::diarize::voice_print(&audio)?))))
+    }
 }
 
 /// The audio of `spans` (seconds) joined together, longest spans first,
@@ -283,9 +412,101 @@ mod tests {
         v.learn("Felix", Some(1), emb(1.0, 0.0), 10.0);
         v.learn("Felix", Some(2), emb(0.0, 1.0), 10.0);
         v.learn("Lena", Some(1), emb(-1.0, 0.0), 10.0);
-        assert_eq!(v.best_match(&normalize(emb(0.1, 1.0)), 0.5).map(|m| m.0), Some("Felix"));
-        assert_eq!(v.best_match(&normalize(emb(-1.0, 0.1)), 0.5).map(|m| m.0), Some("Lena"));
-        assert_eq!(v.best_match(&normalize(emb(-1.0, -1.0)), 0.9), None);
+        assert_eq!(v.best_match(&normalize(emb(0.1, 1.0)), 0.5, 0.0).map(|m| m.0), Some("Felix"));
+        assert_eq!(v.best_match(&normalize(emb(-1.0, 0.1)), 0.5, 0.0).map(|m| m.0), Some("Lena"));
+        assert_eq!(v.best_match(&normalize(emb(-1.0, -1.0)), 0.9, 0.0), None);
+    }
+
+    /// A unit vector at `deg` degrees: prints `a` and `b` degrees apart are
+    /// cos(a - b) alike.
+    fn at(deg: f32) -> Vec<f32> {
+        let r = deg.to_radians();
+        vec![r.cos(), r.sin(), 0.0]
+    }
+
+    fn voices(names: &[(&str, f32)]) -> Voices {
+        let mut v = Voices::default();
+        for (name, deg) in names {
+            v.learn(name, Some(1), at(*deg), 30.0);
+        }
+        v
+    }
+
+    fn named(names: &[Option<(String, f32)>]) -> Vec<Option<&str>> {
+        names.iter().map(|n| n.as_ref().map(|n| n.0.as_str())).collect()
+    }
+
+    #[test]
+    fn margin_over_the_next_known_voice() {
+        // Felix and Clara 0.79 alike (as measured over a call); a voice
+        // between them is not clearly either.
+        let v = voices(&[("Felix", 0.0), ("Clara", 38.0)]);
+        assert_eq!(v.best_match(&at(19.0), 0.6, 0.08), None, "about as close to both");
+        assert_eq!(v.best_match(&at(3.0), 0.6, 0.08).map(|m| m.0), Some("Felix"));
+        assert_eq!(v.best_match(&at(35.0), 0.6, 0.08).map(|m| m.0), Some("Clara"));
+        assert_eq!(v.best_match(&at(120.0), 0.9, 0.08), None, "not similar enough");
+    }
+
+    #[test]
+    fn each_known_voice_names_one_speaker_at_most() {
+        let v = voices(&[("Felix", 0.0), ("Lena", 90.0)]);
+        // Two people, one close to Felix, one close to Lena.
+        let prints = vec![Some(at(5.0)), Some(at(85.0))];
+        assert_eq!(named(&v.assign(&prints, 0.6, 0.08)), [Some("Felix"), Some("Lena")]);
+        // Two speakers both somewhat like Felix: only the clearly closer
+        // one is Felix, the other stays unnamed (not a second "Felix").
+        let prints = vec![Some(at(30.0)), Some(at(2.0)), None];
+        assert_eq!(named(&v.assign(&prints, 0.6, 0.08)), [None, Some("Felix"), None]);
+        // About as close to Felix as each other: neither is named.
+        let prints = vec![Some(at(-10.0)), Some(at(10.0))];
+        assert_eq!(named(&v.assign(&prints, 0.6, 0.08)), [None, None]);
+        // Only one known voice, everyone a bit like it (call audio): no one
+        // is named after it unless they stand out.
+        let v = voices(&[("Clara", 0.0)]);
+        let prints = vec![Some(at(35.0)), Some(at(40.0))];
+        assert_eq!(named(&v.assign(&prints, 0.6, 0.08)), [None, None]);
+    }
+
+    #[test]
+    fn correcting_lines_fixes_both_profiles() {
+        let mut v = Voices::default();
+        v.learn("Felix", Some(3), at(0.0), 60.0);
+        // Learned from meeting 7 while Nora's lines were labelled Felix too.
+        v.learn("Felix", Some(7), at(20.0), 90.0);
+        v.learn("Clara", Some(5), at(60.0), 30.0);
+        let prints = |name: &str| -> Result<Option<(f64, Option<Vec<f32>>)>> {
+            Ok(match name {
+                "Felix" => Some((40.0, Some(at(1.0)))),
+                "Nora" => Some((25.0, Some(at(45.0)))),
+                _ => None,
+            })
+        };
+        let from = vec!["Felix".to_string(), "Clara".to_string()];
+        let (learned, changed) = correct_profiles(&mut v, 7, &from, "Nora", prints).unwrap();
+        assert_eq!(learned, Learned::Voice { secs: 25.0 });
+        assert!(changed);
+        let felix = v.get("Felix").unwrap();
+        assert_eq!(felix.samples.len(), 2, "the other meeting's print stays");
+        let m7 = felix.samples.iter().find(|s| s.meeting_id == Some(7)).unwrap();
+        assert_eq!(m7.secs, 40.0);
+        assert!(dot(&m7.embedding, &at(1.0)) > 0.9999, "relearned without Nora");
+        assert!(dot(&v.get("Nora").unwrap().samples[0].embedding, &at(45.0)) > 0.9999);
+        assert_eq!(v.get("Clara").unwrap().samples.len(), 1, "never learned from meeting 7: untouched");
+
+        // Too little of Felix left in meeting 7: that print goes.
+        let (_, changed) = correct_profiles(&mut v, 7, &["Felix".to_string()], "Nora", |name: &str| {
+            Ok(match name {
+                "Felix" => Some((2.0, None)),
+                _ => Some((80.0, Some(at(44.0)))),
+            })
+        })
+        .unwrap();
+        assert!(changed);
+        assert!(v.get("Felix").unwrap().samples.iter().all(|s| s.meeting_id != Some(7)));
+        // Given to a generic label: nothing learned for it.
+        let (learned, _) = correct_profiles(&mut v, 7, &["Nora".to_string()], "Sprecher 3", |_: &str| Ok(None)).unwrap();
+        assert_eq!(learned, Learned::Nothing);
+        assert!(v.get("Nora").is_none(), "Nora's only print was from meeting 7, and she has no lines left there");
     }
 
     #[test]

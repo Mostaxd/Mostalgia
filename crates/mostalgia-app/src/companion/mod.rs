@@ -53,8 +53,9 @@ pub enum MoriEvent {
     BackToApp,
     /// Her points were stored with this meeting (or its notes changed).
     NotesSaved { meeting_id: i64 },
-    /// Her record button: start a recording from exactly these sources.
-    StartRecording { mic: bool, system: bool },
+    /// Her record button: start a recording from exactly these sources,
+    /// with the people in the call if picked (0 = automatic).
+    StartRecording { mic: bool, system: bool, people: u8 },
     /// Pause / resume the recording in progress.
     SetPaused { paused: bool },
     /// Stop (and save) the recording in progress.

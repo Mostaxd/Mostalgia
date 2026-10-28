@@ -1865,6 +1865,75 @@ const SUMMARY_LANGUAGES: [(&str, &str); 12] = [
 /// A dropdown entry: label, checked, what it does (`None`: a heading).
 type Choice = (String, bool, Option<Pick>);
 
+impl SettingsView {
+    /// "Sprachen in meinen Besprechungen": chips to toggle, and a
+    /// suggestion from the app language and earlier meetings.
+    fn meeting_languages(&self, cx: &mut Context<Self>) -> AnyElement {
+        use mostalgia_core::language::{COMMON, native_name};
+        let theme = cx.theme().clone();
+        let chosen = self.config.meeting_languages.clone();
+        let suggest = Button::new("meeting-langs-suggest")
+            .small()
+            .ghost()
+            .icon(IconName::Sparkles)
+            .label(tr("Vorschlagen"))
+            .tooltip(tr("Aus der App-Sprache und früheren Besprechungen"))
+            .on_click(cx.listener(|this, _, _, cx| {
+                let history: Vec<String> = mostalgia_core::store::Store::open(&mostalgia_core::paths::database())
+                    .and_then(|store| store.meeting_languages())
+                    .unwrap_or_default();
+                let ui = match mostalgia_core::i18n::resolve(&this.config.ui_language) {
+                    mostalgia_core::i18n::Lang::De => "de",
+                    _ => "en",
+                };
+                for code in mostalgia_core::language::suggest(ui, &history) {
+                    if !this.config.meeting_languages.contains(&code) {
+                        this.config.meeting_languages.push(code);
+                    }
+                }
+                this.save(cx);
+            }));
+        let mut codes: Vec<(String, String)> = COMMON.iter().map(|(c, n)| (c.to_string(), n.to_string())).collect();
+        for code in &chosen {
+            if !codes.iter().any(|(c, _)| c == code) {
+                codes.push((code.clone(), native_name(code)));
+            }
+        }
+        let chips = codes.into_iter().map(|(code, name)| {
+            let on = chosen.contains(&code);
+            Button::new(SharedString::from(format!("meeting-lang-{code}")))
+                .xsmall()
+                .label(name)
+                .when(on, |b| b.primary())
+                .when(!on, |b| b.outline())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let langs = &mut this.config.meeting_languages;
+                    match langs.iter().position(|c| *c == code) {
+                        Some(i) => {
+                            langs.remove(i);
+                        }
+                        None => langs.push(code.clone()),
+                    }
+                    this.save(cx);
+                }))
+        });
+        let summary = if chosen.is_empty() {
+            tr("Alle Sprachen").to_string()
+        } else {
+            chosen.iter().map(|c| native_name(c)).collect::<Vec<_>>().join(", ")
+        };
+        let hint = trf(
+            "„Automatisch erkennen“ wählt nur unter diesen, erkennt auf längeren Abschnitten und bleibt pro Spur dabei – deutsche Sätze mit englischen Fachwörtern bleiben deutsch. Jetzt: {}",
+            &[&summary],
+        );
+        v_flex()
+            .gap_2()
+            .child(settings_row(tr("Sprachen in meinen Besprechungen"), Some(&hint), suggest.into_any_element(), &theme))
+            .child(h_flex().flex_wrap().gap_1().children(chips))
+            .into_any_element()
+    }
+}
+
 fn chip(text: impl Into<SharedString>, color: Hsla, theme: &gpui_kit::component::Theme) -> Div {
     h_flex()
         .gap_1p5()
@@ -2636,6 +2705,7 @@ impl Render for SettingsView {
                     .child(choice("set-auto", "Automatisch erkennen", lang == "auto", cx, |c| c.language = "auto".into()))
                     .into_any_element(),
             ))
+            .child(self.meeting_languages(cx))
             .child(row(
                 tr("Spracherkennung (VAD)"),
                 Some(tr("Empfindlicher erkennt leise Stimmen, aber auch mehr Geräusche.")),
@@ -2659,7 +2729,7 @@ impl Render for SettingsView {
         cards.push(Card {
             category: Category::Aufnahme,
             title: "Sprache & Erkennung",
-            keywords: "sprache deutsch english automatisch vad spracherkennung empfindlich vorläufig interim rauschunterdrückung lüfter language german speech detection sensitivity provisional text noise suppression fan",
+            keywords: "sprache sprachen besprechungen arabisch erkennung übersetzt languages meetings arabic detection translated deutsch english automatisch vad spracherkennung empfindlich vorläufig interim rauschunterdrückung lüfter language german speech detection sensitivity provisional text noise suppression fan",
             wide: false,
             element: recognition.into_any_element(),
         });

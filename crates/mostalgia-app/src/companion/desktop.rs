@@ -282,7 +282,7 @@ impl DesktopMori {
             MoriEvent::OpenSettings => send(&FromMori::OpenSettings),
             MoriEvent::BackToApp => send(&FromMori::BackToApp),
             MoriEvent::NotesSaved { meeting_id } => send(&FromMori::NotesSaved { meeting_id: *meeting_id }),
-            MoriEvent::StartRecording { mic, system } => send(&FromMori::StartRecording { mic: *mic, system: *system }),
+            MoriEvent::StartRecording { mic, system, people } => send(&FromMori::StartRecording { mic: *mic, system: *system, people: *people }),
             MoriEvent::SetPaused { paused } => send(&FromMori::PauseRecording { paused: *paused }),
             MoriEvent::StopRecording => send(&FromMori::StopRecording),
             MoriEvent::SetSource { source, on } => send(&FromMori::SetSource { source: source.as_str().into(), on: *on }),

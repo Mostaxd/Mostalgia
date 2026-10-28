@@ -62,6 +62,9 @@ pub enum Event {
         audio_secs: f64,
         millis: u128,
     },
+    /// The language `source` is transcribed in (auto mode): detected,
+    /// locked, switched, or picked by the user.
+    Language { source: Source, status: crate::language::Status },
     /// Something went wrong but recording continues.
     Warning(String),
     /// The speech-to-text engine failed on a chunk (e.g. a cloud provider
@@ -80,6 +83,9 @@ pub struct Recording {
     pub live_lines: Vec<crate::finalize::FinalSegment>,
     /// Chunks the live engine failed on.
     pub live_errors: usize,
+    /// Languages the user picked per source (mic, system) while recording;
+    /// the final pass keeps them.
+    pub languages: [Option<String>; 2],
 }
 
 /// Records the enabled sources to WAV files and transcribes them live on a
@@ -106,6 +112,9 @@ struct Shared {
     /// Per source: samples written to its track.
     written: [Arc<AtomicU64>; 2],
     ctl: Mutex<Ctl>,
+    /// Language picks from the user not yet applied, per source:
+    /// `Some(None)` = back to detection.
+    language_picks: Mutex<[Option<Option<String>>; 2]>,
 }
 
 struct Ctl {
@@ -211,6 +220,7 @@ impl Recorder {
                     Some(cfg.system_device.clone().unwrap_or_else(|| "@DEFAULT_MONITOR@".into())),
                 ],
             }),
+            language_picks: Mutex::new([None, None]),
         });
         let recorder_dir = dir.clone();
         {
@@ -238,10 +248,33 @@ impl Recorder {
             let mut samples_seen = [0u64; 2];
             let mut live_lines: Vec<crate::finalize::FinalSegment> = Vec::new();
             let mut live_errors = 0usize;
-            let mut run = |engine: &mut Engine, speakers: &mut Option<crate::diarize::LiveSpeakers>, source: Source, utts: Vec<chunker::Utterance>| {
+            // Auto mode: each source's language, detected on its first
+            // speech, then locked (see `language`).
+            let auto = engine.is_auto();
+            let mut locks = [crate::language::LanguageLock::new(), crate::language::LanguageLock::new()];
+            let mut run = |engine: &mut Engine, speakers: &mut Option<crate::diarize::LiveSpeakers>, locks: &mut [crate::language::LanguageLock; 2], source: Source, utts: Vec<chunker::Utterance>| {
                 for utt in utts {
                     let t = std::time::Instant::now();
-                    match chunker::transcribe_utterance(engine, &utt) {
+                    let lock = &mut locks[idx(source)];
+                    let language = if auto && utt.is_loud_enough() {
+                        let was_locked = lock.status().is_some_and(|s| s.locked);
+                        match lock.choose(&utt.samples, utt.offset_secs, |audio| engine.detect_language(audio)) {
+                            Ok((language, changed)) => {
+                                let status = lock.status();
+                                if let Some(status) = status.filter(|s| changed || s.locked != was_locked) {
+                                    let _ = events.send(Event::Language { source, status });
+                                }
+                                language
+                            }
+                            Err(e) => {
+                                let _ = events.send(Event::Warning(format!("{e:#}")));
+                                lock.status().map(|s| s.language)
+                            }
+                        }
+                    } else {
+                        lock.status().map(|s| s.language)
+                    };
+                    match chunker::transcribe_utterance_as(engine, &utt, language.as_deref()) {
                         Ok(segments) => {
                             let speaker = match (source, speakers.as_mut()) {
                                 (Source::System, Some(s)) if !segments.is_empty() => s.identify(&utt.samples),
@@ -310,10 +343,20 @@ impl Recorder {
                         }
                     }
                 }
+                let picks = std::mem::take(&mut *worker_shared.language_picks.lock().unwrap_or_else(|e| e.into_inner()));
+                for (j, pick) in picks.into_iter().enumerate() {
+                    if let Some(pick) = pick {
+                        locks[j].set_manual(pick);
+                        let source = if j == 0 { Source::Mic } else { Source::System };
+                        if let Some(status) = locks[j].status() {
+                            let _ = events.send(Event::Language { source, status });
+                        }
+                    }
+                }
                 let Some(track) = live[i].as_mut() else { continue };
                 let utts = track.feed(&block);
                 let finished = !utts.is_empty();
-                run(&mut engine, &mut speakers, block.source, utts);
+                run(&mut engine, &mut speakers, &mut locks, block.source, utts);
                 let clear_interim = |interim_len: &mut [usize; 2], interim_text: &mut [String; 2]| {
                     if interim_len[i] > 0 {
                         interim_len[i] = 0;
@@ -345,7 +388,8 @@ impl Recorder {
                     if let Some(utt) = chunker.open_chunk().filter(|u| u.is_loud_enough()) {
                         interim_len[i] = utt.samples.len();
                         interim_at[i] = std::time::Instant::now();
-                        if let Ok(segments) = engine.transcribe(&utt.samples) {
+                        let language = locks[i].status().map(|s| s.language);
+                        if let Ok(segments) = engine.transcribe_as(&utt.samples, language.as_deref()) {
                             let text = segments.iter().map(|s| s.text.trim()).collect::<Vec<_>>().join(" ");
                             // A pass that ends mid-word can come back as a
                             // filler phrase or much shorter; keep the last one then.
@@ -366,7 +410,7 @@ impl Recorder {
             // Capture ended: flush each source's last partial utterance.
             for (i, source) in [(0, Source::Mic), (1, Source::System)] {
                 if let Some(track) = live[i].take() {
-                    run(&mut engine, &mut speakers, source, track.finish());
+                    run(&mut engine, &mut speakers, &mut locks, source, track.finish());
                 }
             }
 
@@ -380,6 +424,7 @@ impl Recorder {
                 }
             }
             drop(run);
+            let languages = locks.map(|l| l.status().filter(|s| s.manual).map(|s| s.language));
             live_lines.sort_by(|a, b| a.start_secs.total_cmp(&b.start_secs));
             let duration_secs = *samples_seen.iter().max().unwrap_or(&0) as f64 / SAMPLE_RATE as f64;
             Ok((
@@ -390,6 +435,7 @@ impl Recorder {
                     tracks,
                     live_lines,
                     live_errors,
+                    languages,
                 },
                 engine,
             ))
@@ -439,6 +485,12 @@ impl Recorder {
             self.shared.muted[idx(source)].store(!on, Ordering::SeqCst);
         }
         Ok(self.position_secs())
+    }
+
+    /// Transcribes `source` in `language` from its next utterance on
+    /// (auto mode only), or goes back to detecting it (`None`).
+    pub fn set_language(&self, source: Source, language: Option<String>) {
+        self.shared.language_picks.lock().unwrap_or_else(|e| e.into_inner())[idx(source)] = Some(language);
     }
 
     /// Whether `source` is being recorded right now (open and not off).

@@ -37,6 +37,10 @@ struct ModelArgs {
     /// "Speaker 2", …). Also on when enabled in the app's settings.
     #[arg(long)]
     diarize: bool,
+    /// People in the call, counting you (2–4, or 5 for "5 or more"): helps
+    /// telling the voices on the system-audio side apart [default: automatic]
+    #[arg(long, value_parser = clap::value_parser!(u8).range(2..=5))]
+    people: Option<u8>,
     /// Suppress steady background noise (fans, hum) on the mic before
     /// transcribing; the recorded WAV stays untouched
     #[arg(long)]
@@ -401,6 +405,7 @@ impl ModelArgs {
             vad_model: vad.exists().then_some(vad),
             diarize: self.diarize(),
             denoise_mic: self.denoise(),
+            people: self.people.unwrap_or(0),
         }
     }
 
@@ -442,7 +447,8 @@ impl ModelArgs {
         }
         let config = Config::load();
         let conn = connection(&config, &choice.connection)?;
-        let engine = Engine::cloud(&conn, &choice.model, &self.language())?;
+        let mut engine = Engine::cloud(&conn, &choice.model, &self.language())?;
+        engine.set_meeting_languages(&config.meeting_languages);
         let privacy = tr("Audio wird zur Transkription an diesen Anbieter gesendet");
         eprintln!("[mostalgia] {}", trf("Transkription: {} — {}", &[&engine.label(), &privacy]));
         Ok(engine)
@@ -456,7 +462,8 @@ impl ModelArgs {
             trf("Modell nicht gefunden: {} — zuerst scripts/download-model.sh ausführen oder --model angeben", &[&model.display()])
         );
         eprintln!("[mostalgia] {}", trf("Lade Modell {} …", &[&model.display()]));
-        let engine = Engine::load(&model, &self.language())?;
+        let mut engine = Engine::load(&model, &self.language())?;
+        engine.set_meeting_languages(&Config::load().meeting_languages);
         match engine.gpu() {
             Some(gpu) => eprintln!("[mostalgia] {}", trf("Nutze GPU: {}", &[&gpu])),
             None => eprintln!("[mostalgia] {}", tr("Keine eigene Grafikkarte gefunden — nutze das Standardgerät")),
@@ -654,6 +661,10 @@ fn start(models: &ModelArgs, sum: &SummaryArgs, cfg: RecordConfig, speakers: boo
                 eprintln!("[mostalgia] {}", trf("Transkription mit {} fehlgeschlagen (Aufnahme läuft weiter): {}", &[&engine, &message]));
             }
             Event::Level { .. } => {}
+            Event::Language { source, status } => {
+                let how = if status.manual { tr("gewählt") } else if status.locked { tr("fest") } else { tr("vorläufig") };
+                eprintln!("[mostalgia] {}", trf("Sprache {}: {} ({})", &[&source.as_str(), &mostalgia_core::language::native_name(&status.language), &how]));
+            }
         }
     }
     let (recording, mut engine) = recorder.join()?;
@@ -780,6 +791,7 @@ fn import(dir: &Path, models: &ModelArgs, sum: &SummaryArgs) -> Result<()> {
         tracks,
         live_lines: Vec::new(),
         live_errors: 0,
+        languages: [None, None],
     };
     let mut engine = models.build_engine(&models.final_choice()?)?;
     finish(&mut engine, models, sum, &rec)

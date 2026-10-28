@@ -85,4 +85,11 @@ pub const EN: &[(&str, &str)] = &[
     ("nicht gefunden ({}): {}", "not found ({}): {}"),
     ("Limit erreicht ({}): {}", "rate limit reached ({}): {}"),
     ("Fehler {}: {}", "Error {}: {}"),
+    ("Sprache wird erkannt …", "Detecting language …"),
+    ("Sprache: {}", "Language: {}"),
+    ("Erkannt: {}", "Detected: {}"),
+    ("Erkenne: {} …", "Detecting: {} …"),
+    ("Gilt ab dem nächsten Satz. Wahrscheinlichkeit: {}", "Applies from the next sentence. Likelihood: {}"),
+    ("Gilt ab dem nächsten Satz.", "Applies from the next sentence."),
+    ("Weitere Sprachen", "More languages"),
 ];

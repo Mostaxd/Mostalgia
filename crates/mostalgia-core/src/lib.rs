@@ -17,6 +17,7 @@ pub mod docs;
 pub mod export;
 pub mod finalize;
 pub mod i18n;
+pub mod language;
 pub mod llm;
 pub mod paths;
 pub mod playback;

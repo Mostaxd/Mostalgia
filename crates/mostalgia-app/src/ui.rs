@@ -206,6 +206,16 @@ pub fn speaker_display(label: &str) -> String {
     mostalgia_core::i18n::speaker(label)
 }
 
+/// A "people in the call" choice (`diarize::PEOPLE_CHOICES`): automatic,
+/// a number, or "5+".
+pub fn people_label(people: u8) -> SharedString {
+    match people {
+        0 => mostalgia_core::i18n::tr("Automatisch").into(),
+        5.. => "5+".into(),
+        n => n.to_string().into(),
+    }
+}
+
 /// A speaker "chip": a small coloured dot plus the name.
 pub fn speaker_chip(label: &str, cx: &App) -> Div {
     let color = speaker_color(label, cx);

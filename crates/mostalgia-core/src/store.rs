@@ -423,6 +423,13 @@ fn source_of(s: String) -> rusqlite::Result<Source> {
 }
 
 impl Store {
+    /// The language of every meeting (as stored: a code, or "auto").
+    pub fn meeting_languages(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT language FROM meetings")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
     /// Direct access for the search index (`crate::ask`).
     pub(crate) fn conn(&self) -> &Connection {
         &self.conn
@@ -855,6 +862,30 @@ impl Store {
                AND (speaker = ?3 OR (speaker IS NULL AND source = ?4))",
             params![new, meeting_id, current, source],
         )?)
+    }
+
+    /// Gives some lines of a meeting to another speaker (an empty name
+    /// clears it, back to "Ich" / "Andere"). Returns the labels they had.
+    pub fn set_segments_speaker(&self, meeting_id: i64, segment_ids: &[i64], name: &str) -> Result<Vec<String>> {
+        let name = name.trim();
+        let new = (!name.is_empty()).then_some(name);
+        let tx = self.conn.unchecked_transaction()?;
+        let mut previous: Vec<String> = Vec::new();
+        for id in segment_ids {
+            let old: Option<(String, Option<String>)> = tx
+                .query_row("SELECT source, speaker FROM segments WHERE id = ?1 AND meeting_id = ?2", params![id, meeting_id], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
+                .optional()?;
+            let Some((source, speaker)) = old else { continue };
+            let label = speaker.unwrap_or_else(|| Source::parse(&source).unwrap_or(Source::System).speaker_label().to_string());
+            if !previous.contains(&label) {
+                previous.push(label);
+            }
+            tx.execute("UPDATE segments SET speaker = ?1 WHERE id = ?2", params![new, id])?;
+        }
+        tx.commit()?;
+        Ok(previous)
     }
 
     pub fn update_segment_text(&self, segment_id: i64, text: &str) -> Result<()> {
