@@ -24,6 +24,7 @@ pub mod summary;
 pub mod text_import;
 pub mod transcribe;
 pub mod vad;
+pub mod voices;
 
 pub use audio::Source;
 

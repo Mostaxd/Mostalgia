@@ -18,7 +18,7 @@ use mostalgia_core::config::{Config, SttChoice};
 use mostalgia_core::playback::{self, Player};
 use mostalgia_core::store::{Meeting, Store};
 use mostalgia_core::i18n::{self, tr, trf};
-use mostalgia_core::{Source, cloud_stt, companion, finalize, paths, summary};
+use mostalgia_core::{Source, cloud_stt, companion, finalize, paths, summary, voices};
 
 use crate::recording::SharedEngine;
 use crate::ui;
@@ -829,10 +829,43 @@ impl MeetingView {
         });
         if let Err(e) = result {
             self.error = Some(format!("{e:#}").into());
+        } else if let Edit::Speaker(current, input) = &edit {
+            self.learn_voice(current.clone(), input.read(cx).value().trim().to_string(), cx);
         }
         self._subscriptions.clear();
         self.reload(cx);
         cx.emit(MeetingEvent::Changed);
+    }
+
+    /// After a rename: remembers the named person's voice for later
+    /// meetings (in the background; computing a voice print takes a moment).
+    fn learn_voice(&mut self, previous: String, name: String, cx: &mut Context<Self>) {
+        if !mostalgia_core::diarize::available() || previous == name {
+            return;
+        }
+        let id = self.id;
+        let task = cx.background_spawn({
+            let name = name.clone();
+            async move { voices::learn_from_meeting(id, &previous, &name) }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(voices::Learned::Voice { .. }) => {
+                        this.notice = Some(trf("Stimme von {} gemerkt — wird in künftigen Besprechungen erkannt.", &[&name]).into())
+                    }
+                    Ok(voices::Learned::TooShort { .. }) => {
+                        this.notice = Some(trf("{} spricht hier zu kurz, um die Stimme zu lernen.", &[&name]).into())
+                    }
+                    Ok(_) => {}
+                    Err(e) => this.error = Some(trf("Stimme nicht gelernt: {}", &[&format!("{e:#}")]).into()),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn cancel_edit(&mut self, cx: &mut Context<Self>) {
@@ -1618,6 +1651,9 @@ impl MeetingView {
                     .child(Input::new(input).w(px(220.)).small())
                     .child(Button::new("spk-save").small().primary().label(tr("Speichern")).on_click(cx.listener(|this, _, _, cx| this.commit_edit(cx))))
                     .child(Button::new("spk-cancel").small().ghost().label(tr("Abbrechen")).on_click(cx.listener(|this, _, _, cx| this.cancel_edit(cx))))
+                    .when(current != "Ich" && mostalgia_core::diarize::available(), |el| {
+                        el.child(div().text_xs().text_color(theme.muted_foreground).child(tr("Die Stimme wird gemerkt und künftig mit diesem Namen erkannt.")))
+                    })
                     .into_any_element(),
             );
         }

@@ -77,7 +77,7 @@ model running on your own machine. You always see which one is doing the work.
 ### 🗣️ Speakers
 - *Me* vs *Others* for free (separate tracks).
 - Optional **speaker diarization** (sherpa-onnx, pyannote + WeSpeaker) splits the other side into Speaker 1, 2, …
-- Rename a speaker once — every line follows.
+- Rename a speaker once — every line follows, and the voice is remembered: "Speaker 2" → "Felix" today is labelled *Felix* automatically in the next meeting. Manage or forget known voices in Settings → Speakers (only a voice print is kept, no audio).
 
 </td><td valign="top">
 

@@ -5,6 +5,9 @@
 //!   over the whole track (sherpa-onnx). Accurate.
 //! - Live: an embedding per chunk, matched against the voices heard so far.
 //!   Approximate; the final pass relabels the saved transcript.
+//!
+//! Both also compare voices with the ones named in earlier meetings
+//! ([`crate::voices`]) and use the name when one matches.
 
 use std::path::PathBuf;
 
@@ -24,6 +27,14 @@ const CLUSTER_THRESHOLD: f32 = 0.5;
 const LIVE_MATCH: f32 = 0.55;
 /// Live: chunks shorter than this don't carry a reliable voice print.
 const LIVE_MIN_SECS: f64 = 1.5;
+/// Final pass: cosine similarity at which a speaker is a known voice.
+/// Same-person prints from this model are usually 0.6–0.85 apart from
+/// different people's at 0.0–0.35. `MOSTALGIA_VOICE_MATCH` overrides it.
+const KNOWN_MATCH: f32 = 0.5;
+/// Live: the same, for a voice heard only in short chunks so far.
+const LIVE_KNOWN_MATCH: f32 = 0.55;
+/// Final pass: speech per speaker used to compare with known voices.
+const MATCH_SECS: f64 = 60.0;
 
 pub fn speaker_name(index: usize) -> String {
     format!("Sprecher {}", index + 1)
@@ -70,7 +81,8 @@ pub fn label_track(samples: &[f32], segments: &mut [&mut FinalSegment]) -> Resul
             order.push(t.speaker);
         }
     }
-    if order.len() < 2 {
+    let names = name_speakers(&order, &turns, samples, &emb_model);
+    if order.len() < 2 && names.iter().all(Option::is_none) {
         return Ok(order.len());
     }
     for seg in segments.iter_mut() {
@@ -84,10 +96,80 @@ pub fn label_track(samples: &[f32], segments: &mut [&mut FinalSegment]) -> Resul
         }
         if let Some(spk) = best.1 {
             let idx = order.iter().position(|s| *s == spk).unwrap_or(0);
-            seg.speaker = Some(speaker_name(idx));
+            seg.speaker = Some(names[idx].clone().unwrap_or_else(|| {
+                // Unknown voices are numbered among themselves.
+                speaker_name(names[..idx].iter().filter(|n| n.is_none()).count())
+            }));
         }
     }
     Ok(order.len())
+}
+
+/// The known voice (if any) of each speaker in `order`, from up to a
+/// minute of their speech. Failing to compare only loses the names.
+#[cfg(feature = "diarization")]
+fn name_speakers(order: &[i32], turns: &[Turn], samples: &[f32], emb_model: &std::path::Path) -> Vec<Option<String>> {
+    let mut names = vec![None; order.len()];
+    let known = crate::voices::Voices::load();
+    if known.is_empty() {
+        return names;
+    }
+    let threshold = std::env::var("MOSTALGIA_VOICE_MATCH").ok().and_then(|v| v.parse().ok()).unwrap_or(KNOWN_MATCH);
+    let mut extractor = match extractor(emb_model, 4) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("[mostalgia] known voices: {e:#}");
+            return names;
+        }
+    };
+    let debug = std::env::var_os("MOSTALGIA_DEBUG").is_some();
+    for (idx, spk) in order.iter().enumerate() {
+        let spans: Vec<(f64, f64)> = turns.iter().filter(|t| t.speaker == *spk).map(|t| (t.start as f64, t.end as f64)).collect();
+        let audio = crate::voices::gather(samples, &spans, MATCH_SECS);
+        if (audio.len() as f64) < LIVE_MIN_SECS * SAMPLE_RATE as f64 {
+            continue;
+        }
+        let Some(emb) = embed(&mut extractor, &audio) else { continue };
+        let found = known.best_match(&emb, threshold);
+        if debug {
+            eprintln!("[diarize] speaker {spk}: known voice {found:?}");
+        }
+        names[idx] = found.map(|(name, _)| name.to_string());
+    }
+    names
+}
+
+#[cfg(feature = "diarization")]
+fn extractor(emb_model: &std::path::Path, threads: usize) -> Result<sherpa_rs::speaker_id::EmbeddingExtractor> {
+    sherpa_rs::speaker_id::EmbeddingExtractor::new(sherpa_rs::speaker_id::ExtractorConfig {
+        model: emb_model.to_string_lossy().into_owned(),
+        num_threads: Some(threads),
+        ..Default::default()
+    })
+    .map_err(|e| anyhow!("loading speaker model: {e}"))
+}
+
+/// A normalized speaker embedding of `audio`.
+#[cfg(feature = "diarization")]
+fn embed(extractor: &mut sherpa_rs::speaker_id::EmbeddingExtractor, audio: &[f32]) -> Option<Vec<f32>> {
+    let emb = extractor.compute_speaker_embedding(audio.to_vec(), SAMPLE_RATE).ok()?;
+    Some(crate::voices::normalize(emb))
+}
+
+/// A voice print (normalized speaker embedding) of one person's speech,
+/// for remembering their voice.
+pub fn voice_print(audio: &[f32]) -> Result<Vec<f32>> {
+    #[cfg(feature = "diarization")]
+    {
+        let (_, emb_model) = models().ok_or_else(|| anyhow!(crate::i18n::tr("Modelle für die Sprechertrennung fehlen — scripts/download-model.sh ausführen")))?;
+        let mut extractor = extractor(&emb_model, 4)?;
+        embed(&mut extractor, audio).ok_or_else(|| anyhow!("computing the voice print failed"))
+    }
+    #[cfg(not(feature = "diarization"))]
+    {
+        let _ = audio;
+        Err(anyhow!(crate::i18n::tr("ohne Sprechertrennung gebaut (Feature `diarization`)")))
+    }
 }
 
 #[cfg(feature = "diarization")]
@@ -164,8 +246,11 @@ pub fn label_track(_: &[f32], _: &mut [&mut FinalSegment]) -> Result<usize> {
 pub struct LiveSpeakers {
     #[cfg(feature = "diarization")]
     extractor: sherpa_rs::speaker_id::EmbeddingExtractor,
-    /// Running mean embedding per speaker (L2-normalized on use).
-    voices: Vec<Vec<f32>>,
+    /// Running mean embedding per speaker (L2-normalized on use), and the
+    /// known voice it turned out to be.
+    voices: Vec<(Vec<f32>, Option<String>)>,
+    /// Voices named in earlier meetings.
+    known: crate::voices::Voices,
 }
 
 impl LiveSpeakers {
@@ -173,63 +258,57 @@ impl LiveSpeakers {
         #[cfg(feature = "diarization")]
         {
             let (_, emb_model) = models().ok_or_else(|| anyhow!(crate::i18n::tr("Modelle für die Sprechertrennung fehlen — scripts/download-model.sh ausführen")))?;
-            let extractor = sherpa_rs::speaker_id::EmbeddingExtractor::new(sherpa_rs::speaker_id::ExtractorConfig {
-                model: emb_model.to_string_lossy().into_owned(),
-                num_threads: Some(2),
-                ..Default::default()
-            })
-            .map_err(|e| anyhow!("loading speaker model: {e}"))?;
             Ok(Self {
-                extractor,
+                extractor: extractor(&emb_model, 2)?,
                 voices: Vec::new(),
+                known: crate::voices::Voices::load(),
             })
         }
         #[cfg(not(feature = "diarization"))]
         Err(anyhow!(crate::i18n::tr("ohne Sprechertrennung gebaut (Feature `diarization`)")))
     }
 
-    /// The speaker of a chunk ("Sprecher N"), or `None` when it's too short
-    /// to tell or only one voice has been heard so far.
+    /// The speaker of a chunk (a known name, or "Sprecher N"), or `None`
+    /// when it's too short to tell or only one unknown voice has been heard
+    /// so far.
     pub fn identify(&mut self, samples: &[f32]) -> Option<String> {
         if (samples.len() as f64) < LIVE_MIN_SECS * SAMPLE_RATE as f64 {
             return None;
         }
         #[cfg(feature = "diarization")]
         {
-            let emb = normalize(self.extractor.compute_speaker_embedding(samples.to_vec(), SAMPLE_RATE).ok()?);
+            use crate::voices::{dot, normalize};
+            let emb = embed(&mut self.extractor, samples)?;
             let best = self
                 .voices
                 .iter()
                 .enumerate()
-                .map(|(i, v)| (i, dot(&normalize(v.clone()), &emb)))
+                .map(|(i, v)| (i, dot(&normalize(v.0.clone()), &emb)))
                 .max_by(|a, b| a.1.total_cmp(&b.1));
             let idx = match best {
                 Some((i, sim)) if sim >= LIVE_MATCH => {
-                    for (v, e) in self.voices[i].iter_mut().zip(&emb) {
+                    for (v, e) in self.voices[i].0.iter_mut().zip(&emb) {
                         *v += e;
                     }
                     i
                 }
                 _ => {
-                    self.voices.push(emb);
+                    self.voices.push((emb, None));
                     self.voices.len() - 1
                 }
             };
-            (self.voices.len() > 1).then(|| speaker_name(idx))
+            // An unnamed voice is checked again as its mean gets steadier.
+            if self.voices[idx].1.is_none() {
+                let mean = normalize(self.voices[idx].0.clone());
+                self.voices[idx].1 = self.known.best_match(&mean, LIVE_KNOWN_MATCH).map(|(n, _)| n.to_string());
+            }
+            if let Some(name) = &self.voices[idx].1 {
+                return Some(name.clone());
+            }
+            let number = self.voices[..idx].iter().filter(|v| v.1.is_none()).count();
+            (self.voices.len() > 1).then(|| speaker_name(number))
         }
         #[cfg(not(feature = "diarization"))]
         None
     }
-}
-
-#[cfg(feature = "diarization")]
-fn normalize(mut v: Vec<f32>) -> Vec<f32> {
-    let n = dot(&v, &v).sqrt().max(1e-9);
-    v.iter_mut().for_each(|x| *x /= n);
-    v
-}
-
-#[cfg(feature = "diarization")]
-fn dot(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
