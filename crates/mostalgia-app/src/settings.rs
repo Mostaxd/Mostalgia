@@ -1199,6 +1199,61 @@ impl SettingsView {
             .child(connection)
     }
 
+    /// The live answer helper: on/off and where she looks.
+    fn render_companion_answers(&mut self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
+        let row = |label: &str, hint: Option<&str>, control: AnyElement| settings_row(label, hint, control, &theme);
+        let name = self.config.companion_character().name();
+        let on = self.config.companion_answers;
+        let current = self.config.answer_sources();
+        let source_buttons: Vec<AnyElement> = mostalgia_core::assist::Sources::ALL
+            .into_iter()
+            .map(|s| {
+                let chosen = s == current;
+                Button::new(SharedString::from(format!("mori-answer-src-{}", s.id())))
+                    .small()
+                    .label(s.label())
+                    .when(chosen, |b| b.primary())
+                    .when(!chosen, |b| b.ghost())
+                    .disabled(!on)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.config.companion_answer_sources = s.id().into();
+                        this.save(cx);
+                    }))
+                    .into_any_element()
+            })
+            .collect();
+        let docs = mostalgia_core::docs::list().map(|l| l.len()).unwrap_or(0);
+        let notes_conn = self.config.notes_request().map(|r| r.connection);
+        ui::card(cx)
+            .child(div().font_semibold().child(tr("Live-Antworten")))
+            .child(div().text_xs().text_color(theme.muted_foreground).child(trf(
+                "Fragt dich jemand während einer Aufnahme etwas, sucht {} in deinen früheren Besprechungen und Dokumenten und schlägt leise eine Antwort mit Quellen vor. Findet sie nichts Passendes, bleibt sie still.",
+                &[&name],
+            )))
+            .child(row(
+                tr("Antwortvorschläge während Aufnahmen"),
+                None,
+                Switch::new("set-mori-answers")
+                    .checked(on)
+                    .on_change(cx.listener(|this, v: &bool, _, cx| {
+                        this.config.companion_answers = *v;
+                        this.save(cx);
+                    }))
+                    .into_any_element(),
+            ))
+            .child(v_flex().gap_1p5().child(div().text_sm().child(tr("Quellen"))).child(h_flex().flex_wrap().gap_1().children(source_buttons)))
+            .when(on && current != mostalgia_core::assist::Sources::Meetings && docs == 0, |el| {
+                el.child(div().text_xs().text_color(theme.warning).child(tr("Noch keine Dokumente – füge welche unter „Dokumente“ in der Seitenleiste hinzu.")))
+            })
+            .when_some(notes_conn.ok().filter(|c| on && !c.is_local()), |el, conn| {
+                el.child(div().text_xs().text_color(theme.muted_foreground).child(trf(
+                    "Für jede erkannte Frage gehen die Frage, die Minuten davor und die gefundenen Abschnitte an {} (die Verbindung der Live-Notizen).",
+                    &[&conn.name],
+                )))
+            })
+    }
+
     /// Live notes: when she looks, how the cards behave, which model.
     fn render_companion_notes(&mut self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme().clone();
@@ -2836,6 +2891,13 @@ impl Render for SettingsView {
                 keywords: "begleiterin companion mori tsumugi hoshi live notizen notes punkte points fokus focus abstand intervall interval gap karten cards einklappen collapse stagger anfragen requests modell model",
                 wide: false,
                 element: self.render_companion_notes(cx).into_any_element(),
+            });
+            cards.push(Card {
+                category: Category::Begleiterin,
+                title: "Live-Antworten",
+                keywords: "begleiterin companion mori tsumugi hoshi live antworten answers antwortvorschlag suggested answer frage question helfer helper dokumente documents besprechungen meetings quellen sources",
+                wide: false,
+                element: self.render_companion_answers(cx).into_any_element(),
             });
             cards.push(Card {
                 category: Category::Begleiterin,

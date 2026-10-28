@@ -542,9 +542,30 @@ pub fn parse_answer(answer: &str) -> Vec<Piece> {
     };
     let mut pieces = Vec::new();
     let mut rest = answer;
-    while let Some(start) = rest.find("[[m:") {
+    while let Some(start) = [rest.find("[[m:"), rest.find("[[d:")].into_iter().flatten().min() {
         let Some(end) = rest[start..].find("]]").map(|e| start + e) else { break };
         let inner = &rest[start + 4..end];
+        // Documents read as "[Handbook · p. 4]".
+        if rest[start..].starts_with("[[d:") {
+            if !rest[..start].is_empty() {
+                pieces.push(Piece::Text(rest[..start].to_string()));
+            }
+            let label = super::cite::parse(&rest[start..end + 2])
+                .sources
+                .iter()
+                .filter_map(|t| match *t {
+                    super::cite::Target::Document { doc_id, loc } => {
+                        let doc = crate::docs::get(doc_id).ok().flatten();
+                        Some(doc.map_or(format!("#{doc_id}"), |d| format!("{} · {}", d.title, d.loc_label(loc))))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            pieces.push(Piece::Text(if label.is_empty() { rest[start..end + 2].to_string() } else { format!("[{label}]") }));
+            rest = &rest[end + 2..];
+            continue;
+        }
         let parsed = inner.split_once('@').and_then(|(id, secs)| Some((id.trim().parse::<i64>().ok()?, secs.trim().parse::<f64>().ok()?)));
         if !rest[..start].is_empty() {
             pieces.push(Piece::Text(rest[..start].to_string()));

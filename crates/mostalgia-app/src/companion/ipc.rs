@@ -75,6 +75,8 @@ pub enum FromMori {
     Ready,
     /// Open a meeting at this moment (a citation in an answer).
     OpenMeeting { meeting_id: i64, secs: f64 },
+    /// Open a document at a page or section (a citation).
+    OpenDocument { doc_id: i64, loc: u32 },
     /// Show the live transcript at this moment (a time cited in a "This
     /// meeting" answer).
     ShowLiveMoment { secs: f64 },

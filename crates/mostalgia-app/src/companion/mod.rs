@@ -4,6 +4,7 @@
 //! drawn over the window's content, can be dragged anywhere inside it, and
 //! opens a chat bubble when clicked. (The code calls her Mori, the first.)
 
+mod answers;
 pub mod art;
 pub mod cast;
 pub mod character;
@@ -42,6 +43,8 @@ use character::Character;
 pub enum MoriEvent {
     /// Open a meeting at this moment (a citation in an answer).
     OpenCitation { meeting_id: i64, secs: f64 },
+    /// Open a document at a page or section (a citation).
+    OpenDocument { doc_id: i64, loc: u32 },
     /// Open Settings → AI & transcription (no connection set up).
     OpenSettings,
     /// She was dragged out of the app window: move her to the desktop.
@@ -271,6 +274,8 @@ pub struct Companion {
     hidden: bool,
     /// Record controls, the Notes tab and her menu.
     ctl: controls::ControlsState,
+    /// Suggested answers to questions asked in the recording.
+    answers: answers::AnswersState,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -384,6 +389,7 @@ impl Companion {
             demo_pose: None,
             hidden: false,
             ctl: Default::default(),
+            answers: Default::default(),
             _subscriptions: vec![sub, focus_sub, escape, unfocus],
         };
         this.reload_config(cx);
@@ -405,6 +411,7 @@ impl Companion {
         self.default_style = config.notes_style();
         self.pos = config.companion_pos;
         self.hidden = config.companion_hidden;
+        self.answers.configure(config.companion_answers, config.answer_sources());
         let character = config.companion_character();
         if character != self.character {
             self.character = character;
@@ -779,6 +786,7 @@ impl Companion {
             self.points_follow = true;
             self.points_unseen = 0;
             self.expanded = false;
+            self.answers.reset();
             reset = true;
         }
         reset
@@ -824,14 +832,16 @@ impl Companion {
         let moving = self.drag.as_ref().is_some_and(|d| d.moved) && self.desktop.is_some();
         let mut changed = self.poll_chat(cx);
         changed |= self.poll_points(cx);
+        changed |= self.poll_answers();
         self.poll_memory();
         changed |= self.release_points();
         if let Some(l) = live {
             self.maybe_request_points(l, cx);
+            self.maybe_suggest(l, cx);
         }
         changed |= self.track_record_controls(live);
         let visible = self.visible_points();
-        let visible = (visible.len(), visible.iter().filter(|&&i| self.is_compact(i)).count());
+        let visible = (visible.len() + self.answers_shown(), visible.iter().filter(|&&i| self.is_compact(i)).count());
         changed |= visible != self.visible_seen;
         self.visible_seen = visible;
         // The stack's size changed: her window's input region follows.
@@ -855,7 +865,7 @@ impl Companion {
                 self.pop = None;
             }
         }
-        let busy = self.chat_rx.is_some() || self.points_rx.is_some() || self.pop.is_some();
+        let busy = self.chat_rx.is_some() || self.points_rx.is_some() || self.answers.busy() || self.pop.is_some();
         // On the desktop she's always in view, not only in an active window.
         let animate = !self.reduce_motion && !self.hidden && (self.desktop_mode || window.is_window_active()) && self.demo_pose.is_none();
         let count = character::frame_count(self.character, self.pose);

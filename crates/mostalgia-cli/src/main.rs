@@ -271,6 +271,21 @@ enum Command {
         #[arg(required = true)]
         question: Vec<String>,
     },
+    /// The documents drive: add files (md, txt, pdf, docx, odt, html) that
+    /// answers can search and cite, list, search or remove them
+    Docs {
+        #[command(subcommand)]
+        action: Option<DocsAction>,
+    },
+    /// Try the live answer helper: suggest an answer to a question from
+    /// past meetings and/or documents, as during a recording
+    Suggest {
+        /// Where to look: meetings, documents or both [default: from the settings]
+        #[arg(long)]
+        sources: Option<String>,
+        #[arg(required = true)]
+        question: Vec<String>,
+    },
     /// Rebuild the search index used by `ask` (only new/changed meetings unless --all)
     Reindex {
         #[arg(long)]
@@ -309,6 +324,28 @@ enum Command {
         #[command(flatten)]
         models: ModelArgs,
     },
+}
+
+#[derive(Subcommand)]
+enum DocsAction {
+    /// List the documents (default)
+    List,
+    /// Add files and index them
+    Add {
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+    },
+    /// Search the documents
+    Search {
+        #[arg(required = true)]
+        query: Vec<String>,
+        #[arg(long, default_value_t = 8)]
+        limit: usize,
+    },
+    /// Read a document's extracted text again and re-embed it
+    Reindex { id: i64 },
+    /// Remove a document (and its copy in the data directory)
+    Remove { id: i64 },
 }
 
 #[derive(Subcommand)]
@@ -495,6 +532,8 @@ fn main() -> Result<()> {
         Command::Retranscribe { id, models } => retranscribe(id, &models),
         Command::Ask { question } => ask(&question.join(" ")),
         Command::Reindex { all } => reindex(all),
+        Command::Docs { action } => docs_cmd(action.unwrap_or(DocsAction::List)),
+        Command::Suggest { sources, question } => suggest(&question.join(" "), sources.as_deref()),
         Command::Devices => list_devices(),
         Command::Transcribe { file, models } => transcribe_file(&file, &models),
     }
@@ -978,6 +1017,88 @@ fn reindex(all: bool) -> Result<()> {
         ask::index_pending()?
     };
     println!("{}", trf("{} Besprechung(en) in {} s indexiert.", &[&n, &format!("{:.2}", t.elapsed().as_secs_f64())]));
+    Ok(())
+}
+
+fn docs_cmd(action: DocsAction) -> Result<()> {
+    use mostalgia_core::docs;
+    match action {
+        DocsAction::List => {
+            let list = docs::list()?;
+            if list.is_empty() {
+                println!("{}", tr("Noch keine Dokumente."));
+            }
+            for d in list {
+                let state = match (&d.error, d.indexed_at) {
+                    (Some(e), _) => trf("Fehler: {}", &[e]),
+                    (None, None) => tr("nicht indexiert").to_string(),
+                    (None, Some(_)) => trf("{} Abschnitte", &[&d.chunks]),
+                };
+                let lang = if d.language.is_empty() { "–" } else { d.language.as_str() };
+                println!("#{:<4} {:<5} {lang:<3} {}  {}  ({state})", d.id, d.kind.id(), i18n::date(&d.added_at), d.title);
+            }
+        }
+        DocsAction::Add { files } => {
+            if !mostalgia_core::ask::embed::available() {
+                eprintln!("[mostalgia] {}", tr("Bedeutungsmodell fehlt (scripts/download-model.sh) — nur Stichwortsuche"));
+            }
+            for f in files {
+                match docs::add(&f) {
+                    Ok((id, false)) => println!("{}", trf("{} ist schon da (#{})", &[&f.display(), &id])),
+                    Ok((id, true)) => match docs::index(id) {
+                        Ok(n) => println!("{}", trf("#{} {}: {} Abschnitte", &[&id, &f.display(), &n])),
+                        Err(e) => eprintln!("#{id} {}: {e:#}", f.display()),
+                    },
+                    Err(e) => eprintln!("{e:#}"),
+                }
+            }
+        }
+        DocsAction::Search { query, limit } => {
+            let hits = docs::search(&query.join(" "), None, limit)?;
+            if hits.is_empty() {
+                println!("{}", trf("Keine Treffer für „{}“.", &[&query.join(" ")]));
+            }
+            for h in hits {
+                let heading = if h.heading.is_empty() { String::new() } else { format!(" · {}", h.heading) };
+                let text: String = h.text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(160).collect();
+                println!("#{:<4} {} · {}{heading}\n      {text}", h.document_id, h.title, docs::loc_label(h.kind, h.loc));
+            }
+        }
+        DocsAction::Reindex { id } => println!("{}", trf("{} Abschnitte", &[&docs::index(id)?])),
+        DocsAction::Remove { id } => {
+            if !docs::delete(id)? {
+                anyhow::bail!("{}", tr("Dokument nicht gefunden"));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn suggest(question: &str, sources: Option<&str>) -> Result<()> {
+    use mostalgia_core::assist::{self, Sources};
+    let sources = match sources {
+        Some(s) => Sources::parse(s).with_context(|| trf("Unbekannte Quelle {} (meetings, documents, both)", &[&s]))?,
+        None => Config::load().answer_sources(),
+    };
+    if let Err(e) = mostalgia_core::ask::index_pending() {
+        eprintln!("[mostalgia] {}", trf("Suchindex: {}", &[&format!("{e:#}")]));
+    }
+    let t = std::time::Instant::now();
+    match assist::suggest(question, &[], sources)? {
+        Some(s) => {
+            let pieces = mostalgia_core::ask::parse_answer(&s.answer);
+            let text: String = pieces
+                .iter()
+                .map(|p| match p {
+                    mostalgia_core::ask::Piece::Text(t) => t.clone(),
+                    mostalgia_core::ask::Piece::Cite(c) => format!("[{}]", c.label),
+                })
+                .collect();
+            println!("{text}");
+            eprintln!("[mostalgia] {} · {} hits · {:.1}s", s.model, s.hits, t.elapsed().as_secs_f64());
+        }
+        None => println!("{}", tr("Kein Vorschlag (keine passende Antwort in den Quellen).")),
+    }
     Ok(())
 }
 

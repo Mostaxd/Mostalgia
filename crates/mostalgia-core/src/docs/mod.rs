@@ -117,7 +117,7 @@ pub fn guess_language(text: &str) -> &'static str {
         de += DE.contains(&w.as_str()) as usize;
         en += EN.contains(&w.as_str()) as usize;
     }
-    if de + en < 5 {
+    if de + en < 3 {
         ""
     } else if de * 2 > en * 3 {
         "de"
