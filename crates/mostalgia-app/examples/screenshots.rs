@@ -194,6 +194,25 @@ fn main() {
             std::thread::sleep(std::time::Duration::from_millis(300));
             shot("13e-mori-points-left-above", &mut cx);
             mori(&mut cx, &|c, cx| c.demo_pos(None, cx));
+            // As it happens: the newest card in full, older ones settled
+            // into quiet one-liners.
+            mori(&mut cx, &|c, cx| {
+                c.demo_reset(cx);
+                c.demo_pose(Some(Pose::Talking), cx);
+                c.demo_points(
+                    &[
+                        (PointKind::Fact, "Q3 budget is about 10% under plan, mostly because of the May trade show.", 15.4),
+                        (PointKind::Decision, "Marketing spend is frozen until the end of June.", 27.0),
+                        (PointKind::Question, "Does the frozen budget also cover the agency retainer?", 33.0),
+                        (PointKind::Action, "Anna sends the revised Q3 forecast to finance by Friday (needs the sales numbers).", 36.8),
+                    ],
+                    &[1],
+                    cx,
+                );
+                c.demo_age_points(1, 20., cx);
+            });
+            std::thread::sleep(std::time::Duration::from_millis(900));
+            shot("13f-mori-points-calm", &mut cx);
             mori(&mut cx, &|c, cx| {
                 c.demo_pose(Some(Pose::Talking), cx);
                 c.demo_chat(

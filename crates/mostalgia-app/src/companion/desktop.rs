@@ -325,28 +325,31 @@ impl DesktopMori {
     /// `--demo`: a fake recording with speech now and then, without the
     /// app or a network: a new point card every few seconds. With
     /// `MORI_DEMO_TRANSCRIPT=<file>` (lines "Speaker: text") it replays that
-    /// transcript instead, a line every 2.5 s, through the same feed the
-    /// app uses (transcript every half second), and the points come from
-    /// the real requests to the configured connection.
+    /// transcript instead, a line every 2.5 s (or at its own time, for lines
+    /// "[mm:ss-mm:ss] Speaker: text": finalized 1.2 s after it ends), through
+    /// the same feed the app uses (transcript every half second), and the
+    /// points come from the real requests to the configured connection.
     fn demo_step(&mut self, start: Instant, cx: &mut Context<Self>) {
         use super::ipc::{WireLine, WireLive};
         let t = start.elapsed().as_secs_f64();
         if let Some(replay) = &mut self.replay {
             const EVERY: f64 = 2.5;
-            let due = ((t / EVERY) as usize).min(replay.lines.len());
-            let speaking = due < replay.lines.len();
-            // Each line is 5 s of speech (both "tracks" together).
+            const FINALIZE: f64 = 1.2;
+            let n = replay.lines.len();
+            let due = replay.lines.iter().take_while(|l| l.end + FINALIZE <= t).count();
+            let speaking = replay.lines.iter().any(|l| l.start <= t && t < l.end) || !replay.timed && due < n;
+            let since = replay.lines.iter().find(|l| l.start <= t && t < l.end).map_or(t % EVERY, |l| t - l.start);
             let live = WireLive {
                 session: 1,
                 paused: false,
                 speech_ago_ms: speaking.then_some(0),
-                speech_since_ago_ms: speaking.then_some(((t % EVERY) * 1000.) as u64),
-                speech_secs: due as f64 * 5.,
-                last_line_end: due as f64 * EVERY + 2.4,
+                speech_since_ago_ms: speaking.then_some((since * 1000.) as u64),
+                speech_secs: replay.lines[..due].iter().map(|l| l.end - l.start).sum(),
+                last_line_end: replay.lines[..due].last().map_or(0., |l| l.end),
                 lines: due,
                 elapsed_secs: t,
             };
-            if t > (replay.lines.len() as f64 + 8.) * EVERY && !replay.ended {
+            if t > replay.lines.last().map_or(0., |l| l.end) + 8. * EVERY && !replay.ended {
                 // The recording ends a while after the last line.
                 replay.ended = true;
                 eprintln!("[mori] demo: the replayed recording ended");
@@ -362,8 +365,8 @@ impl DesktopMori {
                 replay.sent_at = Instant::now();
                 let lines: Vec<WireLine> = (replay.sent..due)
                     .map(|i| {
-                        let (speaker, text) = &replay.lines[i];
-                        WireLine { at: i as f64 * EVERY, speaker: speaker.clone(), text: text.clone() }
+                        let l = &replay.lines[i];
+                        WireLine { at: l.start, speaker: l.speaker.clone(), text: l.text.clone() }
                     })
                     .collect();
                 let from = replay.sent;
@@ -457,7 +460,9 @@ const DEMO_POINTS: &[(mostalgia_core::companion::PointKind, &str, f64)] = {
 
 /// `MORI_DEMO_TRANSCRIPT`: the lines to replay and how far it got.
 struct Replay {
-    lines: Vec<(String, String)>,
+    lines: Vec<ReplayLine>,
+    /// The lines came with their own times.
+    timed: bool,
     sent: usize,
     sent_at: Instant,
     ended: bool,
@@ -467,17 +472,44 @@ impl Replay {
     fn load() -> Option<Self> {
         let path = std::env::var_os("MORI_DEMO_TRANSCRIPT")?;
         let text = std::fs::read_to_string(&path).map_err(|e| eprintln!("[mori] demo transcript: {e}")).ok()?;
-        let lines: Vec<(String, String)> = text
+        let mut timed = false;
+        let lines: Vec<ReplayLine> = text
             .lines()
             .filter(|l| !l.trim().is_empty())
-            .map(|l| match l.split_once(':') {
-                Some((who, said)) if who.len() < 24 => (who.trim().to_string(), said.trim().to_string()),
-                _ => ("Others".to_string(), l.trim().to_string()),
+            .enumerate()
+            .map(|(i, l)| {
+                // Without times: a line every 2.5 s, each 2.4 s long.
+                let (mut start, mut end) = (i as f64 * 2.5, i as f64 * 2.5 + 2.4);
+                let mut l = l.trim();
+                if let Some((stamp, rest)) = l.strip_prefix('[').and_then(|r| r.split_once("] "))
+                    && let Some((a, b)) = stamp.split_once('-')
+                    && let (Some(a), Some(b)) = (mmss(a), mmss(b))
+                {
+                    (start, end, l, timed) = (a, b, rest, true);
+                }
+                let (speaker, text) = match l.split_once(':') {
+                    Some((who, said)) if who.len() < 24 => (who.trim().to_string(), said.trim().to_string()),
+                    _ => ("Others".to_string(), l.to_string()),
+                };
+                ReplayLine { start, end, speaker, text }
             })
             .collect();
         eprintln!("[mori] demo: replaying {} transcript lines", lines.len());
-        Some(Self { lines, sent: 0, sent_at: Instant::now(), ended: false })
+        Some(Self { lines, timed, sent: 0, sent_at: Instant::now(), ended: false })
     }
+}
+
+struct ReplayLine {
+    start: f64,
+    end: f64,
+    speaker: String,
+    text: String,
+}
+
+/// "mm:ss.s" in seconds.
+fn mmss(s: &str) -> Option<f64> {
+    let (m, s) = s.split_once(':')?;
+    Some(m.trim().parse::<f64>().ok()? * 60. + s.trim().parse::<f64>().ok()?)
 }
 
 /// The X11 window id behind a GPUI window.

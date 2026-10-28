@@ -27,7 +27,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use mostalgia_core::ask::AskEvent;
 use mostalgia_core::companion::{AnswerEvent, Point, PointsReply};
-use mostalgia_core::config::Config;
+use mostalgia_core::config::{Config, NotesMode};
 use mostalgia_core::i18n::{self, tr};
 
 use crate::recording::{LiveState, RecordingView};
@@ -125,6 +125,14 @@ pub(crate) struct LivePoint {
     dismissed: bool,
     /// When the card was first on screen (its fold timer).
     shown_at: Option<Instant>,
+    /// When it may appear: cards that arrive together come one by one.
+    release_at: Instant,
+    /// Its arrival was announced (her talking, the "N new" pill, the log).
+    announced: bool,
+    /// When the line that triggered its request was finalized (for the log).
+    line_at: Option<Instant>,
+    /// When its request returned (for the log).
+    arrived: Instant,
 }
 
 /// The last failure, shown next to her with her Error pose.
@@ -158,7 +166,7 @@ pub struct Companion {
     session_seen: Option<u64>,
     enabled: bool,
     scale: f32,
-    points_interval: u32,
+    notes_mode: NotesMode,
     /// Top-left as fractions of the free room (see `Config::companion_pos`).
     pos: Option<(f32, f32)>,
     reduce_motion: bool,
@@ -215,10 +223,13 @@ pub struct Companion {
     stack_applied: Option<Bounds<Pixels>>,
     /// Finalized speech (secs) at the last points request.
     points_mark: f64,
-    /// Transcript time the next points request starts from.
-    points_from: f64,
+    /// When to ask next and what to send (see `points::NotesState`).
+    notes: points::NotesState,
+    /// The compact card under the mouse (shown in full).
+    hovered_point: Option<usize>,
     expanded: bool,
-    visible_seen: usize,
+    /// Cards shown and how many of them compact, at the last tick.
+    visible_seen: (usize, usize),
     /// Screenshots: a fixed pose.
     demo_pose: Option<Pose>,
     /// Her figure is hidden: the collapsed bar stands in for her
@@ -270,7 +281,7 @@ impl Companion {
             session_seen: None,
             enabled: false,
             scale: 1.,
-            points_interval: 0,
+            notes_mode: NotesMode::Off,
             pos: None,
             reduce_motion: false,
             frames: HashMap::new(),
@@ -312,9 +323,10 @@ impl Companion {
             stack_bounds: Rc::new(Cell::new(None)),
             stack_applied: None,
             points_mark: 0.,
-            points_from: 0.,
+            notes: Default::default(),
+            hovered_point: None,
             expanded: false,
-            visible_seen: 0,
+            visible_seen: (0, 0),
             demo_pose: None,
             hidden: false,
             ctl: Default::default(),
@@ -331,7 +343,7 @@ impl Companion {
         // (whose process only runs while she's turned on).
         self.enabled = self.desktop_mode || config.companion && !config.companion_desktop;
         self.scale = config.companion_scale.clamp(0.5, 2.);
-        self.points_interval = config.companion_points_interval_secs;
+        self.notes_mode = config.notes_mode();
         self.pos = config.companion_pos;
         self.hidden = config.companion_hidden;
         let size = self.size();
@@ -630,7 +642,7 @@ impl Companion {
         if recording {
             self.points.clear();
             self.points_mark = 0.;
-            self.points_from = 0.;
+            self.notes = Default::default();
             self.points_wait_since = None;
             self.points_follow = true;
             self.points_unseen = 0;
@@ -680,11 +692,14 @@ impl Companion {
         let moving = self.drag.as_ref().is_some_and(|d| d.moved) && self.desktop.is_some();
         let mut changed = self.poll_chat(cx);
         changed |= self.poll_points(cx);
+        self.poll_memory();
+        changed |= self.release_points();
         if let Some(l) = live {
             self.maybe_request_points(l, cx);
         }
         changed |= self.track_record_controls(live);
-        let visible = self.visible_points().len();
+        let visible = self.visible_points();
+        let visible = (visible.len(), visible.iter().filter(|&&i| self.is_compact(i)).count());
         changed |= visible != self.visible_seen;
         self.visible_seen = visible;
         // The stack's size changed: her window's input region follows.

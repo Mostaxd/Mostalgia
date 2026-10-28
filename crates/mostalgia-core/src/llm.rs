@@ -177,6 +177,19 @@ pub struct Completion {
     pub model: String,
     /// The thinking level that was applied, if any.
     pub effort: Option<String>,
+    /// Tokens used, where the server reports them.
+    pub usage: Option<Usage>,
+}
+
+/// Token counts of one completion.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Usage {
+    pub input: u64,
+    pub output: u64,
+    /// Of `output`: spent thinking (where reported).
+    pub reasoning: u64,
+    /// Of `input`: read from the provider's prompt cache (where reported).
+    pub cached: u64,
 }
 
 /// One system + user turn, streamed so long thinking can't time out.
@@ -222,10 +235,59 @@ pub fn chat(
         Api::OpenAi => effort.filter(|_| !openai_efforts(conn, model).is_empty()),
     };
     let result = match conn.api {
-        Api::Anthropic => claude(conn, key.unwrap_or_default(), model, effort, system, messages, max_tokens, on_delta),
-        Api::OpenAi => openai(conn, key, model, effort, system, messages, on_delta),
+        Api::Anthropic => claude(conn, key.unwrap_or_default(), model, effort, system, messages, max_tokens, &json!({}), on_delta),
+        Api::OpenAi => openai(conn, key, model, effort, system, messages, &json!({}), on_delta),
     };
     result.map_err(|e| effort_hint(e, effort.is_some()))
+}
+
+/// Like [`chat`], for short answers that should come fast (Mori's live
+/// notes): one user turn, the least thinking the model allows — the lowest
+/// effort where it has effort control, thinking switched off on DeepSeek —
+/// and token usage reported where the server can. The system prompt and
+/// the first `stable` bytes of `user` are marked for prompt caching on
+/// Anthropic (OpenAI-compatible servers cache equal prefixes by themselves).
+pub fn chat_quick(conn: &Connection, model: &str, system: &str, user: &str, stable: usize, max_tokens: u32, on_delta: &mut dyn FnMut(&str)) -> Result<Completion> {
+    let key = conn.require_key()?;
+    let key = key.as_deref();
+    match conn.api {
+        Api::Anthropic => {
+            let effort = crate::config::effort_for(conn, model, "low");
+            let ephemeral = json!({ "type": "ephemeral" });
+            let mut blocks = Vec::new();
+            let stable = (0..=stable.min(user.len())).rev().find(|i| user.is_char_boundary(*i)).unwrap_or(0);
+            if stable > 0 {
+                blocks.push(json!({ "type": "text", "text": &user[..stable], "cache_control": ephemeral }));
+            }
+            if stable < user.len() {
+                blocks.push(json!({ "type": "text", "text": &user[stable..] }));
+            }
+            let extra = json!({
+                "system": [{ "type": "text", "text": system, "cache_control": ephemeral }],
+                "messages": [{ "role": "user", "content": blocks }],
+            });
+            claude(conn, key.unwrap_or_default(), model, effort.as_deref(), system, &[Message::user(user)], max_tokens, &extra, on_delta)
+                .map_err(|e| effort_hint(e, effort.is_some()))
+        }
+        Api::OpenAi => {
+            let effort = (!openai_efforts(conn, model).is_empty()).then_some("low");
+            openai(conn, key, model, effort, system, &[Message::user(user)], &quick_extras(conn, model), on_delta).map_err(|e| effort_hint(e, effort.is_some()))
+        }
+    }
+}
+
+/// Extra request fields for [`chat_quick`] on OpenAI-compatible servers
+/// known to take them.
+fn quick_extras(conn: &Connection, model: &str) -> Value {
+    let mut extra = json!({});
+    let deepseek = conn.preset == "deepseek" || conn.base().contains("api.deepseek.com");
+    if deepseek && !model.contains("reasoner") {
+        extra["thinking"] = json!({ "type": "disabled" });
+    }
+    if deepseek || conn.preset == "openai" {
+        extra["stream_options"] = json!({ "include_usage": true });
+    }
+    extra
 }
 
 /// Adds a pointer to the setting when a server rejects the thinking level.
@@ -246,6 +308,7 @@ fn claude(
     system: &str,
     messages: &[Message],
     max_tokens: u32,
+    extra: &Value,
     on_delta: &mut dyn FnMut(&str),
 ) -> Result<Completion> {
     let messages: Vec<Value> = messages.iter().map(|m| json!({ "role": m.role, "content": m.content })).collect();
@@ -260,6 +323,7 @@ fn claude(
     if let Some(effort) = effort {
         body["output_config"] = json!({ "effort": effort });
     }
+    merge(&mut body, extra);
     let request = http(1800)?
         .post(format!("{}/messages", conn.base()))
         .header("x-api-key", key)
@@ -273,6 +337,7 @@ fn claude(
     let mut text = String::new();
     let mut served = model.to_string();
     let mut stop_reason = String::new();
+    let mut usage: Option<Usage> = None;
     for line in BufReader::new(resp).lines() {
         let line = line.with_context(|| trf("{}: Antwort konnte nicht gelesen werden", &[&conn.name]))?;
         let Some(data) = line.strip_prefix("data: ") else { continue };
@@ -281,6 +346,14 @@ fn claude(
             Some("message_start") => {
                 if let Some(m) = event["message"]["model"].as_str() {
                     served = m.to_string();
+                }
+                let u = &event["message"]["usage"];
+                if let Some(n) = u["input_tokens"].as_u64() {
+                    let cached = u["cache_read_input_tokens"].as_u64().unwrap_or(0);
+                    let usage = usage.get_or_insert_default();
+                    // Anthropic counts cached and newly cached tokens apart.
+                    usage.input = n + cached + u["cache_creation_input_tokens"].as_u64().unwrap_or(0);
+                    usage.cached = cached;
                 }
             }
             Some("content_block_delta") if event["delta"]["type"] == "text_delta" => {
@@ -292,6 +365,9 @@ fn claude(
                 if let Some(r) = event["delta"]["stop_reason"].as_str() {
                     stop_reason = r.to_string();
                 }
+                if let Some(n) = event["usage"]["output_tokens"].as_u64() {
+                    usage.get_or_insert_default().output = n;
+                }
             }
             Some("error") => bail!("{}: {}", conn.name, event["error"]["message"].as_str().unwrap_or(tr("unbekannt"))),
             _ => {}
@@ -302,7 +378,26 @@ fn claude(
         "max_tokens" => bail!("{}", trf("{}: Antwort abgeschnitten (max_tokens)", &[&conn.name])),
         _ => {}
     }
-    Ok(Completion { text, model: served, effort: effort.map(str::to_string) })
+    Ok(Completion { text, model: served, effort: effort.map(str::to_string), usage })
+}
+
+/// Adds `extra`'s fields to the request body.
+fn merge(body: &mut Value, extra: &Value) {
+    if let (Some(body), Some(extra)) = (body.as_object_mut(), extra.as_object()) {
+        for (k, v) in extra {
+            body.insert(k.clone(), v.clone());
+        }
+    }
+}
+
+/// Token counts from an OpenAI-style `usage` object.
+fn openai_usage(u: &Value) -> Option<Usage> {
+    Some(Usage {
+        input: u["prompt_tokens"].as_u64()?,
+        output: u["completion_tokens"].as_u64().unwrap_or(0),
+        reasoning: u["completion_tokens_details"]["reasoning_tokens"].as_u64().unwrap_or(0),
+        cached: u["prompt_cache_hit_tokens"].as_u64().or_else(|| u["prompt_tokens_details"]["cached_tokens"].as_u64()).unwrap_or(0),
+    })
 }
 
 fn openai(
@@ -312,6 +407,7 @@ fn openai(
     effort: Option<&str>,
     system: &str,
     messages: &[Message],
+    extra: &Value,
     on_delta: &mut dyn FnMut(&str),
 ) -> Result<Completion> {
     let mut all = vec![json!({ "role": "system", "content": system })];
@@ -324,6 +420,7 @@ fn openai(
     if let Some(effort) = effort {
         body["reasoning_effort"] = json!(openai_effort(effort));
     }
+    merge(&mut body, extra);
     let mut request = http(1800)?.post(format!("{}/chat/completions", conn.base())).json(&body);
     if let Some(key) = key {
         request = request.bearer_auth(key);
@@ -342,6 +439,7 @@ fn openai(
     let mut text = String::new();
     let mut served = model.to_string();
     let mut finish = String::new();
+    let mut usage = None;
     if streamed {
         for line in BufReader::new(resp).lines() {
             let line = line.with_context(|| trf("{}: Antwort konnte nicht gelesen werden", &[&conn.name]))?;
@@ -355,6 +453,9 @@ fn openai(
             }
             if let Some(m) = chunk["model"].as_str() {
                 served = m.to_string();
+            }
+            if let Some(u) = openai_usage(&chunk["usage"]) {
+                usage = Some(u);
             }
             let choice = &chunk["choices"][0];
             let delta = choice["delta"]["content"].as_str().unwrap_or_default();
@@ -374,11 +475,12 @@ fn openai(
         on_delta(&text);
         finish = choice["finish_reason"].as_str().unwrap_or_default().to_string();
         served = value["model"].as_str().unwrap_or(model).to_string();
+        usage = openai_usage(&value["usage"]);
     }
     match finish.as_str() {
         "length" => bail!("{}", trf("{}: Antwort abgeschnitten (length)", &[&conn.name])),
         "content_filter" => bail!("{}", trf("{} hat die Anfrage abgelehnt (content_filter); nichts gespeichert", &[&conn.name])),
         _ => {}
     }
-    Ok(Completion { text, model: served, effort: effort.map(str::to_string) })
+    Ok(Completion { text, model: served, effort: effort.map(str::to_string), usage })
 }

@@ -370,6 +370,9 @@ impl RecordingView {
         self.config.companion = disk.companion;
         self.config.companion_scale = disk.companion_scale;
         self.config.companion_points_interval_secs = disk.companion_points_interval_secs;
+        self.config.companion_notes_mode = disk.companion_notes_mode.clone();
+        self.config.companion_notes_provider = disk.companion_notes_provider.clone();
+        self.config.companion_notes_model = disk.companion_notes_model.clone();
         self.config.companion_pos = disk.companion_pos;
         self.config.companion_clear_button = disk.companion_clear_button;
         self.config.companion_desktop = disk.companion_desktop;

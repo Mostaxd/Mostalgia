@@ -78,8 +78,18 @@ pub struct Config {
     pub companion: bool,
     /// Mori's size (1.0 ≈ 220 px tall).
     pub companion_scale: f32,
-    /// Ask for new live points after this much new speech (0 = off).
+    /// Ask for new live points after this much new speech (0 = off). Only
+    /// read while `companion_notes_mode` is empty (older configs).
     pub companion_points_interval_secs: u32,
+    /// Mori's live notes: "live" (as it happens), "60" / "120" (after so
+    /// many seconds of new speech) or "off"; "" = from
+    /// `companion_points_interval_secs`. See [`Config::notes_mode`].
+    pub companion_notes_mode: String,
+    /// Connection for live notes ("" = the "ask" connection).
+    pub companion_notes_provider: String,
+    /// Model for live notes ("" = the "ask" model when it's the same
+    /// connection, else that connection's default).
+    pub companion_notes_model: String,
     /// Where Mori stands: her top-left as a fraction (0–1) of the room the
     /// window leaves her horizontally and vertically (`None` = top right).
     pub companion_pos: Option<(f32, f32)>,
@@ -94,6 +104,27 @@ pub struct Config {
     /// Mori's figure is hidden: only a small bar (record controls, notes,
     /// the chat) stays where she stood.
     pub companion_hidden: bool,
+}
+
+/// When Mori looks for live notes during a recording.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotesMode {
+    /// After each finished line (debounced): one small request at a time.
+    Live,
+    /// After this many seconds of new speech.
+    Every(u32),
+    Off,
+}
+
+impl NotesMode {
+    /// The value stored in `companion_notes_mode`.
+    pub fn as_config(self) -> String {
+        match self {
+            NotesMode::Live => "live".into(),
+            NotesMode::Every(secs) => secs.to_string(),
+            NotesMode::Off => "off".into(),
+        }
+    }
 }
 
 /// Which speech-to-text engine to use: local Whisper (`connection` empty)
@@ -174,6 +205,9 @@ impl Default for Config {
             companion: false,
             companion_scale: 1.0,
             companion_points_interval_secs: 90,
+            companion_notes_mode: String::new(),
+            companion_notes_provider: String::new(),
+            companion_notes_model: String::new(),
             companion_pos: None,
             companion_clear_button: true,
             companion_desktop: false,
@@ -217,6 +251,54 @@ impl Config {
         let model = if self.ask_model.is_empty() { self.summary_model.clone() } else { self.ask_model.clone() };
         let effort = effort_for(&connection, &model, &self.ask_effort);
         Ok(crate::summary::SummaryRequest { connection, model, language: self.summary_language_code(), effort })
+    }
+
+    /// When Mori looks for live notes. Older configs only have the
+    /// interval: 0 → off, up to 60 s → every 60 s, the old default 90 s →
+    /// as it happens, 120 s and more → every 120 s.
+    pub fn notes_mode(&self) -> NotesMode {
+        match self.companion_notes_mode.trim() {
+            "live" => NotesMode::Live,
+            "off" | "0" => NotesMode::Off,
+            s => match s.parse::<u32>() {
+                Ok(secs) => NotesMode::Every(secs.max(10)),
+                Err(_) => match self.companion_points_interval_secs {
+                    0 => NotesMode::Off,
+                    1..=60 => NotesMode::Every(60),
+                    61..=119 => NotesMode::Live,
+                    _ => NotesMode::Every(120),
+                },
+            },
+        }
+    }
+
+    /// Connection and model for live notes (the thinking level is left to
+    /// `llm::chat_quick`: as little as possible).
+    pub fn notes_request(&self) -> Result<crate::summary::SummaryRequest> {
+        let ask = self.ask_request();
+        let mut req = if self.companion_notes_provider.is_empty() {
+            ask?
+        } else {
+            let connection = self
+                .connection(&self.companion_notes_provider)
+                .cloned()
+                .with_context(|| crate::i18n::trf("KI-Verbindung \"{}\" gibt es nicht mehr — in den Einstellungen wählen", &[&self.companion_notes_provider]))?;
+            let model = if !self.companion_notes_model.is_empty() {
+                self.companion_notes_model.clone()
+            } else {
+                match ask {
+                    Ok(a) if a.connection.id == connection.id => a.model,
+                    _ => {
+                        let default = connection.preset().default_model;
+                        if default.is_empty() { connection.models.first().cloned().unwrap_or_default() } else { default.to_string() }
+                    }
+                }
+            };
+            anyhow::ensure!(!model.is_empty(), "{}", crate::i18n::trf("{}: kein Modell für Live-Notizen gewählt", &[&connection.name]));
+            crate::summary::SummaryRequest { connection, model, language: self.summary_language_code(), effort: None }
+        };
+        req.effort = None;
+        Ok(req)
     }
 
     /// The fixed summary language, if one is set ("app" resolves to the UI language).
@@ -309,4 +391,45 @@ pub fn effort_for(conn: &crate::connections::Connection, model: &str, effort: &s
         crate::connections::Api::OpenAi => !crate::llm::openai_efforts(conn, model).is_empty(),
     };
     supported.then(|| effort.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notes_mode_migrates_the_old_interval() {
+        let with = |interval: u32, mode: &str| Config { companion_points_interval_secs: interval, companion_notes_mode: mode.into(), ..Config::default() }.notes_mode();
+        assert_eq!(Config::default().notes_mode(), NotesMode::Live);
+        assert_eq!(with(0, ""), NotesMode::Off);
+        assert_eq!(with(60, ""), NotesMode::Every(60));
+        assert_eq!(with(90, ""), NotesMode::Live);
+        assert_eq!(with(120, ""), NotesMode::Every(120));
+        assert_eq!(with(180, ""), NotesMode::Every(120));
+        // The new field wins once it's set.
+        assert_eq!(with(60, "live"), NotesMode::Live);
+        assert_eq!(with(90, "off"), NotesMode::Off);
+        assert_eq!(with(90, "120"), NotesMode::Every(120));
+        for m in [NotesMode::Live, NotesMode::Every(60), NotesMode::Off] {
+            assert_eq!(with(90, &m.as_config()), m);
+        }
+        // An old config file without the new fields.
+        let old: Config = serde_json::from_str(r#"{"companion_points_interval_secs": 180}"#).unwrap();
+        assert_eq!(old.notes_mode(), NotesMode::Every(120));
+    }
+
+    #[test]
+    fn notes_request_defaults_to_the_ask_connection() {
+        let mut c = Config { summary_provider: "deepseek".into(), summary_model: "deepseek-chat".into(), ..Config::default() };
+        let r = c.notes_request().unwrap();
+        assert_eq!((r.connection.id.as_str(), r.model.as_str(), r.effort), ("deepseek", "deepseek-chat", None));
+        c.companion_notes_provider = "claude".into();
+        let r = c.notes_request().unwrap();
+        assert_eq!(r.connection.id, "claude");
+        assert!(!r.model.is_empty());
+        c.companion_notes_model = "claude-haiku-5-5".into();
+        assert_eq!(c.notes_request().unwrap().model, "claude-haiku-5-5");
+        c.companion_notes_provider = "gone".into();
+        assert!(c.notes_request().is_err());
+    }
 }

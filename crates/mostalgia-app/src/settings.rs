@@ -12,7 +12,7 @@ use gpui_kit::*;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use mostalgia_core::audio::{self, SourceInfo};
 use mostalgia_core::cloud_stt;
-use mostalgia_core::config::{Config, Mode, SttChoice};
+use mostalgia_core::config::{Config, Mode, NotesMode, SttChoice};
 use mostalgia_core::connections::{self, Api, Connection, PRESETS};
 use mostalgia_core::llm::{self, ModelInfo};
 use mostalgia_core::paths;
@@ -102,6 +102,8 @@ fn key_state(c: &Connection) -> KeyState {
 enum Slot {
     Summary,
     Ask,
+    /// Mori's live notes.
+    Notes,
     Live,
     Final,
 }
@@ -737,6 +739,11 @@ impl SettingsView {
 }
 
 // ── Darstellung: Mori ──
+
+/// Requests per 10 minutes of talk with live notes "as it happens"
+/// (measured: a replayed 8-minute meeting against DeepSeek).
+const LIVE_NOTES_REQUESTS_PER_10_MIN: u32 = 65;
+
 impl SettingsView {
     fn render_mori(&mut self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme().clone();
@@ -756,25 +763,53 @@ impl SettingsView {
                 }))
                 .into_any_element()
         };
-        let interval = self.config.companion_points_interval_secs;
-        let interval_button = |secs: u32, cx: &mut Context<Self>| {
-            let label = if secs == 0 { tr("Aus").to_string() } else { format!("{secs} s") };
-            Button::new(SharedString::from(format!("mori-interval-{secs}")))
+        let notes_mode = self.config.notes_mode();
+        let mode_button = |mode: NotesMode, label: String, cx: &mut Context<Self>| {
+            Button::new(SharedString::from(format!("mori-notes-{}", mode.as_config())))
                 .small()
                 .label(label)
-                .when(interval == secs, |b| b.primary())
-                .when(interval != secs, |b| b.ghost())
+                .when(notes_mode == mode, |b| b.primary())
+                .when(notes_mode != mode, |b| b.ghost())
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.config.companion_points_interval_secs = secs;
+                    this.config.companion_notes_mode = mode.as_config();
                     this.save(cx);
                 }))
                 .into_any_element()
         };
+        let mode_buttons = [
+            (NotesMode::Live, tr("Sobald etwas passiert").to_string()),
+            (NotesMode::Every(60), trf("Alle {} s", &[&60])),
+            (NotesMode::Every(120), trf("Alle {} s", &[&120])),
+            (NotesMode::Off, tr("Aus").to_string()),
+        ]
+        .map(|(mode, label)| mode_button(mode, label, cx));
+        let notes_on = notes_mode != NotesMode::Off;
+        // Which connection and model write the notes ("Wie Fragen" = the ask one).
+        let notes_picker = notes_on.then(|| {
+            let separate = !self.config.companion_notes_provider.is_empty();
+            let notes_id = self.config.companion_notes_provider.clone();
+            let label = match self.config.notes_request() {
+                Ok(req) if separate => format!("{} · {}", req.connection.name, self.model_label(&req.connection.id, &req.model)),
+                _ if separate => self.config.connection(&notes_id).map_or(notes_id.clone(), |c| self.conn_label(c)),
+                _ => tr("Wie Fragen (Ask)").to_string(),
+            };
+            let mut items: Vec<Choice> = vec![(tr("Wie Fragen (Ask)").into(), !separate, Some(Pick::NotesConn(None)))];
+            items.extend(self.config.connections.iter().map(|c| (self.conn_label(c), separate && c.id == notes_id, Some(Pick::NotesConn(Some(c.id.clone()))))));
+            let conn_picker = self.picker("mori-notes-conn", label, items, cx);
+            let model_picker = separate.then(|| {
+                let model = self.config.notes_request().map(|r| r.model).unwrap_or_default();
+                let items = self.model_choices(Slot::Notes, &notes_id, &model);
+                self.picker("mori-notes-model", self.model_label(&notes_id, &model), items, cx)
+            });
+            h_flex().flex_wrap().gap_1().child(conn_picker).children(model_picker).into_any_element()
+        });
+        let notes_custom = self.custom_model_row(Slot::Notes, cx);
 
         // Which connection she talks to: the one for "Fragen".
         let connection = match self.config.ask_request() {
             Ok(req) => {
                 let conn = &req.connection;
+                let notes_conn = self.config.notes_request().map_or_else(|_| conn.name.clone(), |r| r.connection.name);
                 let ready = self.keys.is_none() || self.configured(conn);
                 let (color, badge) = if conn.is_local() {
                     (theme.success, connections::local_label(conn.base()).to_string())
@@ -795,13 +830,13 @@ impl SettingsView {
                     .when(!ready, |el| {
                         el.child(div().text_xs().text_color(theme.warning).child(trf("{} ist nicht eingerichtet — in Einstellungen → KI hinterlegen.", &[&conn.name])))
                     })
-                    .when(!conn.is_local() && interval > 0, |el| {
+                    .when(!conn.is_local() && notes_on, |el| {
                         el.child(div().text_xs().text_color(theme.muted_foreground).child(trf(
-                            "Live-Notizen senden etwa alle {} s das neue Transkript an {}; jede Frage sendet das Live-Transkript. Das kostet Tokens bei {}.",
-                            &[&interval, &conn.name, &conn.name],
+                            "Live-Notizen senden das Transkript der Besprechung an {} (bei langen Besprechungen eine kurze Zusammenfassung plus die letzten Minuten); jede Frage sendet das Live-Transkript. Das kostet Tokens bei {}.",
+                            &[&notes_conn, &notes_conn],
                         )))
                     })
-                    .when(!conn.is_local() && interval == 0, |el| {
+                    .when(!conn.is_local() && !notes_on, |el| {
                         el.child(div().text_xs().text_color(theme.muted_foreground).child(trf("Jede Frage sendet das Live-Transkript an {}.", &[&conn.name])))
                     })
                     .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Ändern unter KI & Transkription → Zusammenfassungen & Fragen.")))
@@ -841,9 +876,21 @@ impl SettingsView {
                 ))
                 .child(row(
                     tr("Live-Notizen"),
-                    Some(tr("Sucht nach so vielen Sekunden neuer Sprache nach neuen Notizen.")),
-                    h_flex().flex_wrap().gap_1().children([0, 60, 90, 120, 180].map(|s| interval_button(s, cx))).into_any_element(),
+                    Some(if notes_mode == NotesMode::Live {
+                        tr("Sieht nach jedem fertigen Satz kurz nach – Notizen erscheinen wenige Sekunden, nachdem etwas gesagt wurde.")
+                    } else {
+                        tr("Sucht nach so vielen Sekunden neuer Sprache nach neuen Notizen.")
+                    }),
+                    h_flex().flex_wrap().gap_1().children(mode_buttons).into_any_element(),
                 ))
+                .when(notes_mode == NotesMode::Live, |el| {
+                    el.child(div().text_xs().text_color(theme.muted_foreground).child(trf(
+                        "„Sobald etwas passiert“ schickt mehr, dafür kleinere Anfragen – etwa {} pro 10 Minuten Gespräch.",
+                        &[&LIVE_NOTES_REQUESTS_PER_10_MIN],
+                    )))
+                })
+                .children(notes_picker.map(|p| row(tr("Modell für Live-Notizen"), Some(tr("Ein schnelles Modell reicht; gedacht wird dabei so wenig wie möglich.")), p)))
+                .children(notes_custom)
                 .child(row(
                     tr("Wo"),
                     Some(tr("Auf dem Desktop steht sie über allen Fenstern, z. B. über Teams, und lässt sich auf jeden Bildschirm ziehen.")),
@@ -1013,6 +1060,10 @@ impl SettingsView {
         if ask != summary {
             self.load_models(&ask, cx);
         }
+        let notes = self.config.companion_notes_provider.clone();
+        if !notes.is_empty() && notes != summary && notes != ask {
+            self.load_models(&notes, cx);
+        }
     }
 
     /// Shows the built-in model list now and swaps in the live one if the
@@ -1119,6 +1170,25 @@ impl SettingsView {
         self.save(cx);
     }
 
+    fn set_notes_connection(&mut self, id: Option<String>, cx: &mut Context<Self>) {
+        match id {
+            None => {
+                self.config.companion_notes_provider.clear();
+                self.config.companion_notes_model.clear();
+            }
+            Some(id) => {
+                let Some(conn) = self.config.connection(&id).cloned() else { return };
+                if self.config.companion_notes_provider == id {
+                    return;
+                }
+                self.config.companion_notes_provider = id.clone();
+                self.load_models(&id, cx);
+                self.config.companion_notes_model = self.initial_model(&conn);
+            }
+        }
+        self.save(cx);
+    }
+
     /// Keeps both thinking levels valid for their models.
     fn fix_efforts(&mut self) {
         let summary = self.efforts(&self.config.summary_provider, &self.config.summary_model);
@@ -1136,6 +1206,7 @@ impl SettingsView {
         match slot {
             Slot::Summary => self.config.summary_model = model,
             Slot::Ask => self.config.ask_model = model,
+            Slot::Notes => self.config.companion_notes_model = model,
             Slot::Live => self.config.live_engine = SttChoice { connection: conn, model },
             Slot::Final => self.config.final_engine = SttChoice { connection: conn, model },
         }
@@ -1344,6 +1415,8 @@ impl SettingsView {
 enum Pick {
     SummaryConn(String),
     AskConn(Option<String>),
+    /// Mori's live notes: a connection, or `None` for the "ask" one.
+    NotesConn(Option<String>),
     /// Slot, connection id, model id.
     Model(Slot, String, String),
     /// Type a model id for the slot on this connection.
@@ -1392,6 +1465,7 @@ impl SettingsView {
         match pick {
             Pick::SummaryConn(id) => self.set_summary_connection(id, cx),
             Pick::AskConn(id) => self.set_ask_connection(id, cx),
+            Pick::NotesConn(id) => self.set_notes_connection(id, cx),
             Pick::Model(slot, conn, model) => self.select_model(slot, conn, model, cx),
             Pick::Custom(slot, conn) => self.open_custom_model(slot, conn, window, cx),
             Pick::SummaryLanguage(code) => {
