@@ -59,6 +59,8 @@ pub struct MostalgiaApp {
     confirm_delete: Option<Vec<i64>>,
     /// Audio the cleanup would delete, waiting for the user's first yes.
     confirm_cleanup: Option<Vec<mostalgia_core::cleanup::Candidate>>,
+    /// "Import recording…": the file, its title and date being edited.
+    import: Option<ImportDialog>,
     /// The `audio_keep_days` the last cleanup ran with.
     cleanup_days: Option<u32>,
     delete_audio: bool,
@@ -75,6 +77,14 @@ pub struct MostalgiaApp {
 }
 
 actions!(library, [DeleteSelected]);
+
+/// The import dialog for an audio or video file.
+struct ImportDialog {
+    path: std::path::PathBuf,
+    title: Entity<InputState>,
+    date: Entity<InputState>,
+    error: Option<SharedString>,
+}
 
 impl MostalgiaApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -173,6 +183,7 @@ impl MostalgiaApp {
             anchor: None,
             confirm_delete: None,
             confirm_cleanup: None,
+            import: None,
             cleanup_days: None,
             delete_audio: true,
             rename: None,
@@ -926,6 +937,185 @@ impl MostalgiaApp {
         .detach();
     }
 
+    /// "Import recording…": picks an audio or video file.
+    fn pick_import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: false, prompt: Some(tr("Importieren").into()) });
+        cx.spawn_in(window, async move |this, cx| {
+            let path = match picked.await {
+                Ok(Ok(Some(paths))) => paths.into_iter().next(),
+                Ok(Err(e)) => {
+                    this.update(cx, |this, cx| {
+                        this.error = Some(trf("Dateiauswahl: {}", &[&format!("{e:#}")]).into());
+                        cx.notify();
+                    })
+                    .ok();
+                    None
+                }
+                _ => None,
+            };
+            if let Some(path) = path {
+                this.update_in(cx, |this, window, cx| this.open_import(path, window, cx)).ok();
+            }
+        })
+        .detach();
+    }
+
+    /// Files dropped on the library: the first audio or video file opens
+    /// the import dialog; anything else says what's accepted.
+    fn drop_files(&mut self, paths: &[std::path::PathBuf], window: &mut Window, cx: &mut Context<Self>) {
+        match paths.iter().find(|p| mostalgia_core::media_import::is_media(p)) {
+            Some(p) => self.open_import(p.clone(), window, cx),
+            None => {
+                self.error = Some(trf("Nur Audio- oder Videodateien lassen sich als Aufnahme importieren ({}).", &[&mostalgia_core::media_import::EXTENSIONS.join(", ")]).into());
+                cx.notify();
+            }
+        }
+    }
+
+    /// Screenshots: the import dialog for `path` (`None` closes it).
+    #[doc(hidden)]
+    pub fn demo_import(&mut self, path: Option<std::path::PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
+        match path {
+            Some(path) => self.open_import(path, window, cx),
+            None => self.import = None,
+        }
+        cx.notify();
+    }
+
+    fn open_import(&mut self, path: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let info = mostalgia_core::media_import::info(&path);
+        let title = cx.new(|cx| InputState::new(window, cx));
+        title.update(cx, |s, cx| s.set_value(info.title.clone(), window, cx));
+        let date = cx.new(|cx| InputState::new(window, cx).placeholder("2026-10-28 13:01"));
+        date.update(cx, |s, cx| s.set_value(info.started_at.format("%Y-%m-%d %H:%M").to_string(), window, cx));
+        self.import = Some(ImportDialog { path, title, date, error: None });
+        cx.notify();
+    }
+
+    /// Imports the dialog's file in the background: read, transcribed and
+    /// saved with progress in the library, then opened with summary and notes.
+    fn start_import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::processing::{self, Job, Key};
+        use mostalgia_core::media_import::{self, Stage};
+        let Some(dialog) = &mut self.import else { return };
+        let title = dialog.title.read(cx).value().trim().to_string();
+        let date = dialog.date.read(cx).value().to_string();
+        let Some(started_at) = media_import::parse_date(&date) else {
+            dialog.error = Some(trf("Unbekanntes Datum {} (z. B. \"2026-10-27 14:00\")", &[&format!("{date:?}")]).into());
+            cx.notify();
+            return;
+        };
+        let path = dialog.path.clone();
+        self.import = None;
+        let key = Key::Import(chrono::Local::now().timestamp_millis());
+        let shown = if title.is_empty() { path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default() } else { title.clone() };
+        processing::set(key, Job { title: shown, stage: tr("Audio wird gelesen …").to_string(), fraction: None });
+        cx.notify();
+        let config = mostalgia_core::config::Config::load();
+        let task = cx.background_spawn(async move {
+            let vad = config.vad_model_path();
+            let opts = mostalgia_core::finalize::FinalPassOptions {
+                vad_model: vad.exists().then_some(vad),
+                diarize: config.diarize,
+                denoise_mic: false,
+                people: 0,
+                progress: mostalgia_core::finalize::Progress::new(move |stage| processing::stage(key, stage.label(), stage.fraction())),
+            };
+            let report = move |stage: Stage| {
+                if let Stage::Reading(f) = stage {
+                    let label = match f {
+                        Some(f) => trf("Audio wird gelesen … {} %", &[&((f * 100.0) as u32)]),
+                        None => tr("Audio wird gelesen …").to_string(),
+                    };
+                    processing::stage(key, label, f);
+                }
+            };
+            let result = mostalgia_core::finalize::engine_for(&config, &config.final_engine)
+                .and_then(|mut engine| media_import::import(&path, &title, started_at, &mut engine, &opts, &config.language, &report));
+            processing::clear(key);
+            result.map_err(|e| trf("Import von {} fehlgeschlagen: {}", &[&path.display(), &format!("{e:#}")]))
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            this.update_in(cx, |this, window, cx| {
+                match result {
+                    Ok(saved) => {
+                        if let Some(e) = &saved.error {
+                            eprintln!("[mostalgia] {e}");
+                        }
+                        this.reload(cx);
+                        this.open_meeting(saved.meeting_id, window, cx);
+                        if let Some(m) = this.meeting_view() {
+                            let config = mostalgia_core::config::Config::load();
+                            let (focus, style) = (config.companion_notes_focus.clone(), config.notes_style());
+                            m.update(cx, |m, cx| m.after_text_import(false, focus, style, cx));
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[mostalgia] {e}");
+                        this.error = Some(e.into());
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn render_import_dialog(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let dialog = self.import.as_ref()?;
+        let theme = cx.theme().clone();
+        let name = dialog.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        Some(
+            div()
+                .id("import-overlay")
+                .absolute()
+                .inset_0()
+                .bg(gpui_kit::black().opacity(0.45))
+                .flex()
+                .items_center()
+                .justify_center()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.import = None;
+                    cx.notify();
+                }))
+                .child(
+                    v_flex()
+                        .id("import-dialog")
+                        .w(px(480. * ui::ui_scale()))
+                        .max_w(relative(0.9))
+                        .p_5()
+                        .gap_3()
+                        .rounded(theme.radius_lg)
+                        .border(ui::border_width(cx))
+                        .border_color(theme.border)
+                        .bg(theme.background)
+                        .shadow_lg()
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .child(h_flex().gap_2().items_start().child(Icon::new(IconName::Upload).flex_none().mt_1().text_color(theme.primary)).child(div().flex_1().min_w_0().text_lg().font_semibold().child(tr("Aufnahme importieren"))))
+                        .child(div().text_sm().text_color(theme.muted_foreground).truncate().child(name))
+                        .child(v_flex().gap_1().child(div().text_sm().font_medium().child(tr("Titel"))).child(Input::new(&dialog.title).small()))
+                        .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Die Zusammenfassung gibt ihr danach einen passenden Titel.")))
+                        .child(v_flex().gap_1().child(div().text_sm().font_medium().child(tr("Datum und Uhrzeit"))).child(Input::new(&dialog.date).small()))
+                        .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Aus den Metadaten der Datei, sonst ihrem Dateidatum.")))
+                        .when_some(dialog.error.clone(), |el, e| el.child(div().p_2().rounded(theme.radius).bg(theme.danger.opacity(0.1)).text_color(theme.danger).text_sm().child(e)))
+                        .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Die Datei wird kopiert (das Original kann danach weg), transkribiert, nach Sprechern getrennt und zusammengefasst – wie eine Aufnahme.")))
+                        .child(
+                            h_flex()
+                                .justify_end()
+                                .gap_2()
+                                .child(Button::new("import-cancel").ghost().label(tr("Abbrechen")).on_click(cx.listener(|this, _, _, cx| {
+                                    this.import = None;
+                                    cx.notify();
+                                })))
+                                .child(Button::new("import-start").primary().icon(IconName::Upload).label(tr("Importieren")).on_click(cx.listener(|this, _, window, cx| this.start_import(window, cx)))),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     /// The first cleanup: what it would delete, and a yes or no.
     fn render_cleanup_dialog(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let plan = self.confirm_cleanup.clone()?;
@@ -1287,6 +1477,10 @@ impl MostalgiaApp {
 
         let settings_active = matches!(self.screen, Screen::Settings(_));
         v_flex()
+            .id("library")
+            // Audio or video files dropped here are imported as recordings.
+            .drag_over::<ExternalPaths>(|style, _, _, cx| style.bg(cx.theme().primary.opacity(0.08)))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| this.drop_files(paths.paths(), window, cx)))
             .w(px(272.))
             .h_full()
             .flex_none()
@@ -1302,6 +1496,13 @@ impl MostalgiaApp {
                         h_flex()
                             .gap_2()
                             .child(record_button.flex_1().when(on_record_screen && !is_recording, |b| b.outline()))
+                            .child(
+                                Button::new("import-recording")
+                                    .outline()
+                                    .icon(IconName::Upload)
+                                    .tooltip(tr("Aufnahme importieren … (Audio- oder Videodatei, auch per Drag & Drop)"))
+                                    .on_click(cx.listener(|this, _, window, cx| this.pick_import(window, cx))),
+                            )
                             .child(
                                 Button::new("from-text")
                                     .outline()
@@ -1395,6 +1596,7 @@ impl Render for MostalgiaApp {
         };
         let delete_dialog = self.render_delete_dialog(cx);
         let cleanup_dialog = self.render_cleanup_dialog(cx);
+        let import_dialog = self.render_import_dialog(cx);
         let theme = cx.theme();
         v_flex()
             .size_full()
@@ -1421,5 +1623,6 @@ impl Render for MostalgiaApp {
             .child(self.companion.clone())
             .children(delete_dialog)
             .children(cleanup_dialog)
+            .children(import_dialog)
     }
 }

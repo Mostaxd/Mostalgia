@@ -101,4 +101,13 @@ pub const EN: &[(&str, &str)] = &[
     ("Aus Text importiert · ohne Audio und ohne Zeiten", "Imported from text · no audio and no times"),
     ("Aus Text importiert · ohne Audio", "Imported from text · no audio"),
     ("WIRD VERARBEITET", "PROCESSING"),
+    ("Aufnahme importieren … (Audio- oder Videodatei, auch per Drag & Drop)", "Import recording … (audio or video file, or drag it here)"),
+    ("Importieren", "Import"),
+    ("Nur Audio- oder Videodateien lassen sich als Aufnahme importieren ({}).", "Only audio or video files can be imported as recordings ({})."),
+    ("Import von {} fehlgeschlagen: {}", "Importing {} failed: {}"),
+    ("Aufnahme importieren", "Import recording"),
+    ("Die Zusammenfassung gibt ihr danach einen passenden Titel.", "The summary gives it a fitting title afterwards."),
+    ("Datum und Uhrzeit", "Date and time"),
+    ("Aus den Metadaten der Datei, sonst ihrem Dateidatum.", "From the file's metadata, else its file date."),
+    ("Die Datei wird kopiert (das Original kann danach weg), transkribiert, nach Sprechern getrennt und zusammengefasst – wie eine Aufnahme.", "The file is copied (the original can go afterwards), transcribed, split by speaker and summarized – like a recording."),
 ];

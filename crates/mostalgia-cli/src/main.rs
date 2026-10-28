@@ -173,9 +173,10 @@ enum Command {
         #[command(flatten)]
         summary: SummaryArgs,
     },
-    /// Run the final pass on an existing recording folder and add it to the library
+    /// Add an audio or video file (MP3, M4A, MP4, WAV, FLAC, Ogg/Opus,
+    /// WebM, MKV, MOV …) or a recording folder to the library
     Import {
-        /// A session folder containing mic.wav and/or system.wav
+        /// An audio/video file, or a session folder containing mic.wav and/or system.wav
         dir: PathBuf,
         #[command(flatten)]
         models: ModelArgs,
@@ -537,6 +538,7 @@ fn main() -> Result<()> {
             }
             start(&models, &summary, cfg, speakers, no_final)
         }
+        Command::Import { dir, models, summary } if dir.is_file() => import_media(&dir, &models, &summary),
         Command::Import { dir, models, summary } => import(&dir, &models, &summary),
         Command::Recover { models, summary } => recover(&models, &summary),
         Command::ImportText { file, title, date, duration, language, focus, style, no_notes, summary } => {
@@ -821,6 +823,59 @@ fn recover(models: &ModelArgs, sum: &SummaryArgs) -> Result<()> {
         }
     }
     anyhow::ensure!(failed == 0, "{}", trf("{} Aufnahme(n) nicht wiederhergestellt", &[&failed]));
+    Ok(())
+}
+
+/// `mostalgia import <file>`: the file's sound becomes the meeting's track
+/// (see `media_import`), then the same final pass and summary as a recording.
+fn import_media(file: &Path, models: &ModelArgs, sum: &SummaryArgs) -> Result<()> {
+    use mostalgia_core::media_import;
+    anyhow::ensure!(
+        media_import::is_media(file),
+        "{}",
+        trf("{}: kein unterstütztes Audio- oder Videoformat ({})", &[&file.display(), &media_import::EXTENSIONS.join(", ")])
+    );
+    let info = media_import::info(file);
+    eprintln!("[mostalgia] {}", trf("Importiere {} ({}) …", &[&file.display(), &i18n::date_time(&info.started_at)]));
+    let recordings = paths::recordings_dir();
+    std::fs::create_dir_all(&recordings)?;
+    let dir = media_import::session_dir(&recordings, &info.started_at)?;
+    let track = dir.join(Source::System.file_name());
+    let shown = std::sync::atomic::AtomicU32::new(0);
+    let secs = media_import::convert(file, &track, &|f| {
+        if let Some(f) = f {
+            let tenth = (f * 10.0) as u32;
+            if tenth > shown.swap(tenth, std::sync::atomic::Ordering::Relaxed) {
+                eprintln!("[mostalgia] {}", trf("Audio wird gelesen … {} %", &[&(tenth * 10)]));
+            }
+        }
+    });
+    let secs = match secs {
+        Ok(secs) => secs,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(e);
+        }
+    };
+    mostalgia_core::recovery::begin(&dir, &mostalgia_core::recovery::Manifest { started_at: info.started_at.timestamp(), pid: std::process::id() })?;
+    let rec = Recording {
+        dir: dir.clone(),
+        started_at: info.started_at,
+        duration_secs: secs,
+        tracks: vec![(Source::System, track)],
+        live_lines: Vec::new(),
+        live_errors: 0,
+        languages: [None, None],
+    };
+    let mut engine = models.build_engine(&models.final_choice()?)?;
+    finish(&mut engine, models, sum, &rec)?;
+    // Without a summary to title it, the file's name does.
+    if sum.no_summary {
+        let store = open_store()?;
+        if let Some(id) = store.list(500)?.into_iter().find(|m| m.started_at.timestamp() == info.started_at.timestamp()).map(|m| m.id) {
+            store.set_title(id, &info.title)?;
+        }
+    }
     Ok(())
 }
 

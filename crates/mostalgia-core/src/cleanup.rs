@@ -129,7 +129,9 @@ pub fn plan(store: &Store, recordings: &Path, days: u32, now: DateTime<Local>, b
     let cutoff = now.timestamp() - days as i64 * 86_400;
     let mut out = Vec::new();
     for row in rows(store)? {
-        let ended = row.started_at + row.duration_secs as i64;
+        // An old recording imported today counts from today.
+        let added = std::fs::metadata(&row.dir).and_then(|m| m.modified()).ok().map_or(0, |t| DateTime::<Local>::from(t).timestamp());
+        let ended = (row.started_at + row.duration_secs as i64).max(added.min(now.timestamp()));
         let safe = ended <= cutoff
             && !busy.contains(&row.id)
             // An unfinished transcript may still need the audio.
@@ -213,6 +215,9 @@ mod tests {
         std::fs::write(dir.join("notes.txt"), b"mine").unwrap();
         let started_at = Local::now() - chrono::Duration::days(days_ago);
         let id = s.store.insert_meeting(&NewMeeting { title: name, started_at, duration_secs: 3600.0, language: "de", dir: &dir }, &[]).unwrap();
+        // The folder as old as the recording.
+        let then = std::time::SystemTime::now() - std::time::Duration::from_secs(days_ago as u64 * 86_400);
+        std::fs::File::open(&dir).unwrap().set_modified(then).unwrap();
         (id, dir)
     }
 
@@ -234,7 +239,11 @@ mod tests {
 
         assert_eq!(usage(&s.store).unwrap(), Usage { meetings: 7, bytes: 7 * 4000 });
         assert!(plan(&s.store, &s.recordings, 0, Local::now(), &[]).unwrap().is_empty(), "off");
+        // Imported today, though recorded long ago: counts from today.
+        let (_imported, imported_dir) = meeting(&mut s, "imported", 2, None);
+        s.store.conn().execute("UPDATE meetings SET started_at = started_at - 400 * 86400 WHERE id = ?1", [_imported]).unwrap();
         let plan = plan(&s.store, &s.recordings, 7, Local::now(), &[busy]).unwrap();
+        assert!(imported_dir.join("mic.wav").exists());
         assert_eq!(plan.iter().map(|c| c.meeting_id).collect::<Vec<_>>(), [old]);
         assert_eq!(plan[0].bytes, 4000);
 
