@@ -423,6 +423,14 @@ code { font: 500 .88em var(--mono); background: rgba(91,42,78,.1); padding: .1em
 .ask-demo .q { justify-self: end; background: var(--plum); color: var(--cream); padding: 10px 14px; border-radius: 16px 16px 4px 16px; font-weight: 600; }
 .ask-demo .a { background: var(--cream); border: 2px solid var(--ink); padding: 10px 14px; border-radius: 16px 16px 16px 4px; }
 .src { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--amber); font: 700 11px var(--sans); vertical-align: 1px; border: 1.5px solid var(--ink); }
+.suggest-demo { margin-top: 16px; background: var(--night); color: var(--cream); border: 2px solid var(--amber); border-radius: 14px; padding: 12px 16px; box-shadow: 0 0 0 4px rgba(242,165,65,.18); animation: floaty 4s ease-in-out infinite; }
+.suggest-demo p { margin: 0 0 6px; }
+.sd-head { font: 700 14px var(--sans); color: var(--amber); }
+.sd-head span { font: 500 12px var(--mono); color: var(--cream); opacity: .7; margin-left: 6px; }
+.sd-q { font-size: 14px; opacity: .75; font-style: italic; }
+.sd-a { font-weight: 600; }
+.sd-src { font-size: 13px; opacity: .8; margin: 0 !important; }
+.sd-src b { background: rgba(255,255,255,.1); padding: 1px 7px; border-radius: 6px; font-weight: 600; }
 .honest { margin: 6px 0 0; padding: 18px 22px; font: 700 20px/1.4 var(--round); border-left: 6px solid var(--terra); background: var(--cream); border-radius: 0 12px 12px 0; }
 
 .modes { display: grid; gap: 12px; }
