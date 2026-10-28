@@ -249,6 +249,20 @@ impl Companion {
                 this.ask(q, cx);
             }
         });
+        // Her menu closes on Escape and when her window loses focus (on the
+        // desktop: a click anywhere else).
+        let escape = cx.observe_keystrokes(|this: &mut Self, ev, _, cx| {
+            if ev.keystroke.key == "escape" && this.ctl.menu.is_some() {
+                this.ctl.menu = None;
+                cx.notify();
+            }
+        });
+        let unfocus = cx.observe_window_activation(window, |this: &mut Self, window, cx| {
+            if !window.is_window_active() && this.ctl.menu.is_some() {
+                this.ctl.menu = None;
+                cx.notify();
+            }
+        });
         let mut this = Self {
             recording,
             desktop_mode,
@@ -304,7 +318,7 @@ impl Companion {
             demo_pose: None,
             hidden: false,
             ctl: Default::default(),
-            _subscriptions: vec![sub],
+            _subscriptions: vec![sub, escape, unfocus],
         };
         this.reload_config(cx);
         this
