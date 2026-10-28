@@ -26,6 +26,8 @@ enum Screen {
     Recording,
     Ask(Entity<crate::ask_view::AskView>),
     Documents(Entity<crate::documents::DocumentsView>),
+    /// The decision log (when it's switched on).
+    Decisions(Entity<crate::decisions_view::DecisionsView>),
     Meeting(Entity<MeetingView>),
     Settings(Entity<SettingsView>),
     /// "Besprechung aus Text" (a meeting that wasn't recorded).
@@ -309,6 +311,37 @@ impl MostalgiaApp {
     }
 
     /// Opens the "Dokumente" screen, keeping its state.
+    /// The decision log; `build` starts filling it from earlier meetings.
+    pub fn open_decisions(&mut self, build: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let view = cx.new(|cx| crate::decisions_view::DecisionsView::new(window, cx));
+        let sub = cx.subscribe_in(&view, window, |this, _, event: &crate::decisions_view::DecisionsEvent, window, cx| match event {
+            crate::decisions_view::DecisionsEvent::Open { meeting_id, secs } => {
+                this.open_meeting(*meeting_id, window, cx);
+                if let Some(m) = this.meeting_view() {
+                    let secs = *secs;
+                    m.update(cx, |m, cx| match secs {
+                        Some(secs) => m.jump_to(secs, cx),
+                        None => m.set_tab(1, cx),
+                    });
+                }
+            }
+        });
+        self._subscriptions.push(sub);
+        if build {
+            view.update(cx, |v, cx| v.build(cx));
+        }
+        self.screen = Screen::Decisions(view);
+        cx.notify();
+    }
+
+    #[doc(hidden)]
+    pub fn decisions_view(&self) -> Option<Entity<crate::decisions_view::DecisionsView>> {
+        match &self.screen {
+            Screen::Decisions(v) => Some(v.clone()),
+            _ => None,
+        }
+    }
+
     pub fn open_documents(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<crate::documents::DocumentsView> {
         let view = match &self.documents_view {
             Some(v) => v.clone(),
@@ -690,7 +723,11 @@ impl MostalgiaApp {
             .ok()
             .and_then(|e| e.as_ref().and_then(|e| e.gpu().map(str::to_string)));
         let view = cx.new(|cx| SettingsView::new(gpu, window, cx));
-        let sub = cx.subscribe(&view, |this, _, _: &SettingsEvent, cx| {
+        let sub = cx.subscribe_in(&view, window, |this, _, event: &SettingsEvent, window, cx| {
+            if let SettingsEvent::BuildDecisions = event {
+                this.open_decisions(true, window, cx);
+                return;
+            }
             if this.cleanup_days != Some(mostalgia_core::config::Config::load().audio_keep_days) {
                 this.run_cleanup(cx);
             }
@@ -1538,6 +1575,18 @@ impl MostalgiaApp {
                                 this.open_documents(window, cx);
                             })),
                     )
+                    .when(mostalgia_core::config::Config::load().decision_log, |el| {
+                        el.child(
+                            Button::new("decisions")
+                                .w_full()
+                                .ghost()
+                                .when(matches!(self.screen, Screen::Decisions(_)), |b| b.selected(true))
+                                .icon(IconName::ListChecks)
+                                .label(tr("Entscheidungen"))
+                                .tooltip(tr("Alle Entscheidungen aus deinen Besprechungen"))
+                                .on_click(cx.listener(|this, _, window, cx| this.open_decisions(false, window, cx))),
+                        )
+                    })
                     .child(
                         Input::new(&self.search)
                             .small()
@@ -1593,6 +1642,7 @@ impl Render for MostalgiaApp {
             Screen::Ask(v) => v.clone().into(),
             Screen::TextImport(v) => v.clone().into(),
             Screen::Documents(v) => v.clone().into(),
+            Screen::Decisions(v) => v.clone().into(),
         };
         let delete_dialog = self.render_delete_dialog(cx);
         let cleanup_dialog = self.render_cleanup_dialog(cx);

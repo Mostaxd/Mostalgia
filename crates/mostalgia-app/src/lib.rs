@@ -5,6 +5,7 @@ pub mod ask_view;
 pub mod autostart;
 pub mod companion;
 pub mod control;
+pub mod decisions_view;
 pub mod documents;
 pub mod meeting;
 pub mod processing;
@@ -48,6 +49,7 @@ gpui_kit::assets::icon_assets!(pub ExtraIcons, [
     Eraser, Keyboard, MicOff, Palette, Pencil, Play, Plus, Radio, RefreshCw, Search, Settings, Sparkles, Square, Trash, TriangleAlert,
     Users, X, Sparkle, StickyNote, AppWindow, MonitorUp, Ellipsis, ChevronUp, Eye, EyeOff, Target, RotateCcw, WandSparkles, FaceSlightlySmiling, MessageCircle,
     Library, Upload, Lightbulb, ExternalLink, BookOpen, Copy, Folder, FolderPlus, FolderInput,
+    ListChecks, Replace, User, ArrowUpRight, Pin, PinOff, Minus,
 ]);
 
 /// The default GPUI Kit assets plus the extra Lucide icons the app uses.

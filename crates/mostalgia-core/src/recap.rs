@@ -28,7 +28,7 @@ pub enum Style {
 const SHORT_POINTS: usize = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Part {
+pub(crate) enum Part {
     Summary,
     Points,
     Decisions,
@@ -39,7 +39,7 @@ enum Part {
 /// The summary's sections as (part, heading, lines). Known headings (English,
 /// German) name their part; others go by the summary's fixed order, and
 /// checkbox lines always mean action items.
-fn sections(markdown: &str) -> Vec<(Part, String, Vec<String>)> {
+pub(crate) fn sections(markdown: &str) -> Vec<(Part, String, Vec<String>)> {
     let order = [Part::Summary, Part::Points, Part::Decisions, Part::Actions, Part::Questions];
     let mut out: Vec<(Part, String, Vec<String>)> = Vec::new();
     for line in markdown.lines() {

@@ -12,6 +12,7 @@ pub mod companion;
 pub mod cloud_stt;
 pub mod config;
 pub mod connections;
+pub mod decisions;
 pub mod denoise;
 pub mod diarize;
 pub mod docs;

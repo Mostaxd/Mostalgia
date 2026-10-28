@@ -156,6 +156,13 @@ pub struct Config {
     /// The user agreed to deleting audio (asked once, the first time it
     /// would delete any).
     pub audio_cleanup_confirmed: bool,
+
+    // ── Decision log ──
+    /// The decision log (its page in the sidebar, decisions collected from
+    /// each new summary). Off by default.
+    pub decision_log: bool,
+    /// Earlier meetings were taken into the log (offered once).
+    pub decision_log_built: bool,
 }
 
 /// When Mori looks for live notes during a recording.
@@ -316,6 +323,8 @@ impl Default for Config {
             companion_answer_sources: crate::assist::Sources::Both.id().into(),
             audio_keep_days: 7,
             audio_cleanup_confirmed: false,
+            decision_log: false,
+            decision_log_built: false,
         }
     }
 }
