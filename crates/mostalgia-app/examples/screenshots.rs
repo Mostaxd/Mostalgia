@@ -488,6 +488,23 @@ fn main() {
                 std::thread::sleep(std::time::Duration::from_millis(if tab == 3 { 800 } else { 400 }));
                 shot(name, &mut cx);
             }
+            // "Copy recap": the toast after copying.
+            if std::env::var_os("RECAP").is_some() {
+                cx.update_window(handle, |_, window, cx| {
+                    if let Some(m) = view.read(cx).meeting_view() {
+                        m.update(cx, |m, cx| {
+                            m.set_tab(0, cx);
+                            m.demo_copy_recap(window, cx);
+                        });
+                    }
+                })
+                .unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                shot("3b-recap-copied", &mut cx);
+                if let Some(text) = cx.update(|cx| cx.read_from_clipboard()).and_then(|c| c.text()) {
+                    std::fs::write(out.join("recap.txt"), text).unwrap();
+                }
+            }
             // "Regenerate notes": the panel, its progress, the result.
             for (stage, name) in [(0, "5c-notes-regenerate"), (1, "5d-notes-regenerating"), (2, "5e-notes-regenerated")] {
                 cx.update_window(handle, |_, window, cx| {

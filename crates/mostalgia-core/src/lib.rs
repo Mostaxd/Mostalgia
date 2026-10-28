@@ -22,6 +22,7 @@ pub mod llm;
 pub mod paths;
 pub mod playback;
 pub mod recorder;
+pub mod recap;
 pub mod recovery;
 pub mod store;
 pub mod summary;

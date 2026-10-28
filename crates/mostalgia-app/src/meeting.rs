@@ -18,7 +18,7 @@ use mostalgia_core::config::{Config, SttChoice};
 use mostalgia_core::playback::{self, Player};
 use mostalgia_core::store::{Meeting, Store};
 use mostalgia_core::i18n::{self, tr, trf};
-use mostalgia_core::{Source, cloud_stt, companion, finalize, paths, summary, voices};
+use mostalgia_core::{Source, cloud_stt, companion, finalize, paths, recap, summary, voices};
 
 use crate::recording::SharedEngine;
 use crate::processing;
@@ -31,6 +31,12 @@ const WAVE_BUCKETS: usize = 320;
 #[derive(Clone, PartialEq, Debug, Deserialize, JsonSchema, Action)]
 #[action(namespace = mostalgia, no_json)]
 pub struct ExportAs(pub String);
+
+/// Copy the open meeting's recap: 0 short text, 1 short Markdown, 2 full
+/// text, 3 full Markdown.
+#[derive(Clone, PartialEq, Debug, Deserialize, JsonSchema, Action)]
+#[action(namespace = mostalgia, no_json)]
+pub struct CopyRecap(pub u8);
 
 pub enum MeetingEvent {
     /// Title, summary or transcript changed; the library should refresh.
@@ -213,6 +219,31 @@ impl MeetingView {
         self.was_busy = busy;
         self.take_failures();
         cx.notify();
+    }
+
+    /// Puts the meeting's recap on the clipboard (see `recap`) and says so.
+    /// Without a summary nothing is copied: it says why and writes one if
+    /// it can.
+    fn copy_recap(&mut self, length: recap::Length, style: recap::Style, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui_kit::component::WindowExt as _;
+        use gpui_kit::component::notification::Notification;
+        let Some(m) = &self.meeting else { return };
+        match recap::recap(m, length, style) {
+            Some(text) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                window.push_notification(Notification::success(tr("Recap kopiert")), cx);
+            }
+            None => {
+                window.push_notification(Notification::info(tr("Noch keine Zusammenfassung – sie wird jetzt geschrieben; danach Recap kopieren.")), cx);
+                self.summarize(cx);
+            }
+        }
+    }
+
+    /// Screenshots: "Copy recap" clicked.
+    #[doc(hidden)]
+    pub fn demo_copy_recap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.copy_recap(recap::Length::Short, recap::Style::Plain, window, cx);
     }
 
     pub fn reload(&mut self, cx: &mut Context<Self>) {
@@ -1215,6 +1246,43 @@ impl MeetingView {
             .child(
                 h_flex()
                     .gap_2()
+                    .child({
+                        let has_summary = m.summary.is_some();
+                        h_flex()
+                            .child(
+                                Button::new("copy-recap")
+                                    .small()
+                                    .ghost()
+                                    .icon(IconName::Copy)
+                                    .label(tr("Recap kopieren"))
+                                    .tooltip(if has_summary {
+                                        tr("Kurze Zusammenfassung in die Zwischenablage – für Teams, Mail oder Jira")
+                                    } else {
+                                        tr("Braucht eine Zusammenfassung – klicken, um sie zu schreiben")
+                                    })
+                                    .on_click(cx.listener(|this, _, window, cx| this.copy_recap(recap::Length::Short, recap::Style::Plain, window, cx))),
+                            )
+                            .child(
+                                Button::new("copy-recap-as")
+                                    .small()
+                                    .ghost()
+                                    .icon(IconName::ChevronDown)
+                                    .disabled(!has_summary)
+                                    .tooltip(tr("Recap als …"))
+                                    .dropdown_menu(|menu, _, _| {
+                                        let mut menu = menu;
+                                        for (label, action) in [
+                                            (tr("Kurz · Text"), CopyRecap(0)),
+                                            (tr("Kurz · Markdown"), CopyRecap(1)),
+                                            (tr("Vollständig · Text"), CopyRecap(2)),
+                                            (tr("Vollständig · Markdown"), CopyRecap(3)),
+                                        ] {
+                                            menu = menu.menu(label, Box::new(action));
+                                        }
+                                        menu
+                                    }),
+                            )
+                    })
                     .child(
                         Button::new("export")
                             .small()
@@ -2214,6 +2282,11 @@ impl Render for MeetingView {
             .relative()
             .key_context("Meeting")
             .on_action(cx.listener(Self::export))
+            .on_action(cx.listener(|this, action: &CopyRecap, window, cx| {
+                let length = if action.0 >= 2 { recap::Length::Full } else { recap::Length::Short };
+                let style = if action.0 % 2 == 1 { recap::Style::Markdown } else { recap::Style::Plain };
+                this.copy_recap(length, style, window, cx);
+            }))
             .child(header)
             .children(status)
             .child(
