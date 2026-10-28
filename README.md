@@ -124,13 +124,15 @@ app included) and can be dragged anywhere across your monitors.
 ### Meet the companions
 
 Mori isn't the only note-taker. In *Settings → Companion* you pick who keeps
-you company — each with her own look, her own way of showing a new note and
-her own (honest, concise) personality in the chat:
+you company — each with their own look, their own way of showing a new note
+and their own (honest, concise) personality in the chat:
 
 | | | |
 |---|---|---|
 | **Mori** takes notes on her notepad | **Tsumugi** weaves the notes into her scarf | **Hoshi** charts the notes as constellations |
 | ![Mori](docs/screenshots/mori-points.png) | ![Tsumugi](docs/screenshots/companion-tsumugi.png) | ![Hoshi](docs/screenshots/companion-hoshi.png) |
+| **Kaito** serves each note like a cup of tea | **Jin** cuts each note onto a paper strip | |
+| ![Kaito](docs/screenshots/companion-kaito.png) | ![Jin](docs/screenshots/companion-jin.png) | |
 
 ![Companion settings](docs/screenshots/settings-companion.png)
 
