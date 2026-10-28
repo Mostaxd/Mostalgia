@@ -10,6 +10,7 @@ pub mod character;
 mod bubble;
 pub use bubble::ShowLiveMoment;
 mod controls;
+pub use controls::BarIndicator;
 mod points;
 pub mod desktop;
 pub mod feed;
@@ -55,6 +56,8 @@ pub enum MoriEvent {
     SetPaused { paused: bool },
     /// Stop (and save) the recording in progress.
     StopRecording,
+    /// Switch a source of the recording in progress off or on.
+    SetSource { source: mostalgia_core::Source, on: bool },
     /// "Settings" in her menu: Settings → Companion.
     OpenMoriSettings,
 }
@@ -420,6 +423,7 @@ impl Companion {
             p.settle(size);
         }
         self.reduce_motion = config.reduce_motion;
+        self.ctl.bar_indicator = controls::BarIndicator::parse(&config.companion_bar_indicator);
         if !self.enabled {
             self.open = false;
             self.drag = None;

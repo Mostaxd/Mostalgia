@@ -1,6 +1,6 @@
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 
 use anyhow::{Context, Result};
@@ -86,19 +86,86 @@ pub struct Recording {
 /// worker thread. Stop it with [`Recorder::stop`] (or a [`StopHandle`] from
 /// a signal handler), then [`Recorder::join`] for the recording and the
 /// engine back.
+///
+/// Sources can be switched off and on mid-recording
+/// ([`Recorder::set_source`]). Both tracks always cover the whole
+/// recording, sample for sample: a source that is off writes silence at the
+/// rate it captures, and one switched on that wasn't recording yet starts
+/// with silence up to where the other track is.
 pub struct Recorder {
-    stop: StopHandle,
-    paused: Arc<AtomicBool>,
+    shared: Arc<Shared>,
     dir: PathBuf,
     worker: JoinHandle<Result<(Recording, Engine)>>,
 }
 
+struct Shared {
+    stop: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
+    /// Per source (mic, system): switched off (or not started).
+    muted: [Arc<AtomicBool>; 2],
+    /// Per source: samples written to its track.
+    written: [Arc<AtomicU64>; 2],
+    ctl: Mutex<Ctl>,
+}
+
+struct Ctl {
+    /// For captures started mid-recording; dropped on stop, so the worker
+    /// ends once the running captures have.
+    tx: Option<Sender<audio::Block>>,
+    captures: Vec<JoinHandle<Result<()>>>,
+    tracks: Vec<(Source, PathBuf)>,
+    devices: [Option<String>; 2],
+}
+
 #[derive(Clone)]
-pub struct StopHandle(Arc<AtomicBool>);
+pub struct StopHandle(Arc<Shared>);
 
 impl StopHandle {
     pub fn stop(&self) {
-        self.0.store(true, Ordering::SeqCst);
+        self.0.stop.store(true, Ordering::SeqCst);
+        self.0.ctl.lock().unwrap_or_else(|e| e.into_inner()).tx = None;
+    }
+}
+
+fn idx(s: Source) -> usize {
+    match s {
+        Source::Mic => 0,
+        Source::System => 1,
+    }
+}
+
+/// One source on the live path: its chunker and (mic) noise suppression.
+struct LiveTrack {
+    chunker: Chunker,
+    denoiser: Option<crate::denoise::Denoiser>,
+}
+
+impl LiveTrack {
+    /// Utterances completed by `block`. Silent blocks (the source is off,
+    /// or padding before it joined) never reach the chunker as audio: they
+    /// end the utterance in progress and move its clock on.
+    fn feed(&mut self, block: &audio::Block) -> Vec<chunker::Utterance> {
+        if block.silence > 0 {
+            let mut utts = match self.denoiser.as_mut() {
+                Some(d) => self.chunker.push(&d.flush()),
+                None => Vec::new(),
+            };
+            utts.extend(self.chunker.skip(block.silence as u64));
+            return utts;
+        }
+        match self.denoiser.as_mut() {
+            Some(d) => self.chunker.push(&d.process(&block.samples)),
+            None => self.chunker.push(&block.samples),
+        }
+    }
+
+    fn finish(mut self) -> Vec<chunker::Utterance> {
+        let mut utts = match self.denoiser.as_mut() {
+            Some(d) => self.chunker.push(&d.flush()),
+            None => Vec::new(),
+        };
+        utts.extend(self.chunker.finish());
+        utts
     }
 }
 
@@ -111,12 +178,17 @@ impl Recorder {
 
         // Each source gets its own detector and chunker, so one side's noise
         // never bleeds into the other's transcript.
-        let load = |on: bool| -> Result<Option<Chunker>> {
-            on.then(|| SpeechDetector::load(&cfg.vad_model, cfg.vad_threshold).map(Chunker::new))
-                .transpose()
+        let vad_model = cfg.vad_model.clone();
+        let vad_threshold = cfg.vad_threshold;
+        let denoise = cfg.denoise;
+        let load = move |source: Source| -> Result<LiveTrack> {
+            Ok(LiveTrack {
+                chunker: Chunker::new(SpeechDetector::load(&vad_model, vad_threshold)?),
+                denoiser: (denoise && source == Source::Mic).then(crate::denoise::Denoiser::new),
+            })
         };
-        let mic_live = load(cfg.mic)?;
-        let sys_live = load(cfg.system)?;
+        let mic_live = cfg.mic.then(|| load(Source::Mic)).transpose()?;
+        let sys_live = cfg.system.then(|| load(Source::System)).transpose()?;
         if !cfg.vad_model.exists() {
             let _ = events.send(Event::Warning(crate::i18n::trf(
                 "Sprachfilter-Modell {} fehlt — erkenne Sprache nur an der Lautstärke (scripts/download-model.sh)",
@@ -124,60 +196,49 @@ impl Recorder {
             )));
         }
 
-        let stop = StopHandle(Arc::new(AtomicBool::new(false)));
-        let paused = Arc::new(AtomicBool::new(false));
         let (block_tx, block_rx) = crossbeam_channel::bounded::<audio::Block>(256);
-        let mut captures = Vec::new();
-        let mut tracks = Vec::new();
-        for (on, source, device) in [
-            (cfg.mic, Source::Mic, cfg.mic_device.clone()),
-            (
-                cfg.system,
-                Source::System,
-                Some(cfg.system_device.clone().unwrap_or_else(|| "@DEFAULT_MONITOR@".into())),
-            ),
-        ] {
-            if !on {
-                continue;
-            }
-            let path = dir.join(source.file_name());
-            captures.push(audio::spawn_capture(
-                source,
-                device,
-                path.clone(),
-                block_tx.clone(),
-                stop.0.clone(),
-                paused.clone(),
-            )?);
-            tracks.push((source, path));
-        }
-        drop(block_tx);
-
-        let mut speakers = if cfg.diarize && cfg.system {
-            match crate::diarize::LiveSpeakers::new() {
-                Ok(s) => Some(s),
-                Err(e) => {
-                    let _ = events.send(Event::Warning(crate::i18n::trf("Sprechertrennung aus: {}", &[&format!("{e:#}")])));
-                    None
+        let shared = Arc::new(Shared {
+            stop: Arc::new(AtomicBool::new(false)),
+            paused: Arc::new(AtomicBool::new(false)),
+            muted: [Arc::new(AtomicBool::new(!cfg.mic)), Arc::new(AtomicBool::new(!cfg.system))],
+            written: Default::default(),
+            ctl: Mutex::new(Ctl {
+                tx: Some(block_tx),
+                captures: Vec::new(),
+                tracks: Vec::new(),
+                devices: [
+                    cfg.mic_device.clone(),
+                    Some(cfg.system_device.clone().unwrap_or_else(|| "@DEFAULT_MONITOR@".into())),
+                ],
+            }),
+        });
+        let recorder_dir = dir.clone();
+        {
+            let mut ctl = shared.ctl.lock().unwrap();
+            for (on, source) in [(cfg.mic, Source::Mic), (cfg.system, Source::System)] {
+                if on && let Err(e) = open_capture(&shared, &mut ctl, &dir, source, false) {
+                    // Don't leave the other source capturing.
+                    shared.stop.store(true, Ordering::SeqCst);
+                    return Err(e);
                 }
             }
-        } else {
-            None
-        };
-        let mut denoiser = (cfg.denoise && cfg.mic).then(crate::denoise::Denoiser::new);
+        }
+
+        let diarize = cfg.diarize;
         let interim = cfg.interim;
         let worker_dir = dir.clone();
+        let worker_shared = shared.clone();
         let worker = std::thread::spawn(move || -> Result<(Recording, Engine)> {
             let mut engine = engine;
             let mut live = [mic_live, sys_live];
+            // A source that joins mid-recording gets its live path then.
+            let mut tried = [live[0].is_some(), live[1].is_some()];
+            let mut speakers: Option<crate::diarize::LiveSpeakers> = None;
+            let mut speakers_tried = !diarize;
             let mut samples_seen = [0u64; 2];
-            let idx = |s: Source| match s {
-                Source::Mic => 0,
-                Source::System => 1,
-            };
             let mut live_lines: Vec<crate::finalize::FinalSegment> = Vec::new();
             let mut live_errors = 0usize;
-            let mut run = |engine: &mut Engine, source: Source, utts: Vec<chunker::Utterance>| {
+            let mut run = |engine: &mut Engine, speakers: &mut Option<crate::diarize::LiveSpeakers>, source: Source, utts: Vec<chunker::Utterance>| {
                 for utt in utts {
                     let t = std::time::Instant::now();
                     match chunker::transcribe_utterance(engine, &utt) {
@@ -226,23 +287,35 @@ impl Recorder {
             let mut interim_text: [String; 2] = Default::default();
             for block in block_rx.iter() {
                 let i = idx(block.source);
-                samples_seen[i] += block.samples.len() as u64;
+                samples_seen[i] += (block.samples.len() + block.silence) as u64;
                 let _ = events.send(Event::Level {
                     source: block.source,
                     rms: vad::rms(&block.samples),
                 });
-                if let Some(chunker) = live[i].as_mut() {
-                    let utts = match (block.source, denoiser.as_mut()) {
-                        (Source::Mic, Some(d)) => chunker.push(&d.process(&block.samples)),
-                        _ => chunker.push(&block.samples),
-                    };
-                    let finished = !utts.is_empty();
-                    run(&mut engine, block.source, utts);
-                    // Cloud engines bill per request; no provisional passes.
-                    if !interim || engine.is_cloud() {
-                        continue;
+                if !tried[i] {
+                    tried[i] = true;
+                    match load(block.source) {
+                        Ok(t) => live[i] = Some(t),
+                        Err(e) => {
+                            let _ = events.send(Event::Warning(format!("{e:#}")));
+                        }
                     }
-                    if finished && interim_len[i] > 0 {
+                }
+                if block.source == Source::System && !speakers_tried && block.silence == 0 {
+                    speakers_tried = true;
+                    match crate::diarize::LiveSpeakers::new() {
+                        Ok(s) => speakers = Some(s),
+                        Err(e) => {
+                            let _ = events.send(Event::Warning(crate::i18n::trf("Sprechertrennung aus: {}", &[&format!("{e:#}")])));
+                        }
+                    }
+                }
+                let Some(track) = live[i].as_mut() else { continue };
+                let utts = track.feed(&block);
+                let finished = !utts.is_empty();
+                run(&mut engine, &mut speakers, block.source, utts);
+                let clear_interim = |interim_len: &mut [usize; 2], interim_text: &mut [String; 2]| {
+                    if interim_len[i] > 0 {
                         interim_len[i] = 0;
                         interim_text[i].clear();
                         let _ = events.send(Event::Interim {
@@ -251,44 +324,56 @@ impl Recorder {
                             text: String::new(),
                         });
                     }
-                    let chunker = live[i].as_ref().expect("chunker");
-                    let grew = chunker.open_len() > interim_len[i];
-                    // Only when the backlog is small, so live audio isn't starved.
-                    let caught_up = block_rx.len() < 4;
-                    if !finished && grew && caught_up && interim_at[i].elapsed().as_millis() >= 1000 {
-                        if let Some(utt) = chunker.open_chunk().filter(|u| u.is_loud_enough()) {
-                            interim_len[i] = utt.samples.len();
-                            interim_at[i] = std::time::Instant::now();
-                            if let Ok(segments) = engine.transcribe(&utt.samples) {
-                                let text = segments.iter().map(|s| s.text.trim()).collect::<Vec<_>>().join(" ");
-                                // A pass that ends mid-word can come back as a
-                                // filler phrase or much shorter; keep the last one then.
-                                let filler = chunker::is_filler_hallucination(&text, &[]);
-                                let regressed = text.chars().count() * 2 < interim_text[i].chars().count();
-                                if !text.is_empty() && !filler && !regressed {
-                                    interim_text[i] = text.clone();
-                                    let _ = events.send(Event::Interim {
-                                        source: block.source,
-                                        start_secs: utt.offset_secs,
-                                        text,
-                                    });
-                                }
+                };
+                // Switched off: whatever was provisional is gone or final now.
+                if block.silence > 0 {
+                    clear_interim(&mut interim_len, &mut interim_text);
+                    continue;
+                }
+                // Cloud engines bill per request; no provisional passes.
+                if !interim || engine.is_cloud() {
+                    continue;
+                }
+                if finished {
+                    clear_interim(&mut interim_len, &mut interim_text);
+                }
+                let chunker = &live[i].as_ref().expect("live track").chunker;
+                let grew = chunker.open_len() > interim_len[i];
+                // Only when the backlog is small, so live audio isn't starved.
+                let caught_up = block_rx.len() < 4;
+                if !finished && grew && caught_up && interim_at[i].elapsed().as_millis() >= 1000 {
+                    if let Some(utt) = chunker.open_chunk().filter(|u| u.is_loud_enough()) {
+                        interim_len[i] = utt.samples.len();
+                        interim_at[i] = std::time::Instant::now();
+                        if let Ok(segments) = engine.transcribe(&utt.samples) {
+                            let text = segments.iter().map(|s| s.text.trim()).collect::<Vec<_>>().join(" ");
+                            // A pass that ends mid-word can come back as a
+                            // filler phrase or much shorter; keep the last one then.
+                            let filler = chunker::is_filler_hallucination(&text, &[]);
+                            let regressed = text.chars().count() * 2 < interim_text[i].chars().count();
+                            if !text.is_empty() && !filler && !regressed {
+                                interim_text[i] = text.clone();
+                                let _ = events.send(Event::Interim {
+                                    source: block.source,
+                                    start_secs: utt.offset_secs,
+                                    text,
+                                });
                             }
                         }
                     }
                 }
             }
-            if let (Some(d), Some(chunker)) = (denoiser.as_mut(), live[0].as_mut()) {
-                let utts = chunker.push(&d.flush());
-                run(&mut engine, Source::Mic, utts);
-            }
             // Capture ended: flush each source's last partial utterance.
             for (i, source) in [(0, Source::Mic), (1, Source::System)] {
-                if let Some(chunker) = live[i].take() {
-                    run(&mut engine, source, chunker.finish());
+                if let Some(track) = live[i].take() {
+                    run(&mut engine, &mut speakers, source, track.finish());
                 }
             }
 
+            let (captures, tracks) = {
+                let mut ctl = worker_shared.ctl.lock().unwrap_or_else(|e| e.into_inner());
+                (std::mem::take(&mut ctl.captures), ctl.tracks.clone())
+            };
             for c in captures {
                 if let Err(e) = c.join().expect("capture thread panicked") {
                     let _ = events.send(Event::Warning(format!("capture error: {e:#}")));
@@ -311,9 +396,8 @@ impl Recorder {
         });
 
         Ok(Self {
-            stop,
-            paused,
-            dir,
+            shared,
+            dir: recorder_dir,
             worker,
         })
     }
@@ -323,25 +407,126 @@ impl Recorder {
     }
 
     pub fn stop_handle(&self) -> StopHandle {
-        self.stop.clone()
+        StopHandle(self.shared.clone())
     }
 
     pub fn stop(&self) {
-        self.stop.stop();
+        self.stop_handle().stop();
     }
 
     /// While paused nothing is recorded or transcribed; the tracks just
     /// continue where they left off on resume.
     pub fn set_paused(&self, paused: bool) {
-        self.paused.store(paused, Ordering::SeqCst);
+        self.shared.paused.store(paused, Ordering::SeqCst);
     }
 
     pub fn is_paused(&self) -> bool {
-        self.paused.load(Ordering::SeqCst)
+        self.shared.paused.load(Ordering::SeqCst)
+    }
+
+    /// Switches a source on or off for the rest of this recording (or until
+    /// switched again). Off keeps its track running with silence and stops
+    /// transcribing it; on for a source that wasn't recording opens it now,
+    /// its track padded with silence from the start. Returns where on the
+    /// recording's timeline (seconds) the switch happened.
+    pub fn set_source(&self, source: Source, on: bool) -> Result<f64> {
+        let mut ctl = self.shared.ctl.lock().unwrap_or_else(|e| e.into_inner());
+        anyhow::ensure!(ctl.tx.is_some() && !self.shared.stop.load(Ordering::SeqCst), "the recording has ended");
+        let opened = ctl.tracks.iter().any(|(s, _)| *s == source);
+        if on && !opened {
+            open_capture(&self.shared, &mut ctl, &self.dir, source, true)?;
+        } else {
+            self.shared.muted[idx(source)].store(!on, Ordering::SeqCst);
+        }
+        Ok(self.position_secs())
+    }
+
+    /// Whether `source` is being recorded right now (open and not off).
+    pub fn source_on(&self, source: Source) -> bool {
+        !self.shared.muted[idx(source)].load(Ordering::SeqCst)
+    }
+
+    /// Recording time so far (without pauses): the longer track.
+    pub fn position_secs(&self) -> f64 {
+        let n = self.shared.written.iter().map(|w| w.load(Ordering::SeqCst)).max().unwrap_or(0);
+        n as f64 / SAMPLE_RATE as f64
     }
 
     /// Waits for capture to end (after a stop) and the live transcript to flush.
     pub fn join(self) -> Result<(Recording, Engine)> {
         self.worker.join().expect("recorder thread panicked")
+    }
+}
+
+/// Opens `source`'s capture into its track. `late`: the recording is
+/// already running, so the track starts with silence up to the other one.
+fn open_capture(shared: &Shared, ctl: &mut Ctl, dir: &std::path::Path, source: Source, late: bool) -> Result<()> {
+    let i = idx(source);
+    let tx = ctl.tx.clone().context("the recording has ended")?;
+    let path = dir.join(source.file_name());
+    shared.muted[i].store(false, Ordering::SeqCst);
+    let capture = audio::spawn_capture(
+        source,
+        ctl.devices[i].clone(),
+        path.clone(),
+        tx,
+        audio::CaptureCtl {
+            stop: shared.stop.clone(),
+            paused: shared.paused.clone(),
+            muted: shared.muted[i].clone(),
+            written: shared.written[i].clone(),
+            join_at: late.then(|| shared.written[1 - i].clone()),
+        },
+    );
+    match capture {
+        Ok(handle) => {
+            ctl.captures.push(handle);
+            ctl.tracks.push((source, path));
+            Ok(())
+        }
+        Err(e) => {
+            shared.muted[i].store(true, Ordering::SeqCst);
+            Err(e)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn track(denoise: bool) -> LiveTrack {
+        LiveTrack {
+            chunker: Chunker::new(SpeechDetector::load(std::path::Path::new("/nonexistent/vad.bin"), 0.5).unwrap()),
+            denoiser: denoise.then(crate::denoise::Denoiser::new),
+        }
+    }
+
+    fn live(secs: f32) -> audio::Block {
+        let n = (secs * SAMPLE_RATE as f32) as usize;
+        audio::Block { source: Source::Mic, samples: (0..n).map(|i| 0.3 * (i as f32 * 0.07).sin()).collect(), silence: 0 }
+    }
+
+    fn off(secs: f32) -> audio::Block {
+        audio::Block { source: Source::Mic, samples: Vec::new(), silence: (secs * SAMPLE_RATE as f32) as usize }
+    }
+
+    /// Nothing is transcribed while a source is off, and what comes after
+    /// keeps its time.
+    #[test]
+    fn nothing_reaches_the_transcriber_while_off() {
+        for denoise in [false, true] {
+            let mut t = track(denoise);
+            // Padding before a late start, then a long stretch switched off.
+            assert!(t.feed(&off(3.0)).is_empty());
+            for _ in 0..100 {
+                assert!(t.feed(&off(0.1)).is_empty(), "silence never makes an utterance");
+            }
+            let mut utts = t.feed(&live(2.0));
+            utts.extend(t.feed(&off(4.0)));
+            assert_eq!(utts.len(), 1, "speech before the switch is flushed");
+            assert!((utts[0].offset_secs - 13.0).abs() < 0.4, "starts after 3 s + 10 s off: {}", utts[0].offset_secs);
+            assert!(t.finish().is_empty());
+        }
     }
 }

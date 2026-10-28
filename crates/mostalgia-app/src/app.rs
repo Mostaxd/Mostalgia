@@ -133,6 +133,10 @@ impl MostalgiaApp {
                     this.recording.update(cx, |r, cx| r.set_paused(paused, cx));
                 }
                 MoriEvent::StopRecording => this.recording.update(cx, |r, cx| r.stop(cx)),
+                MoriEvent::SetSource { source, on } => {
+                    let (source, on) = (*source, *on);
+                    this.recording.update(cx, |r, cx| r.set_source(source, on, cx));
+                }
                 MoriEvent::OpenMoriSettings => this.open_mori_settings(window, cx),
                 MoriEvent::NotesSaved { meeting_id } => {
                     if let Some(m) = this.meeting_view().filter(|m| m.read(cx).id == *meeting_id) {
@@ -236,13 +240,13 @@ impl MostalgiaApp {
         if let Err(e) = control::listen(tx.clone()) {
             eprintln!("[mostalgia] control socket: {e}");
         }
-        match (control::Tray { tx, recording: false }).spawn() {
+        match (control::Tray { tx, recording: false, mic_on: false }).spawn() {
             Ok(handle) => self.tray = Some(handle),
             Err(e) => eprintln!("[mostalgia] tray icon unavailable: {e}"),
         }
         cx.on_app_quit(|_, _| async { control::cleanup() }).detach();
         cx.spawn_in(window, async move |this, cx| {
-            let mut was_recording = false;
+            let mut was_recording = (false, false);
             loop {
                 cx.background_executor().timer(std::time::Duration::from_millis(150)).await;
                 let commands: Vec<_> = rx.try_iter().collect();
@@ -253,11 +257,12 @@ impl MostalgiaApp {
                         }
                         this.autostart_tick(cx);
                         this.mori_tick(window, cx);
-                        let recording = this.recording.read(cx).is_recording();
-                        if recording != was_recording {
-                            was_recording = recording;
+                        let mic = this.recording.read(cx).source_on(mostalgia_core::Source::Mic);
+                        let state = (mic.is_some(), mic.unwrap_or(false));
+                        if state != was_recording {
+                            was_recording = state;
                             if let Some(tray) = &this.tray {
-                                tray.update(|t| t.recording = recording);
+                                tray.update(|t| (t.recording, t.mic_on) = state);
                             }
                         }
                     })
@@ -350,6 +355,11 @@ impl MostalgiaApp {
                 FromMori::StartRecording { mic, system } => self.start_recording_with(mic, system, cx),
                 FromMori::PauseRecording { paused } => self.recording.update(cx, |r, cx| r.set_paused(paused, cx)),
                 FromMori::StopRecording => self.recording.update(cx, |r, cx| r.stop(cx)),
+                FromMori::SetSource { source, on } => {
+                    if let Some(source) = mostalgia_core::Source::parse(&source) {
+                        self.recording.update(cx, |r, cx| r.set_source(source, on, cx));
+                    }
+                }
                 FromMori::OpenMoriSettings => {
                     self.open_mori_settings(window, cx);
                     window.activate_window();
@@ -381,6 +391,13 @@ impl MostalgiaApp {
             Command::Toggle if recording => self.recording.update(cx, |r, cx| r.stop(cx)),
             Command::Toggle | Command::Start if !active => self.start_recording(cx),
             Command::Stop if recording => self.recording.update(cx, |r, cx| r.stop(cx)),
+            Command::ToggleMic if recording => {
+                self.recording.update(cx, |r, cx| {
+                    if let Some(on) = r.source_on(mostalgia_core::Source::Mic) {
+                        r.set_source(mostalgia_core::Source::Mic, !on, cx);
+                    }
+                })
+            }
             Command::Show => window.activate_window(),
             Command::Quit => cx.quit(),
             _ => {}

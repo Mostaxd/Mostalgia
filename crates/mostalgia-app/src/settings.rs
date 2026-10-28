@@ -2732,6 +2732,13 @@ impl Render for SettingsView {
                 wide: false,
                 element: self.render_companion_behaviour(cx).into_any_element(),
             });
+            cards.push(Card {
+                category: Category::Begleiterin,
+                title: "Leiste",
+                keywords: "begleiterin companion mori tsumugi hoshi leiste bar ausgeblendet hidden anzeige indicator funkeln sparkles kreisel spinner aufnahmepunkt recording dot rot red",
+                wide: false,
+                element: self.render_companion_bar(cx).into_any_element(),
+            });
         }
 
         // ── Speicher & Export ──
@@ -2988,4 +2995,32 @@ fn theme_name(id: &str, name: &str) -> String {
         _ => return name.to_string(),
     };
     tr(de).to_string()
+}
+
+// ── Begleiterin: the bar's recording indicator ──
+impl SettingsView {
+    /// How her bar (figure hidden) shows a running recording.
+    fn render_companion_bar(&mut self, cx: &mut Context<Self>) -> Div {
+        use crate::companion::BarIndicator;
+        let theme = cx.theme().clone();
+        let current = BarIndicator::parse(&self.config.companion_bar_indicator);
+        let buttons = BarIndicator::ALL.map(|choice| {
+            Button::new(SharedString::from(format!("mori-bar-indicator-{}", choice.as_config())))
+                .small()
+                .label(choice.label())
+                .when(choice == current, |b| b.primary())
+                .when(choice != current, |b| b.ghost())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.config.companion_bar_indicator = choice.as_config().into();
+                    this.save(cx);
+                }))
+                .into_any_element()
+        });
+        ui::card(cx).child(div().font_semibold().child(tr("Leiste"))).child(settings_row(
+            tr("Anzeige während der Aufnahme"),
+            Some(tr("Wenn die Figur ausgeblendet ist: wie ihre Leiste zeigt, dass aufgenommen wird. Das Aufnahmefenster und das Tray-Symbol zeigen immer den roten Punkt.")),
+            h_flex().flex_wrap().gap_1().children(buttons).into_any_element(),
+            &theme,
+        ))
+    }
 }

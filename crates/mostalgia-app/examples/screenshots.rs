@@ -316,6 +316,79 @@ fn main() {
             .unwrap();
             shot("2b-recording-engine-error", &mut cx);
         }
+        // MICTOGGLE=1: the mic switched off and on mid-recording (markers in
+        // the transcript, crossed-out mic), on the screen and in Mori's bar.
+        if std::env::var_os("MICTOGGLE").is_some() {
+            cx.update_window(handle, |_, _, cx| {
+                let rec = view.read(cx).recording_view();
+                rec.update(cx, |r, cx| {
+                    r.demo(
+                        187,
+                        &[
+                            (Source::System, 3.2, "Morning, everyone, good to see you all."),
+                            (Source::Mic, 8.9, "Morning! Shall we start with next quarter's budget?"),
+                            (Source::System, 15.4, "Sure. We're about ten percent under plan right now, mostly because of the trade show in May."),
+                            (Source::Mic, 27.0, "Okay. Then I'd suggest we freeze marketing spend until the end of June."),
+                            (Source::System, 36.8, "Agreed. Anna, could you send a new forecast by Friday?"),
+                            (Source::System, 44.1, "Sure, will do. I just need the numbers from sales."),
+                        ],
+                        cx,
+                    );
+                    r.demo_switches(&[(Source::Mic, false, 12.4), (Source::Mic, true, 26.1), (Source::Mic, false, 50.2)], cx);
+                });
+            })
+            .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(600));
+            shot("2c-recording-mic-off", &mut cx);
+            if cx.update(|cx| view.read(cx).companion_view().read(cx).is_enabled()) {
+                cx.update_window(handle, |_, _, cx| {
+                    let c = view.read(cx).companion_view();
+                    c.update(cx, |c, cx| c.demo_hidden(true, cx));
+                })
+                .unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                shot("2d-mori-bar-mic-off", &mut cx);
+                // The bar's indicator: sparkles mid-twinkle, resting while
+                // paused, the spinner and the old red dot.
+                std::thread::sleep(std::time::Duration::from_millis(900));
+                shot("2d2-mori-bar-sparkles-later", &mut cx);
+                cx.update_window(handle, |_, _, cx| {
+                    let rec = view.read(cx).recording_view();
+                    rec.update(cx, |r, cx| r.set_paused(true, cx));
+                })
+                .unwrap();
+                shot("2d3-mori-bar-paused", &mut cx);
+                cx.update_window(handle, |_, _, cx| {
+                    let rec = view.read(cx).recording_view();
+                    rec.update(cx, |r, cx| r.set_paused(false, cx));
+                })
+                .unwrap();
+                for (name, indicator) in [("2d4-mori-bar-spinner", mostalgia_app::companion::BarIndicator::Spinner), ("2d5-mori-bar-dot", mostalgia_app::companion::BarIndicator::Dot)] {
+                    cx.update_window(handle, |_, _, cx| {
+                        let c = view.read(cx).companion_view();
+                        c.update(cx, |c, cx| c.demo_bar_indicator(indicator, cx));
+                    })
+                    .unwrap();
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    shot(name, &mut cx);
+                }
+                cx.update_window(handle, |_, _, cx| {
+                    let c = view.read(cx).companion_view();
+                    c.update(cx, |c, cx| {
+                        c.demo_hidden(false, cx);
+                        c.demo_chat(true, "Did I miss anything while my mic was off?", "Anna will send a new forecast by Friday [[t:36]].", cx);
+                    });
+                })
+                .unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                shot("2e-mori-bubble-mic-off", &mut cx);
+                cx.update_window(handle, |_, _, cx| {
+                    let c = view.read(cx).companion_view();
+                    c.update(cx, |c, cx| c.demo_reset(cx));
+                })
+                .unwrap();
+            }
+        }
         // The empty live transcript, where themes draw their scene.
         cx.update_window(handle, |_, _, cx| {
             let rec = view.read(cx).recording_view();

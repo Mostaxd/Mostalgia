@@ -12,7 +12,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::*;
 use mostalgia_core::config::{Config, Mode, SttChoice};
 use mostalgia_core::recorder::{Event, RecordConfig, Recorder, Recording};
-use mostalgia_core::store::{Bookmark, NewMeeting, Store};
+use mostalgia_core::store::{Bookmark, MarkKind, NewMeeting, Store};
 use mostalgia_core::transcribe::Engine;
 use mostalgia_core::i18n::{self, tr, trf};
 use mostalgia_core::{cloud_stt, finalize};
@@ -59,6 +59,9 @@ pub struct LiveState {
     pub lines: usize,
     /// Recording time so far (without pauses), in seconds.
     pub elapsed_secs: f64,
+    /// Which sources (mic, system) are being recorded right now; either
+    /// can be switched off and on mid-recording.
+    pub sources: [bool; 2],
 }
 
 enum Phase {
@@ -99,12 +102,15 @@ struct Live {
     speech_secs: f64,
     /// Identifies this recording (for Mori on the desktop).
     session: u64,
+    /// Sources (mic, system) recorded right now (switchable mid-recording;
+    /// the setup screen's saved choice stays as it is).
+    sources_on: [bool; 2],
 }
 
 static NEXT_SESSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl Live {
-    fn new(recorder: Option<Recorder>, rx: Receiver<Event>, choice: SttChoice) -> Self {
+    fn new(recorder: Option<Recorder>, rx: Receiver<Event>, choice: SttChoice, sources_on: [bool; 2]) -> Self {
         Self {
             recorder,
             rx,
@@ -126,12 +132,33 @@ impl Live {
             speech_since: None,
             speech_secs: 0.,
             session: NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            sources_on,
         }
     }
 
     fn elapsed(&self) -> Duration {
         let paused_now = self.paused_since.map(|t| t.elapsed()).unwrap_or_default();
         self.started.elapsed().saturating_sub(self.paused_total + paused_now)
+    }
+
+    /// Bookmarks stay in time order (rows are merged into the transcript).
+    fn add_mark(&mut self, mark: Bookmark) {
+        let at = self.bookmarks.partition_point(|b| b.at_secs <= mark.at_secs);
+        self.bookmarks.insert(at, mark);
+    }
+
+    /// A source was switched off / on at `at` seconds.
+    fn switched(&mut self, source: Source, on: bool, at: f64) {
+        let i = source as usize;
+        self.sources_on[i] = on;
+        if !on {
+            self.interim[i] = None;
+            self.levels[i] = 0.;
+        }
+        if source == Source::Mic {
+            self.mic_quiet_since = None;
+        }
+        self.add_mark(Bookmark::source_switch(source, on, at));
     }
 
     /// Someone is speaking now.
@@ -228,7 +255,7 @@ impl RecordingView {
         let (tx, rx) = crossbeam_channel::unbounded();
         drop(tx);
         self.engine_label = Some(("Whisper large-v3-turbo · NVIDIA RTX PRO 3000 Blackwell Generation Laptop GPU".into(), false));
-        let mut live = Live::new(None, rx, SttChoice::local());
+        let mut live = Live::new(None, rx, SttChoice::local(), [true, true]);
         live.started = Instant::now() - Duration::from_secs(secs);
         live.lines = lines
             .iter()
@@ -246,11 +273,24 @@ impl RecordingView {
         live.bookmarks = vec![Bookmark {
             at_secs: 41.0,
             label: trf("Markierung {}", &[&1]),
+            kind: MarkKind::Moment,
         }];
         live.last_latency_ms = Some(212);
         live.heard();
         self.phase = Phase::Recording(Box::new(live));
         cx.notify();
+    }
+
+    /// Switches a source off / on in the demo recording at these moments
+    /// (screenshots): the markers, and the state after the last switch.
+    #[doc(hidden)]
+    pub fn demo_switches(&mut self, switches: &[(Source, bool, f64)], cx: &mut Context<Self>) {
+        if let Phase::Recording(live) = &mut self.phase {
+            for &(source, on, at) in switches {
+                live.switched(source, on, at);
+            }
+            cx.notify();
+        }
     }
 
     /// Shows a live engine failure in the demo recording (screenshots).
@@ -290,6 +330,7 @@ impl RecordingView {
             last_line_end: live.lines.iter().map(|l| l.end_secs).fold(0., f64::max),
             lines: live.lines.len(),
             elapsed_secs: live.elapsed().as_secs_f64(),
+            sources: live.sources_on,
         })
     }
 
@@ -383,6 +424,7 @@ impl RecordingView {
         self.config.companion_desktop = disk.companion_desktop;
         self.config.companion_desktop_pos = disk.companion_desktop_pos;
         self.config.companion_hidden = disk.companion_hidden;
+        self.config.companion_bar_indicator = disk.companion_bar_indicator;
         if let Err(e) = self.config.save() {
             eprintln!("[mostalgia] saving settings: {e:#}");
         }
@@ -449,7 +491,8 @@ impl RecordingView {
         match Recorder::start(cfg, engine, tx) {
             Ok(recorder) => {
                 self.follow = true;
-                self.phase = Phase::Recording(Box::new(Live::new(Some(recorder), rx, self.config.live_engine.clone())));
+                let sources = self.sources();
+                self.phase = Phase::Recording(Box::new(Live::new(Some(recorder), rx, self.config.live_engine.clone(), sources)));
                 self.poll_loop(cx);
             }
             // Recorder::start consumed the engine; it reloads next time.
@@ -522,7 +565,7 @@ impl RecordingView {
                 }
                 Event::Level { source, rms } => {
                     let i = source as usize;
-                    if source == Source::Mic {
+                    if source == Source::Mic && live.sources_on[0] {
                         // ≈ −54 dBFS: below any real room, i.e. muted or gain at zero.
                         if rms < 0.002 {
                             live.mic_quiet_since.get_or_insert_with(Instant::now);
@@ -598,13 +641,50 @@ impl RecordingView {
     fn mark_moment(&mut self, cx: &mut Context<Self>) {
         if let Phase::Recording(live) = &mut self.phase {
             let at = live.elapsed().as_secs_f64();
-            let n = live.bookmarks.len() + 1;
-            live.bookmarks.push(Bookmark {
+            let n = live.bookmarks.iter().filter(|b| b.kind == MarkKind::Moment).count() + 1;
+            live.add_mark(Bookmark {
                 at_secs: at,
                 label: trf("Markierung {}", &[&n]),
+                kind: MarkKind::Moment,
             });
             cx.notify();
         }
+    }
+
+    /// Switches a source off or on for the rest of this recording (mic +
+    /// desktop ↔ desktop only, and the other way round), marked in the
+    /// transcript. A source that wasn't recording starts now, its track
+    /// filled with silence up to here. The saved defaults stay as they are.
+    pub fn set_source(&mut self, source: Source, on: bool, cx: &mut Context<Self>) {
+        let Phase::Recording(live) = &mut self.phase else { return };
+        let i = source as usize;
+        if live.sources_on[i] == on {
+            return;
+        }
+        let at = match &live.recorder {
+            Some(r) => match r.set_source(source, on) {
+                Ok(at) => at,
+                Err(e) => {
+                    let name = if source == Source::Mic { tr("Mikrofon") } else { tr("Desktop-Audio") };
+                    let w = SharedString::from(trf("{} lässt sich nicht einschalten: {}", &[&name, &format!("{e:#}")]));
+                    eprintln!("[mostalgia] {w}");
+                    if !live.warnings.contains(&w) {
+                        live.warnings.push(w);
+                    }
+                    cx.notify();
+                    return;
+                }
+            },
+            None => live.elapsed().as_secs_f64(),
+        };
+        live.switched(source, on, at);
+        cx.notify();
+    }
+
+    /// Whether `source` is being recorded right now (`None`: no recording).
+    pub fn source_on(&self, source: Source) -> Option<bool> {
+        let Phase::Recording(live) = &self.phase else { return None };
+        Some(live.sources_on[source as usize])
     }
 
     pub fn stop(&mut self, cx: &mut Context<Self>) {
@@ -896,22 +976,39 @@ impl RecordingView {
         let theme = cx.theme();
         let paused = live.paused_since.is_some();
         let elapsed = live.elapsed().as_secs_f64();
-        let enabled = self.sources();
+        let enabled = live.sources_on;
+        // Not while the mic is off on purpose.
         let mic_silent = enabled[0]
             && live.paused_since.is_none()
             && live.mic_quiet_since.is_some_and(|t| t.elapsed() > Duration::from_secs(20));
 
-        let meter = |source: Source, cx: &App| {
+        // A switch per source (crossed out while off) and its level.
+        let meter = |source: Source, cx: &Context<Self>| {
             let i = source as usize;
+            let on = enabled[i];
+            let (icon, tip) = match (source, on) {
+                (Source::Mic, true) => (IconName::Mic, tr("Mikrofon ausschalten")),
+                (Source::Mic, false) => (IconName::MicOff, tr("Mikrofon einschalten")),
+                (Source::System, true) => (IconName::Monitor, tr("Desktop-Audio ausschalten")),
+                (Source::System, false) => (IconName::MonitorOff, tr("Desktop-Audio einschalten")),
+            };
+            let color = if on { cx.theme().muted_foreground } else { cx.theme().danger };
             h_flex()
-                .gap_2()
-                .w(px(150.))
+                .gap_1()
+                .w(px(178.))
                 .child(
-                    Icon::new(if source == Source::Mic { IconName::Mic } else { IconName::Monitor })
-                        .small()
-                        .text_color(cx.theme().muted_foreground),
+                    Button::new(if source == Source::Mic { "toggle-mic" } else { "toggle-system" })
+                        .xsmall()
+                        .ghost()
+                        .icon(Icon::new(icon).text_color(color))
+                        .tooltip(tip)
+                        .on_click(cx.listener(move |this, _, _, cx| this.set_source(source, !on, cx))),
                 )
-                .child(ui::level_meter(live.levels[i], enabled[i] && !paused, cx))
+                .child(if on {
+                    ui::level_meter(live.levels[i], !paused, cx).into_any_element()
+                } else {
+                    div().flex_1().text_xs().text_color(cx.theme().danger).child(tr("Aus")).into_any_element()
+                })
         };
 
         // Wraps the buttons onto a second row on narrow windows.
@@ -1224,22 +1321,7 @@ fn save_live_only(rec: &Recording, live_label: &str, error: String, language: &s
 }
 
 fn bookmark_row(b: &Bookmark, cx: &App) -> Div {
-    let theme = cx.theme();
-    h_flex()
-        .gap_3()
-        .py_1()
-        .text_xs()
-        .text_color(theme.warning)
-        .child(
-            div()
-                .w(px(52.))
-                .flex_none()
-                .font_family(theme.mono_font_family.clone())
-                .child(ui::hms(b.at_secs)),
-        )
-        .child(Icon::new(IconName::Bookmark).xsmall())
-        .child(b.label.clone())
-        .child(div().flex_1().h(px(1.)).bg(theme.warning.opacity(0.3)))
+    ui::mark_row(b, true, cx)
 }
 
 impl Focusable for RecordingView {

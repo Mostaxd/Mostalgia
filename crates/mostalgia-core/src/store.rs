@@ -22,9 +22,92 @@ pub struct MeetingSummary {
     pub has_summary: bool,
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub struct Bookmark {
     pub at_secs: f64,
     pub label: String,
+    /// A moment the user marked, or where a source was switched off / on.
+    pub kind: MarkKind,
+}
+
+impl Bookmark {
+    /// "Mic off" / "Mic on" (and desktop audio) at `at_secs`.
+    pub fn source_switch(source: Source, on: bool, at_secs: f64) -> Self {
+        let kind = if on { MarkKind::SourceOn(source) } else { MarkKind::SourceOff(source) };
+        Self { at_secs, label: kind.label().to_string(), kind }
+    }
+
+    /// What goes into the `label` column: a moment's label, or a reserved
+    /// token for a switch (no schema change needed).
+    pub fn stored_label(&self) -> String {
+        match self.kind {
+            MarkKind::Moment => self.label.clone(),
+            kind => format!("{SWITCH_PREFIX}{}", kind.as_str()),
+        }
+    }
+
+    /// What to show: the user's label, or the switch in the UI language.
+    pub fn display_label(&self) -> String {
+        match self.kind {
+            MarkKind::Moment => self.label.clone(),
+            _ => self.kind.label().to_string(),
+        }
+    }
+}
+
+/// Prefix of a source switch's token in the bookmarks' `label` column.
+const SWITCH_PREFIX: &str = "mostalgia:"; // i18n: not UI
+
+/// What a [`Bookmark`] marks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MarkKind {
+    /// "Mark moment" during a recording.
+    #[default]
+    Moment,
+    /// A source switched off mid-recording (its track is silent from here).
+    SourceOff(Source),
+    /// A source switched (back) on mid-recording.
+    SourceOn(Source),
+}
+
+impl MarkKind {
+    /// Stable name (stored as `mostalgia:<name>`; "" for a moment).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MarkKind::Moment => "",
+            MarkKind::SourceOff(Source::Mic) => "mic_off",
+            MarkKind::SourceOn(Source::Mic) => "mic_on",
+            MarkKind::SourceOff(Source::System) => "system_off",
+            MarkKind::SourceOn(Source::System) => "system_on",
+        }
+    }
+
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "mic_off" => MarkKind::SourceOff(Source::Mic),
+            "mic_on" => MarkKind::SourceOn(Source::Mic),
+            "system_off" => MarkKind::SourceOff(Source::System),
+            "system_on" => MarkKind::SourceOn(Source::System),
+            _ => MarkKind::Moment,
+        }
+    }
+
+    /// The kind a stored label stands for (a moment unless it's a switch token).
+    pub fn from_stored_label(label: &str) -> Self {
+        label.strip_prefix(SWITCH_PREFIX).map_or(MarkKind::Moment, Self::parse)
+    }
+
+    /// The switch's label in the UI language (empty for a moment).
+    pub fn label(self) -> &'static str {
+        use crate::i18n::tr;
+        match self {
+            MarkKind::Moment => "",
+            MarkKind::SourceOff(Source::Mic) => tr("Mikrofon aus"),
+            MarkKind::SourceOn(Source::Mic) => tr("Mikrofon an"),
+            MarkKind::SourceOff(Source::System) => tr("Desktop-Audio aus"),
+            MarkKind::SourceOn(Source::System) => tr("Desktop-Audio an"),
+        }
+    }
 }
 
 /// A point Mori noticed during the recording and the user pinned.
@@ -455,12 +538,14 @@ impl Store {
             .optional()?;
         let mut stmt = self
             .conn
-            .prepare("SELECT at_secs, label FROM bookmarks WHERE meeting_id = ?1 ORDER BY at_secs")?;
+            .prepare("SELECT at_secs, label FROM bookmarks WHERE meeting_id = ?1 ORDER BY at_secs, id")?;
         let bookmarks = stmt
             .query_map([id], |r| {
+                let label: String = r.get(1)?;
                 Ok(Bookmark {
                     at_secs: r.get(0)?,
-                    label: r.get(1)?,
+                    kind: MarkKind::from_stored_label(&label),
+                    label,
                 })
             })?
             .collect::<rusqlite::Result<_>>()?;
@@ -556,7 +641,7 @@ impl Store {
             .conn
             .prepare("INSERT INTO bookmarks (meeting_id, at_secs, label) VALUES (?1, ?2, ?3)")?;
         for b in bookmarks {
-            stmt.execute(params![meeting_id, b.at_secs, b.label])?;
+            stmt.execute(params![meeting_id, b.at_secs, b.stored_label()])?;
         }
         Ok(())
     }
@@ -939,6 +1024,37 @@ mod tests {
     }
 
     #[test]
+    fn source_switches_are_stored_as_bookmarks() -> Result<()> {
+        let path = std::env::temp_dir().join(format!("mostalgia-marks-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut store = Store::open(&path)?;
+        let id = store.insert_meeting(
+            &NewMeeting { title: "M", started_at: Local::now(), duration_secs: 900.0, language: "de", dir: Path::new("/tmp/marks") },
+            &[seg(Source::System, 1.0, "Hallo")],
+        )?;
+        let marks = vec![
+            Bookmark { at_secs: 41.0, label: "Markierung 1".into(), kind: MarkKind::Moment },
+            Bookmark::source_switch(Source::Mic, false, 754.0),
+            Bookmark::source_switch(Source::Mic, true, 902.5),
+            Bookmark::source_switch(Source::System, false, 903.0),
+            Bookmark::source_switch(Source::System, true, 904.0),
+        ];
+        store.add_bookmarks(id, &marks)?;
+        let back = store.get(id)?.unwrap().bookmarks;
+        assert_eq!(back.iter().map(|b| (b.at_secs, b.kind)).collect::<Vec<_>>(), marks.iter().map(|b| (b.at_secs, b.kind)).collect::<Vec<_>>());
+        assert_eq!(back[0].display_label(), "Markierung 1");
+        assert_eq!(back[1].display_label(), crate::i18n::tr("Mikrofon aus"));
+        // Stored in the existing label column, no schema change.
+        let raw: String = store.conn.query_row("SELECT label FROM bookmarks WHERE meeting_id = ?1 AND at_secs = 754.0", [id], |r| r.get(0))?;
+        assert_eq!(raw, "mostalgia:mic_off");
+        for kind in ["", "mic_off", "mic_on", "system_off", "system_on"] {
+            assert_eq!(MarkKind::parse(kind).as_str(), kind);
+        }
+        std::fs::remove_file(&path)?;
+        Ok(())
+    }
+
+    #[test]
     fn delete_removes_everything_searchable() -> Result<()> {
         let path = std::env::temp_dir().join(format!("mostalgia-del-{}.db", std::process::id()));
         let dir = std::env::temp_dir().join(format!("mostalgia-del-session-{}", std::process::id()));
@@ -955,7 +1071,7 @@ mod tests {
             &[seg(Source::Mic, 1.0, "Geheimprojekt Zebra wird eingestellt.")],
         )?;
         store.save_summary(gone, "claude", "m", None, "# Weg\n\nZebra")?;
-        store.add_bookmarks(gone, &[Bookmark { at_secs: 1.0, label: "x".into() }])?;
+        store.add_bookmarks(gone, &[Bookmark { at_secs: 1.0, label: "x".into(), kind: MarkKind::Moment }])?;
         store.add_note(gone, "fact", "Zebra", 1.0)?;
         store.add_companion_chat(gone, &[("Zebra?".into(), "Yes [[t:1]].".into())])?;
         crate::ask::index::index_meeting(&mut store, gone)?;

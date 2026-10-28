@@ -100,6 +100,7 @@ impl RemoteFeed {
                     last_line_end: l.last_line_end,
                     lines: l.lines,
                     elapsed_secs: l.elapsed_secs,
+                    sources: l.sources.unwrap_or([true, true]),
                 });
                 self.live_at = Some(now);
             }

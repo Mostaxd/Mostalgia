@@ -271,6 +271,7 @@ impl DesktopMori {
             MoriEvent::StartRecording { mic, system } => send(&FromMori::StartRecording { mic: *mic, system: *system }),
             MoriEvent::SetPaused { paused } => send(&FromMori::PauseRecording { paused: *paused }),
             MoriEvent::StopRecording => send(&FromMori::StopRecording),
+            MoriEvent::SetSource { source, on } => send(&FromMori::SetSource { source: source.as_str().into(), on: *on }),
             MoriEvent::OpenMoriSettings => send(&FromMori::OpenMoriSettings),
             MoriEvent::PopOut => {}
         });
@@ -349,6 +350,7 @@ impl DesktopMori {
                 last_line_end: replay.lines[..due].last().map_or(0., |l| l.end),
                 lines: due,
                 elapsed_secs: t,
+                sources: None,
             };
             if t > replay.lines.last().map_or(0., |l| l.end) + 8. * EVERY && !replay.ended {
                 // The recording ends a while after the last line.
@@ -390,6 +392,8 @@ impl DesktopMori {
             last_line_end: t,
             lines: 0,
             elapsed_secs: t,
+            // MORI_DEMO_MIC_OFF=1: the mic is switched off.
+            sources: std::env::var_os("MORI_DEMO_MIC_OFF").is_some_and(|v| v == "1").then_some([false, true]),
         };
         self.feed.update(cx, |f, _| f.set_live(Some(live)));
         // A new card every 3 s from 4 s on.

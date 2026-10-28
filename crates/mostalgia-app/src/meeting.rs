@@ -1563,17 +1563,7 @@ impl MeetingView {
         let mut marks = m.bookmarks.iter().peekable();
         for (ix, seg) in m.segments.iter().enumerate() {
             while let Some(b) = marks.next_if(|b| b.at_secs <= seg.start_secs) {
-                rows.push(
-                    h_flex()
-                        .gap_3()
-                        .py_1()
-                        .text_xs()
-                        .text_color(theme.warning)
-                        .child(div().w(px(52.)).font_family(theme.mono_font_family.clone()).child(ui::hms(b.at_secs)))
-                        .child(Icon::new(IconName::Bookmark).xsmall())
-                        .child(b.label.clone())
-                        .into_any_element(),
-                );
+                rows.push(ui::mark_row(b, false, cx).into_any_element());
             }
             let playing = position.is_some_and(|p| p >= seg.start_secs && p < seg.end_secs.max(seg.start_secs + 0.5));
             let label = seg.speaker_label().to_string();
@@ -1677,6 +1667,10 @@ impl MeetingView {
                     })
                     .into_any_element(),
             );
+        }
+        // Marks after the last line (e.g. the mic switched off near the end).
+        for b in marks {
+            rows.push(ui::mark_row(b, false, cx).into_any_element());
         }
         v_flex().children(rows).into_any_element()
     }

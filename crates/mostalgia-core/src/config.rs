@@ -126,6 +126,11 @@ pub struct Config {
     /// Mori's figure is hidden: only a small bar (record controls, notes,
     /// the chat) stays where she stood.
     pub companion_hidden: bool,
+
+    // ── Companion bar indicator ──
+    /// How her bar (figure hidden) shows that a recording runs:
+    /// "sparkles" (default), "spinner" or "dot" (the red recording dot).
+    pub companion_bar_indicator: String,
 }
 
 /// When Mori looks for live notes during a recording.
@@ -260,6 +265,7 @@ impl Default for Config {
             companion_desktop: false,
             companion_desktop_pos: None,
             companion_hidden: false,
+            companion_bar_indicator: "sparkles".into(),
         }
     }
 }

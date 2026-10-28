@@ -34,8 +34,84 @@ pub(super) enum ChoiceIn {
     Bar,
 }
 
+/// How her bar shows that a recording runs (`Config::companion_bar_indicator`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BarIndicator {
+    /// Soft twinkling sparkles in her colour: friendly, not alarming.
+    #[default]
+    Sparkles,
+    Spinner,
+    /// The red recording dot.
+    Dot,
+}
+
+impl BarIndicator {
+    pub const ALL: [BarIndicator; 3] = [BarIndicator::Sparkles, BarIndicator::Spinner, BarIndicator::Dot];
+
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "spinner" => BarIndicator::Spinner,
+            "dot" => BarIndicator::Dot,
+            _ => BarIndicator::Sparkles,
+        }
+    }
+
+    pub fn as_config(self) -> &'static str {
+        match self {
+            BarIndicator::Sparkles => "sparkles",
+            BarIndicator::Spinner => "spinner",
+            BarIndicator::Dot => "dot",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BarIndicator::Sparkles => tr("Funkeln"),
+            BarIndicator::Spinner => tr("Kreisel"),
+            BarIndicator::Dot => tr("Aufnahmepunkt"),
+        }
+    }
+}
+
+/// Three small sparkles twinkling one after another (`motion`), or
+/// resting dimmed while the recording is paused; one still sparkle when
+/// motion is reduced.
+fn sparkles(color: Hsla, motion: bool, paused: bool) -> AnyElement {
+    if !motion || paused {
+        return Icon::new(IconName::Sparkles)
+            .xsmall()
+            .text_color(color.opacity(if paused { 0.4 } else { 0.85 }))
+            .into_any_element();
+    }
+    let star = |i: usize, size: f32, lift: f32| {
+        div()
+            .relative()
+            .top(px(lift))
+            .child(Icon::new(IconName::Sparkle).size(px(size)).text_color(color))
+            .with_animation(
+                ("mori-bar-sparkle", i),
+                Animation::new(Duration::from_millis(2400)).repeat(),
+                move |el, t| {
+                    // Each one brightens in turn, gently.
+                    let phase = (t + i as f32 / 3.) % 1.;
+                    let glow = 0.5 - 0.5 * (phase * std::f32::consts::TAU).cos();
+                    el.opacity(0.25 + 0.75 * glow)
+                },
+            )
+    };
+    h_flex()
+        .gap(px(1.))
+        .items_center()
+        .child(star(0, 9., -2.))
+        .child(star(1, 12., 1.))
+        .child(star(2, 8., -3.))
+        .into_any_element()
+}
+
 #[derive(Default)]
 pub(crate) struct ControlsState {
+    /// How her bar shows a running recording.
+    pub bar_indicator: BarIndicator,
     /// The "which sources" choice after the record button.
     pub choice: Option<ChoiceIn>,
     /// She asked for a recording and waits for it to run.
@@ -49,8 +125,8 @@ pub(crate) struct ControlsState {
     notes_scroll: ScrollHandle,
     /// Her menu, at this offset from her top-left.
     pub menu: Option<(f32, f32)>,
-    /// The elapsed second shown last (re-render when it changes).
-    elapsed_shown: Option<u64>,
+    /// The elapsed second and sources shown last (re-render when they change).
+    elapsed_shown: Option<(u64, [bool; 2])>,
 }
 
 struct SavedNotes {
@@ -95,7 +171,7 @@ impl Companion {
             self.ctl.choice = None;
             changed = true;
         }
-        let shown = live.map(|l| l.elapsed_secs as u64);
+        let shown = live.map(|l| (l.elapsed_secs as u64, l.sources));
         if shown != self.ctl.elapsed_shown {
             self.ctl.elapsed_shown = shown;
             changed = true;
@@ -248,8 +324,30 @@ impl Companion {
         let id = |name: &str| SharedString::from(format!("mori-{p}-{name}"));
         if let Some(live) = self.live(cx) {
             let paused = live.paused;
+            let mic_on = live.sources[0];
             let color = if paused { theme.warning } else { theme.danger };
-            let indicator = h_flex()
+            // Her bar keeps it friendly: sparkles (or a spinner) and the
+            // time, small and muted; the app and the tray keep the red dot.
+            let calm = place == ChoiceIn::Bar && self.ctl.bar_indicator != BarIndicator::Dot;
+            let spec = crate::themes::active(cx);
+            let motion = spec.animations && !self.reduce_motion;
+            let indicator = if calm {
+                h_flex()
+                    .gap_1p5()
+                    .px_1()
+                    .child(match self.ctl.bar_indicator {
+                        BarIndicator::Spinner if !paused => gpui_kit::component::spinner::Spinner::new().xsmall().color(theme.primary).into_any_element(),
+                        BarIndicator::Spinner => Icon::new(IconName::Pause).xsmall().text_color(theme.muted_foreground).into_any_element(),
+                        _ => sparkles(theme.primary, motion, paused),
+                    })
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_family(theme.mono_font_family.clone())
+                            .text_color(theme.muted_foreground)
+                            .child(ui::hms(live.elapsed_secs)),
+                    )
+            } else { h_flex()
                 .gap_1p5()
                 .px_1()
                 .child(if paused {
@@ -264,10 +362,24 @@ impl Companion {
                         .font_family(theme.mono_font_family.clone())
                         .text_color(if paused { theme.muted_foreground } else { theme.foreground })
                         .child(ui::hms(live.elapsed_secs)),
-                );
+                ) };
             return h_flex()
                 .gap_0p5()
                 .child(indicator)
+                .child(
+                    Button::new(id("mic"))
+                        .xsmall()
+                        .ghost()
+                        .icon(if mic_on {
+                            Icon::new(IconName::Mic)
+                        } else {
+                            Icon::new(IconName::MicOff).text_color(theme.danger)
+                        })
+                        .tooltip(if mic_on { tr("Mikrofon ausschalten") } else { tr("Mikrofon einschalten") })
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            cx.emit(MoriEvent::SetSource { source: mostalgia_core::Source::Mic, on: !mic_on })
+                        })),
+                )
                 .child(
                     Button::new(id("pause"))
                         .xsmall()
@@ -280,7 +392,7 @@ impl Companion {
                     Button::new(id("stop"))
                         .xsmall()
                         .ghost()
-                        .icon(Icon::new(IconName::Square).text_color(theme.danger))
+                        .icon(Icon::new(IconName::Square).text_color(if calm { theme.muted_foreground } else { theme.danger }))
                         .tooltip(tr("Aufnahme beenden"))
                         .on_click(cx.listener(|_, _, _, cx| cx.emit(MoriEvent::StopRecording))),
                 )
@@ -697,6 +809,13 @@ impl Companion {
                     .into_any_element(),
             ))
             .into_any_element()
+    }
+
+    /// Shows this bar indicator without saving it (screenshots).
+    #[doc(hidden)]
+    pub fn demo_bar_indicator(&mut self, indicator: BarIndicator, cx: &mut Context<Self>) {
+        self.ctl.bar_indicator = indicator;
+        cx.notify();
     }
 
     /// Hides or shows her figure without saving it (screenshots, demo).

@@ -40,6 +40,10 @@ pub struct WireLive {
     /// Recording time so far (without pauses), for her record controls.
     #[serde(default)]
     pub elapsed_secs: f64,
+    /// Which sources (mic, system) are being recorded right now (missing:
+    /// both).
+    #[serde(default)]
+    pub sources: Option<[bool; 2]>,
 }
 
 /// App → Mori.
@@ -86,6 +90,9 @@ pub enum FromMori {
     PauseRecording { paused: bool },
     /// Stop (and save) the recording in progress.
     StopRecording,
+    /// Switch a source ("mic" / "system") of the recording in progress off
+    /// or on.
+    SetSource { source: String, on: bool },
     /// Open Settings → Appearance (her options).
     OpenMoriSettings,
 }

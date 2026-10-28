@@ -191,6 +191,34 @@ pub fn meter_level(rms: f32) -> f32 {
 }
 
 /// A horizontal level meter.
+/// A bookmark row in a transcript: a marked moment (with a rule across
+/// when `rule`), or a source switched off / on mid-recording (crossed-out
+/// icon while off).
+pub fn mark_row(b: &mostalgia_core::store::Bookmark, rule: bool, cx: &App) -> Div {
+    use gpui_kit::assets::IconName;
+    use gpui_kit::component::{Icon, Sizable};
+    use mostalgia_core::store::MarkKind;
+    let theme = cx.theme();
+    let (icon, color) = match b.kind {
+        MarkKind::Moment => (IconName::Bookmark, theme.warning),
+        MarkKind::SourceOff(Source::Mic) => (IconName::MicOff, theme.muted_foreground),
+        MarkKind::SourceOn(Source::Mic) => (IconName::Mic, theme.muted_foreground),
+        MarkKind::SourceOff(Source::System) => (IconName::MonitorOff, theme.muted_foreground),
+        MarkKind::SourceOn(Source::System) => (IconName::Monitor, theme.muted_foreground),
+    };
+    h_flex()
+        .gap_3()
+        .py_1()
+        .text_xs()
+        .text_color(color)
+        .child(div().w(px(52.)).flex_none().font_family(theme.mono_font_family.clone()).child(hms(b.at_secs)))
+        .child(Icon::new(icon).xsmall())
+        .child(b.display_label())
+        .when(rule, |el| el.child(div().flex_1().h(px(1.)).bg(color.opacity(0.3))))
+        // In a saved meeting, in line with the transcript rows' padding.
+        .when(!rule, |el| el.px_2())
+}
+
 pub fn level_meter(level: f32, active: bool, cx: &App) -> Div {
     let theme = cx.theme();
     let color = if level > 0.92 { theme.danger } else { theme.primary };

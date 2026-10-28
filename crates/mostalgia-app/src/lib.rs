@@ -41,9 +41,9 @@ pub fn load_fonts(cx: &mut App) {
 }
 
 gpui_kit::assets::icon_assets!(pub ExtraIcons, [
-    ArrowDown, AudioLines, Bookmark, Calendar, Check, Clock, Cpu, FileText, FolderOpen, Mic, Monitor, Pause,
+    ArrowDown, AudioLines, Bookmark, Calendar, Check, Clock, Cpu, FileText, FolderOpen, Mic, Monitor, MonitorOff, Pause,
     Eraser, Keyboard, MicOff, Palette, Pencil, Play, Plus, Radio, RefreshCw, Search, Settings, Sparkles, Square, Trash, TriangleAlert,
-    Users, X, StickyNote, AppWindow, MonitorUp, Ellipsis, ChevronUp, Eye, EyeOff, Target, RotateCcw, WandSparkles, FaceSlightlySmiling, MessageCircle,
+    Users, X, Sparkle, StickyNote, AppWindow, MonitorUp, Ellipsis, ChevronUp, Eye, EyeOff, Target, RotateCcw, WandSparkles, FaceSlightlySmiling, MessageCircle,
 ]);
 
 /// The default GPUI Kit assets plus the extra Lucide icons the app uses.

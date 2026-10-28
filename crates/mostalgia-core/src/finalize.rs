@@ -143,8 +143,10 @@ pub fn final_pass_with_notes(
 }
 
 /// Background level of a track: the 20th percentile of 100 ms block RMS.
+/// Digital silence — a source switched off mid-recording, or the padding
+/// before it joined — isn't the room and doesn't count.
 fn noise_floor(samples: &[f32]) -> f32 {
-    let mut blocks: Vec<f32> = samples.chunks(crate::BLOCK_SAMPLES).map(crate::vad::rms).collect();
+    let mut blocks: Vec<f32> = samples.chunks(crate::BLOCK_SAMPLES).map(crate::vad::rms).filter(|&r| r > 0.0).collect();
     if blocks.is_empty() {
         return 0.0;
     }
@@ -294,4 +296,20 @@ fn store_detected_language(store: &crate::store::Store, meeting_id: i64, configu
         store.conn().execute("UPDATE meetings SET language = ?2 WHERE id = ?1", rusqlite::params![meeting_id, code])?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn digital_silence_is_not_the_room() {
+        // A mic track that was off for most of the recording: mostly exact
+        // zeros, then a room with a little noise.
+        let mut track = vec![0.0f32; 80 * crate::BLOCK_SAMPLES];
+        track.extend((0..20 * crate::BLOCK_SAMPLES).map(|i| if i % 2 == 0 { 0.01 } else { -0.01 }));
+        assert!((noise_floor(&track) - 0.01).abs() < 1e-4);
+        assert_eq!(noise_floor(&vec![0.0; 10 * crate::BLOCK_SAMPLES]), 0.0, "all off: no floor, nothing breaks");
+        assert_eq!(noise_floor(&[]), 0.0);
+    }
 }

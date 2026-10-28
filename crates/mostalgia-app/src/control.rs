@@ -16,6 +16,8 @@ pub enum Command {
     Toggle,
     Start,
     Stop,
+    /// Switch the mic of the recording in progress off or on.
+    ToggleMic,
     /// Bring the window to the front.
     Show,
     Quit,
@@ -27,6 +29,7 @@ impl Command {
             "toggle" => Command::Toggle,
             "start" => Command::Start,
             "stop" => Command::Stop,
+            "mic" => Command::ToggleMic,
             "show" => Command::Show,
             "quit" => Command::Quit,
             _ => return None,
@@ -72,6 +75,8 @@ pub fn cleanup() {
 pub struct Tray {
     pub tx: Sender<Command>,
     pub recording: bool,
+    /// While recording: whether the mic is on (it can be switched mid-recording).
+    pub mic_on: bool,
 }
 
 impl ksni::Tray for Tray {
@@ -132,15 +137,23 @@ impl ksni::Tray for Tray {
             }
             .into()
         };
-        vec![
-            if self.recording {
-                item(tr("Aufnahme beenden"), "media-playback-stop", Command::Stop)
+        let mut items = vec![if self.recording {
+            item(tr("Aufnahme beenden"), "media-playback-stop", Command::Stop)
+        } else {
+            item(tr("Aufnahme starten"), "media-record", Command::Start)
+        }];
+        if self.recording {
+            items.push(if self.mic_on {
+                item(tr("Mikrofon ausschalten"), "microphone-sensitivity-muted", Command::ToggleMic)
             } else {
-                item(tr("Aufnahme starten"), "media-record", Command::Start)
-            },
+                item(tr("Mikrofon einschalten"), "audio-input-microphone", Command::ToggleMic)
+            });
+        }
+        items.extend([
             item(tr("Fenster anzeigen"), "window-new", Command::Show),
             ksni::MenuItem::Separator,
             item(tr("Mostalgia beenden"), "application-exit", Command::Quit),
-        ]
+        ]);
+        items
     }
 }

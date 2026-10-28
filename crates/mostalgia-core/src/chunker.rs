@@ -184,6 +184,37 @@ impl Chunker {
         if self.heard_speech { self.chunk.len() } else { 0 }
     }
 
+    /// The source is silent on purpose for `silent` samples (switched off,
+    /// or padding before it joined): ends whatever was being said and moves
+    /// the clock on, so nothing is transcribed from the silence and later
+    /// utterances keep their place on the recording's timeline.
+    pub fn skip(&mut self, silent: u64) -> Vec<Utterance> {
+        let mut done = Vec::new();
+        let mut silent = silent;
+        if !self.pending.is_empty() {
+            // The partial frame, padded with (the first of) the silence.
+            let n = self.pending.len();
+            let mut rest = std::mem::take(&mut self.pending);
+            rest.resize(FRAME, 0.0);
+            done = self.push(&rest);
+            silent = silent.saturating_sub((FRAME - n) as u64);
+        }
+        if self.heard_speech {
+            done.extend(self.cut());
+        }
+        // Lead-in kept before any speech is passed over too.
+        self.consumed += self.chunk.len() as u64;
+        self.chunk.clear();
+        self.silent_frames = 0;
+        self.consumed += silent;
+        done
+    }
+
+    /// Samples of the timeline this chunker has seen (for tests).
+    pub fn position(&self) -> u64 {
+        self.consumed + self.chunk.len() as u64 + self.pending.len() as u64
+    }
+
     /// Flushes whatever is left when recording stops.
     pub fn finish(mut self) -> Vec<Utterance> {
         let mut done = Vec::new();
@@ -274,5 +305,53 @@ mod tests {
         assert!(is_filler_hallucination("Untertitel im Auftrag des ZDF", &quiet));
         assert!(!is_filler_hallucination("Vielen Dank.", &loud));
         assert!(!is_filler_hallucination("Vielen Dank für das Budget.", &quiet));
+    }
+}
+
+#[cfg(test)]
+mod skip_tests {
+    use super::*;
+
+    fn speech(secs: f32) -> Vec<f32> {
+        (0..(secs * SAMPLE_RATE as f32) as usize).map(|i| 0.3 * (i as f32 * 0.07).sin()).collect()
+    }
+
+    fn quiet(secs: f32) -> Vec<f32> {
+        vec![0.0005; (secs * SAMPLE_RATE as f32) as usize]
+    }
+
+    fn chunker() -> Chunker {
+        // No model file: the energy gate, no Silero needed.
+        Chunker::new(SpeechDetector::load(std::path::Path::new("/nonexistent/vad.bin"), 0.5).unwrap())
+    }
+
+    #[test]
+    fn skip_ends_the_utterance_and_keeps_the_timeline() {
+        let mut c = chunker();
+        let mut utts = c.push(&quiet(1.0));
+        utts.extend(c.push(&speech(2.0)));
+        // Switched off mid-sentence for 5 s.
+        let cut = c.skip(5 * SAMPLE_RATE as u64);
+        utts.extend(cut);
+        assert_eq!(utts.len(), 1, "what was said before the switch is transcribed");
+        assert!((utts[0].offset_secs - 0.75).abs() < 0.3, "offset {}", utts[0].offset_secs);
+        assert_eq!(c.position(), 8 * SAMPLE_RATE as u64, "1 s + 2 s + 5 s off");
+        assert_eq!(c.open_len(), 0);
+        // Nothing comes out of the silence itself.
+        assert!(c.skip(SAMPLE_RATE as u64).is_empty());
+        // Back on: later speech lands at its place on the timeline.
+        let mut after = c.push(&quiet(0.5));
+        after.extend(c.push(&speech(2.0)));
+        after.extend(c.finish());
+        assert_eq!(after.len(), 1);
+        assert!(after[0].offset_secs >= 9.0 && after[0].offset_secs < 9.6, "offset {}", after[0].offset_secs);
+    }
+
+    #[test]
+    fn skip_counts_a_partial_frame_once() {
+        let mut c = chunker();
+        c.push(&quiet(0.01)); // 160 samples: less than one frame
+        c.skip(1600);
+        assert_eq!(c.position(), 160 + 1600);
     }
 }

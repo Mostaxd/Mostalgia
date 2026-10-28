@@ -154,4 +154,11 @@ pub const EN: &[(&str, &str)] = &[
     ("Fokus: {}", "Focus: {}"),
     ("Worauf soll {} achten? (optional)", "What should {} focus on? (optional)"),
     ("Worauf {} bei den Live-Notizen besonders achtet – gilt für diese Aufnahme und wird mit ihr gespeichert. Den Standard legst du in den Einstellungen fest.", "What {} looks out for in her live notes – for this recording, and saved with it. Set the default in Settings."),
+    // Bar indicator (figure hidden)
+    ("Funkeln", "Sparkles"),
+    ("Kreisel", "Spinner"),
+    ("Aufnahmepunkt", "Recording dot"),
+    ("Leiste", "Bar"),
+    ("Anzeige während der Aufnahme", "While recording"),
+    ("Wenn die Figur ausgeblendet ist: wie ihre Leiste zeigt, dass aufgenommen wird. Das Aufnahmefenster und das Tray-Symbol zeigen immer den roten Punkt.", "When the figure is hidden: how her bar shows that a recording is running. The recording screen and the tray icon always show the red dot."),
 ];
