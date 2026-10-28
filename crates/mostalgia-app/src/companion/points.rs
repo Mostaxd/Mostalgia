@@ -159,7 +159,7 @@ impl Companion {
         let result = match rx.try_recv() {
             Ok(r) => r,
             Err(crossbeam_channel::TryRecvError::Empty) => return false,
-            Err(crossbeam_channel::TryRecvError::Disconnected) => Err(tr("Die Anfrage für Live-Punkte ist abgebrochen").to_string()),
+            Err(crossbeam_channel::TryRecvError::Disconnected) => Err(tr("Die Anfrage für Live-Notizen ist abgebrochen").to_string()),
         };
         self.points_rx = None;
         let run = self.points_run.take();
@@ -469,11 +469,11 @@ impl Companion {
                     .font_semibold()
                     .text_color(theme.danger)
                     .child(Icon::new(IconName::TriangleAlert).xsmall())
-                    .child(if err.points { tr("Live-Punkte fehlgeschlagen") } else { tr("Mori konnte nicht antworten") }),
+                    .child(if err.points { tr("Live-Notizen fehlgeschlagen") } else { tr("Mori konnte nicht antworten") }),
             )
             .child(div().text_xs().child(err.message.clone()))
             .when(err.points, |el| {
-                el.child(div().text_xs().text_color(theme.muted_foreground).child(tr("Live-Punkte sind pausiert, bis du es erneut versuchst.")))
+                el.child(div().text_xs().text_color(theme.muted_foreground).child(tr("Live-Notizen sind pausiert, bis du es erneut versuchst.")))
             })
             .child(
                 h_flex()
@@ -563,7 +563,7 @@ impl Companion {
                 .text_xs()
                 .text_color(theme.muted_foreground)
                 .block_mouse_except_scroll()
-                .child(trf("{} Punkte", &[&total]))
+                .child(trf("{} Notizen", &[&total]))
                 .child(div().flex_1())
                 .when(clearable, |el| {
                     el.child(
@@ -673,7 +673,7 @@ impl Companion {
                 .child(Icon::new(IconName::FileText).xsmall())
                 .child(format!("{}", total - shown))
                 .tooltip({
-                    let tip: SharedString = trf("{} weitere Punkte ({} angeheftet) – klicken zum Anzeigen", &[&(total - shown), &pinned]).into();
+                    let tip: SharedString = trf("{} weitere Notizen ({} angeheftet) – klicken zum Anzeigen", &[&(total - shown), &pinned]).into();
                     move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
                 })
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())

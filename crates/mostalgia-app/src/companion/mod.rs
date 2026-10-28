@@ -6,6 +6,7 @@
 pub mod art;
 mod bubble;
 pub use bubble::ShowLiveMoment;
+mod controls;
 mod points;
 pub mod desktop;
 pub mod feed;
@@ -42,8 +43,16 @@ pub enum MoriEvent {
     PopOut,
     /// "Back into the app" on the desktop.
     BackToApp,
-    /// Her points were stored with this meeting.
+    /// Her points were stored with this meeting (or its notes changed).
     NotesSaved { meeting_id: i64 },
+    /// Her record button: start a recording from exactly these sources.
+    StartRecording { mic: bool, system: bool },
+    /// Pause / resume the recording in progress.
+    SetPaused { paused: bool },
+    /// Stop (and save) the recording in progress.
+    StopRecording,
+    /// "Settings" in her menu: Settings → Appearance.
+    OpenMoriSettings,
 }
 
 impl EventEmitter<MoriEvent> for Companion {}
@@ -212,6 +221,11 @@ pub struct Companion {
     visible_seen: usize,
     /// Screenshots: a fixed pose.
     demo_pose: Option<Pose>,
+    /// Her figure is hidden: the collapsed bar stands in for her
+    /// (`Config::companion_hidden`).
+    hidden: bool,
+    /// Record controls, the Notes tab and her menu.
+    ctl: controls::ControlsState,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -288,6 +302,8 @@ impl Companion {
             expanded: false,
             visible_seen: 0,
             demo_pose: None,
+            hidden: false,
+            ctl: Default::default(),
             _subscriptions: vec![sub],
         };
         this.reload_config(cx);
@@ -303,6 +319,7 @@ impl Companion {
         self.scale = config.companion_scale.clamp(0.5, 2.);
         self.points_interval = config.companion_points_interval_secs;
         self.pos = config.companion_pos;
+        self.hidden = config.companion_hidden;
         let size = self.size();
         if let Some(p) = &mut self.desktop
             && p.drag.is_none()
@@ -326,7 +343,11 @@ impl Companion {
         self.enabled
     }
 
+    /// Her size, or the collapsed bar's while she's hidden.
     fn size(&self) -> (f32, f32) {
+        if self.hidden {
+            return (controls::BAR_W, controls::BAR_H);
+        }
         let h = BASE_HEIGHT * self.scale;
         (h * art::FRAME_W / art::FRAME_H, h)
     }
@@ -339,7 +360,7 @@ impl Companion {
 
     /// On the desktop: whether her window is grown for the bubble or cards.
     fn grown(&self) -> bool {
-        self.open || self.expanded || self.error.is_some() || !self.visible_points().is_empty()
+        self.open || self.expanded || self.error.is_some() || self.ctl.menu.is_some() || !self.visible_points().is_empty()
     }
 
     /// Her top-left in window coordinates.
@@ -489,12 +510,17 @@ impl Companion {
         let Some(p) = &self.desktop else { return };
         let ((vw, vh), _) = p.layout((w, h), grown);
         self.viewport = (vw, vh);
+        let menu = self.menu_rect(o);
         // While the window manager moves the window, leave it alone.
         if p.drag.is_some_and(|d| d.wm_move) && self.drag.as_ref().is_some_and(|d| d.moved) {
             return;
         }
-        let pad = desktop::PAD;
+        // (The bar takes the mouse only on itself.)
+        let pad = if self.hidden { 2. } else { desktop::PAD };
         let mut input = vec![(o.x - pad, o.y - pad, w + 2. * pad, h + 2. * pad)];
+        if let Some(m) = menu {
+            input.push(m);
+        }
         if open {
             // The bubble's side, full height.
             input.push(if p.right { (0., 0., (o.x - 4.).max(0.), vh) } else { (o.x + w + 4., 0., vw - (o.x + w + 4.), vh) });
@@ -643,6 +669,7 @@ impl Companion {
         if let Some(l) = live {
             self.maybe_request_points(l, cx);
         }
+        changed |= self.track_record_controls(live);
         let visible = self.visible_points().len();
         changed |= visible != self.visible_seen;
         self.visible_seen = visible;
@@ -662,7 +689,7 @@ impl Companion {
         }
         let busy = self.chat_rx.is_some() || self.points_rx.is_some();
         // On the desktop she's always in view, not only in an active window.
-        let animate = !self.reduce_motion && (self.desktop_mode || window.is_window_active()) && self.demo_pose.is_none();
+        let animate = !self.reduce_motion && !self.hidden && (self.desktop_mode || window.is_window_active()) && self.demo_pose.is_none();
         if animate && art::frame_count(self.pose) > 1 {
             self.frame = (self.frame + 1) % art::frame_count(self.pose);
             changed = true;
@@ -674,7 +701,7 @@ impl Companion {
             Duration::from_millis(50)
         } else if animate {
             Duration::from_secs_f32(1. / art::FPS.clamp(1, MAX_FPS) as f32)
-        } else if busy {
+        } else if busy || live.is_some() || self.ctl.starting.is_some() {
             Duration::from_millis(100)
         } else {
             Duration::from_millis(400)
@@ -733,6 +760,7 @@ impl Companion {
     /// A recording was saved as `meeting_id`: her points (and the chat) go
     /// with it.
     pub fn recording_saved(&mut self, meeting_id: i64, cx: &mut Context<Self>) {
+        self.invalidate_notes();
         self.save_points(meeting_id, cx);
         self.save_session_chat(meeting_id, cx);
     }
@@ -748,6 +776,8 @@ impl Companion {
         self.points_follow = true;
         self.points_unseen = 0;
         self.scope_choice = None;
+        self.hidden = false;
+        self.ctl = Default::default();
         cx.notify();
     }
 
@@ -807,10 +837,12 @@ impl Render for Companion {
         if self.desktop.is_some() {
             self.place_desktop_window(o);
         }
-        let image = self.frame_image((h * window.scale_factor()).round() as u32);
         let dragging = self.drag.as_ref().is_some_and(|d| d.moved);
-
-        let character = div()
+        let character = if self.hidden {
+            self.render_bar(o, dragging, cx)
+        } else {
+            let image = self.frame_image((h * window.scale_factor()).round() as u32);
+            div()
             .id("mori")
             .absolute()
             .left(px(o.x))
@@ -822,17 +854,21 @@ impl Render for Companion {
             .on_mouse_down(MouseButton::Left, cx.listener(|this, ev: &MouseDownEvent, _, cx| this.mouse_down(ev, cx)))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, _, cx| this.mouse_up(cx)))
             .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, window, cx| this.mouse_move(ev, window, cx)))
+            .on_mouse_down(MouseButton::Right, cx.listener(|this, ev: &MouseDownEvent, _, cx| this.open_menu(ev, cx)))
             // (Her desktop window is too small for the tooltip.)
             .when(!self.desktop_mode, |el| {
-                el.tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Mori · klicken zum Fragen, ziehen zum Verschieben")).build(window, cx))
+                el.tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Mori · klicken zum Fragen, ziehen zum Verschieben, Rechtsklick für das Menü")).build(window, cx))
             })
-            .child(img(image).size_full());
+            .child(img(image).size_full())
+            .into_any_element()
+        };
 
         let bubble = self.render_bubble(o, (w, h), cx);
         let stack = self.render_points(o, (w, h), cx);
-        let badge = self.render_badge(o, (w, h), cx);
+        let badge = if self.hidden { None } else { self.render_badge(o, (w, h), cx) };
+        let menu = self.render_menu(o, cx);
         let theme = cx.theme();
-        let name_tag = (self.pose == Pose::Error).then(|| {
+        let name_tag = (self.pose == Pose::Error && !self.hidden).then(|| {
             h_flex()
                 .absolute()
                 .left(px(o.x))
@@ -852,6 +888,7 @@ impl Render for Companion {
             .children(name_tag)
             .children(badge)
             .children(bubble)
+            .children(menu)
             // While dragging, a layer over everything keeps the mouse even
             // when it outruns her.
             .when(self.drag.is_some(), |el| {

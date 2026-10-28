@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::Input;
-use gpui_kit::component::{ActiveTheme, Disableable, Selectable, Sizable, StyledExt, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, Disableable, Icon, Selectable, Sizable, StyledExt, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use mostalgia_core::ask::{self, AskEvent};
@@ -66,9 +66,11 @@ impl Companion {
 
     pub(super) fn toggle_bubble(&mut self, cx: &mut Context<Self>) {
         self.open = !self.open;
+        self.ctl.choice = None;
         if self.open {
             self.load_setup();
             self.chat_scroll.scroll_to_bottom();
+            self.invalidate_notes();
         }
         cx.notify();
     }
@@ -168,6 +170,7 @@ impl Companion {
     pub fn set_open_meeting(&mut self, meeting: Option<(i64, String)>, cx: &mut Context<Self>) {
         if self.open_meeting != meeting {
             self.open_meeting = meeting;
+            self.invalidate_notes();
             cx.notify();
         }
     }
@@ -345,6 +348,11 @@ impl Companion {
         .text_sm()
     }
 
+    /// The bubble shows the Notes tab.
+    fn bubble_notes(&self) -> bool {
+        self.ctl.notes_tab
+    }
+
     pub(super) fn render_bubble(&mut self, o: Point2, (w, h): (f32, f32), cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.open {
             return None;
@@ -370,6 +378,8 @@ impl Companion {
         let recording = self.recording.read(cx).is_recording();
         let scope = self.scope(cx);
         let busy = self.chat_rx.is_some();
+        let notes_tab = self.bubble_notes();
+        let record_controls = self.render_record_controls(super::controls::ChoiceIn::Bubble, cx);
 
         let header = h_flex()
             .gap_2()
@@ -403,13 +413,15 @@ impl Companion {
                 )
             })
             .child(div().flex_1())
-            .when(self.bubble.clear_button && !self.turns.is_empty(), |el| {
+            .child(record_controls)
+            .when(self.bubble.clear_button && !self.turns.is_empty() && !self.bubble_notes(), |el| {
                 el.child(
                     Button::new("mori-new-chat")
                         .xsmall()
                         .ghost()
                         .icon(IconName::Eraser)
-                        .label(tr("Neuer Chat"))
+                        // (Icon only next to the recording controls.)
+                        .when(!recording, |b| b.label(tr("Neuer Chat")))
                         .tooltip(tr("Leert diese Unterhaltung (rückgängig machbar)"))
                         .on_click(cx.listener(|this, _, _, cx| this.new_chat(cx))),
                 )
@@ -434,19 +446,23 @@ impl Companion {
 
         let open_title = self.open_meeting.as_ref().map(|(_, t)| t.clone());
         let scope_button = |id: &'static str, label: &'static str, tip: String, this_scope: Scope, enabled: bool, cx: &mut Context<Self>| {
+            let on = scope == this_scope && !notes_tab;
             Button::new(id)
                 .xsmall()
                 .label(tr(label))
-                .selected(scope == this_scope)
-                .when(scope == this_scope, |b| b.primary())
-                .when(scope != this_scope, |b| b.ghost())
+                .selected(on)
+                .when(on, |b| b.primary())
+                .when(!on, |b| b.ghost())
                 .disabled(!enabled)
                 .tooltip(tip)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.scope_choice = Some(this_scope);
+                    this.ctl.notes_tab = false;
+                    this.chat_scroll.scroll_to_bottom();
                     cx.notify();
                 }))
         };
+        let notes_count = self.notes_count(cx);
         let scope_toggle = h_flex()
             .gap_1()
             .px_3()
@@ -459,14 +475,44 @@ impl Companion {
                 el.child(scope_button("mori-scope-open", "Diese Besprechung", trf("Fragt die geöffnete Besprechung: {}", &[&title]), Scope::Open, true, cx))
             })
             .child(scope_button("mori-scope-library", "Alle Besprechungen", tr("Durchsucht alle gespeicherten Besprechungen, mit Quellen").to_string(), Scope::Library, true, cx))
-            .when(scope == Scope::Open, |el| {
+            .child(
+                Button::new("mori-tab-notes")
+                    .xsmall()
+                    .icon(IconName::StickyNote)
+                    .label(if notes_count > 0 { format!("{} · {notes_count}", tr("Notizen")) } else { tr("Notizen").to_string() })
+                    .selected(notes_tab)
+                    .when(notes_tab, |b| b.primary())
+                    .when(!notes_tab, |b| b.ghost())
+                    .tooltip(tr("Die Notizen der laufenden Aufnahme oder der geöffneten Besprechung"))
+                    .on_click(cx.listener(|this, _, _, cx| this.show_notes_tab(cx))),
+            )
+            .when(scope == Scope::Open && !notes_tab, |el| {
                 el.when_some(open_title, |el, title| {
                     el.child(div().w_full().text_xs().text_color(theme.muted_foreground).truncate().child(title))
                 })
             });
 
         let mut body: Vec<AnyElement> = Vec::new();
-        if let Some(problem) = &setup.problem {
+        let rec_error = self.ctl.error.clone().map(|e| {
+            h_flex()
+                .items_start()
+                .gap_2()
+                .mx_3()
+                .mt_2()
+                .p_2()
+                .rounded(theme.radius)
+                .bg(theme.danger.opacity(0.1))
+                .text_color(theme.danger)
+                .text_xs()
+                .child(Icon::new(IconName::TriangleAlert).xsmall().mt_0p5())
+                .child(v_flex().flex_1().min_w_0().child(div().font_semibold().child(tr("Die Aufnahme konnte nicht starten"))).child(e))
+                .child(Button::new("mori-rec-error-close").xsmall().ghost().icon(IconName::X).on_click(cx.listener(|this, _, _, cx| {
+                    this.ctl.error = None;
+                    cx.notify();
+                })))
+        });
+        if notes_tab {
+        } else if let Some(problem) = &setup.problem {
             body.push(
                 v_flex()
                     .gap_2()
@@ -521,7 +567,7 @@ impl Companion {
                     .into_any_element(),
             );
         }
-        for (ti, turn) in self.turns.iter().enumerate() {
+        for (ti, turn) in self.turns.iter().enumerate().filter(|_| !notes_tab) {
             body.push(
                 h_flex()
                     .w_full()
@@ -566,6 +612,8 @@ impl Companion {
             );
         }
 
+        let notes = if notes_tab { self.render_notes_tab(cx) } else { div().into_any_element() };
+        let choice = self.render_choice_popup(cx);
         let input_row = h_flex()
             .gap_2()
             .p_3()
@@ -604,20 +652,23 @@ impl Companion {
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(header)
                 .child(scope_toggle)
-                .child(
-                    div().flex_1().min_h_0().child(
-                        v_flex()
-                            .id("mori-chat")
-                            .size_full()
-                            .px_3()
-                            .py_2()
-                            .gap_3()
-                            .track_scroll(&self.chat_scroll)
-                            .overflow_y_scroll()
-                            .children(body),
-                    ),
-                )
-                .child(input_row)
+                .children(rec_error)
+                .child(div().flex_1().min_h_0().child(if notes_tab {
+                    notes
+                } else {
+                    v_flex()
+                        .id("mori-chat")
+                        .size_full()
+                        .px_3()
+                        .py_2()
+                        .gap_3()
+                        .track_scroll(&self.chat_scroll)
+                        .overflow_y_scroll()
+                        .children(body)
+                        .into_any_element()
+                }))
+                .when(!notes_tab, |el| el.child(input_row))
+                .children(choice)
                 .into_any_element(),
         )
     }

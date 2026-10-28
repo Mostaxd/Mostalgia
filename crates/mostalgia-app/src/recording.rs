@@ -27,6 +27,9 @@ pub type SharedEngine = Arc<Mutex<Option<Engine>>>;
 pub enum RecordingEvent {
     /// A meeting was recorded and saved; open it.
     Saved(i64),
+    /// A recording couldn't start (no source, engine or recorder error, or
+    /// one still being finished); the message says why.
+    StartFailed(String),
 }
 
 impl EventEmitter<RecordingEvent> for RecordingView {}
@@ -54,6 +57,8 @@ pub struct LiveState {
     pub last_line_end: f64,
     /// Finalized lines so far.
     pub lines: usize,
+    /// Recording time so far (without pauses), in seconds.
+    pub elapsed_secs: f64,
 }
 
 enum Phase {
@@ -156,6 +161,9 @@ pub struct RecordingView {
     focus: FocusHandle,
     /// This recording was started for a call: always both sides.
     call_mode: bool,
+    /// Sources (mic, system) picked for this one recording (Mori's record
+    /// button), instead of the setup screen's toggles; not saved.
+    sources_override: Option<[bool; 2]>,
 }
 
 impl RecordingView {
@@ -170,13 +178,37 @@ impl RecordingView {
             follow: true,
             focus: cx.focus_handle(),
             call_mode: false,
+            sources_override: None,
         }
     }
 
     /// Mic and system for the next recording: what the setup screen says,
     /// except that a call is always recorded from both sides.
     fn sources(&self) -> [bool; 2] {
-        [self.config.record_mic || self.call_mode, self.config.record_system || self.call_mode]
+        let [mic, system] = self.sources_override.unwrap_or([self.config.record_mic, self.config.record_system]);
+        [mic || self.call_mode, system || self.call_mode]
+    }
+
+    /// Starts a recording from exactly these sources (Mori's record
+    /// button), leaving the setup screen's saved choice alone. Says why
+    /// when it can't (`RecordingEvent::StartFailed`).
+    pub fn start_with(&mut self, mic: bool, system: bool, cx: &mut Context<Self>) {
+        if self.is_recording() {
+            return;
+        }
+        if self.is_active() {
+            cx.emit(RecordingEvent::StartFailed(tr("Eine Aufnahme wird gerade gestartet oder fertiggestellt.").to_string()));
+            return;
+        }
+        self.sources_override = Some([mic, system]);
+        self.start(cx);
+    }
+
+    /// Pauses or resumes the recording in progress.
+    pub fn set_paused(&mut self, paused: bool, cx: &mut Context<Self>) {
+        if self.live_state().is_some_and(|l| l.paused != paused) {
+            self.toggle_pause(cx);
+        }
     }
 
     /// Starts a recording for a detected call (both sides, whatever the
@@ -240,6 +272,13 @@ impl RecordingView {
         cx.notify();
     }
 
+    /// Back to the setup screen without saving (screenshots).
+    #[doc(hidden)]
+    pub fn demo_end(&mut self, cx: &mut Context<Self>) {
+        self.phase = Phase::Setup;
+        cx.notify();
+    }
+
     /// The recording in progress, for Mori.
     pub fn live_state(&self) -> Option<LiveState> {
         let Phase::Recording(live) = &self.phase else { return None };
@@ -250,6 +289,7 @@ impl RecordingView {
             speech_secs: live.speech_secs,
             last_line_end: live.lines.iter().map(|l| l.end_secs).fold(0., f64::max),
             lines: live.lines.len(),
+            elapsed_secs: live.elapsed().as_secs_f64(),
         })
     }
 
@@ -334,6 +374,7 @@ impl RecordingView {
         self.config.companion_clear_button = disk.companion_clear_button;
         self.config.companion_desktop = disk.companion_desktop;
         self.config.companion_desktop_pos = disk.companion_desktop_pos;
+        self.config.companion_hidden = disk.companion_hidden;
         if let Err(e) = self.config.save() {
             eprintln!("[mostalgia] saving settings: {e:#}");
         }
@@ -344,7 +385,9 @@ impl RecordingView {
             return;
         }
         if self.sources() == [false, false] {
+            self.sources_override = None;
             self.error = Some(tr("Mikrofon oder Desktop-Audio einschalten.").into());
+            cx.emit(RecordingEvent::StartFailed(tr("Mikrofon oder Desktop-Audio einschalten.").to_string()));
             cx.notify();
             return;
         }
@@ -370,7 +413,7 @@ impl RecordingView {
             let engine = load.await;
             this.update(cx, |this, cx| match engine {
                 Ok(engine) => this.begin(engine, cx),
-                Err(e) => this.fail(e, cx),
+                Err(e) => this.fail_start(e, cx),
             })
             .ok();
         })
@@ -379,7 +422,7 @@ impl RecordingView {
 
     fn begin(&mut self, mut engine: Engine, cx: &mut Context<Self>) {
         if let Err(e) = engine.set_language(&self.config.language) {
-            return self.fail(e, cx);
+            return self.fail_start(e, cx);
         }
         self.engine_label = Some((engine.label().into(), engine.is_cloud()));
         let cfg = RecordConfig {
@@ -402,13 +445,21 @@ impl RecordingView {
                 self.poll_loop(cx);
             }
             // Recorder::start consumed the engine; it reloads next time.
-            Err(e) => self.fail(e, cx),
+            Err(e) => self.fail_start(e, cx),
         }
         cx.notify();
     }
 
+    /// A recording couldn't start: shown here and told to Mori.
+    fn fail_start(&mut self, e: anyhow::Error, cx: &mut Context<Self>) {
+        let message = format!("{e:#}");
+        self.fail(e, cx);
+        cx.emit(RecordingEvent::StartFailed(message));
+    }
+
     fn fail(&mut self, e: anyhow::Error, cx: &mut Context<Self>) {
         self.call_mode = false;
+        self.sources_override = None;
         self.error = Some(format!("{e:#}").into());
         self.phase = Phase::Setup;
         cx.notify();
@@ -614,6 +665,7 @@ impl RecordingView {
                     }
                     this.phase = Phase::Setup;
                     this.call_mode = false;
+                    this.sources_override = None;
                     cx.emit(RecordingEvent::Saved(saved.meeting_id));
                     cx.notify();
                 }

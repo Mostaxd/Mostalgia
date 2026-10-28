@@ -338,10 +338,10 @@ pub fn parse_points(answer: &str) -> Result<Vec<Point>> {
             }),
             _ => None,
         }
-        .with_context(|| tr("Die Antwort war keine gültige Punkteliste (JSON)"))?,
+        .with_context(|| tr("Die Antwort war keine gültige Notizenliste (JSON)"))?,
     };
     let Some(items) = value.as_array() else {
-        bail!("{}", tr("Die Antwort war keine gültige Punkteliste (JSON)"));
+        bail!("{}", tr("Die Antwort war keine gültige Notizenliste (JSON)"));
     };
     let mut out = Vec::new();
     for item in items {

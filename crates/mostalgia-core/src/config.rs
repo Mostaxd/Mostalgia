@@ -91,6 +91,9 @@ pub struct Config {
     /// On the desktop: her top-left in X11 root-window pixels (`None` =
     /// top right of the primary monitor).
     pub companion_desktop_pos: Option<(i32, i32)>,
+    /// Mori's figure is hidden: only a small bar (record controls, notes,
+    /// the chat) stays where she stood.
+    pub companion_hidden: bool,
 }
 
 /// Which speech-to-text engine to use: local Whisper (`connection` empty)
@@ -175,6 +178,7 @@ impl Default for Config {
             companion_clear_button: true,
             companion_desktop: false,
             companion_desktop_pos: None,
+            companion_hidden: false,
         }
     }
 }

@@ -89,6 +89,15 @@ impl MostalgiaApp {
                         view.update(cx, |v, cx| v.auto_summarize(cx));
                     }
                 }
+                // Mori says so if she started it (her record button).
+                RecordingEvent::StartFailed(message) => {
+                    if this.mori_host.is_running() {
+                        this.mori_host.send(&crate::companion::ipc::ToMori::StartFailed { message: message.clone() });
+                    } else {
+                        let message = message.clone();
+                        this.companion.update(cx, |c, cx| c.recording_start_failed(message, cx));
+                    }
+                }
             }),
             cx.subscribe_in(&search, window, |this, input, event: &InputEvent, _, cx| {
                 if let InputEvent::Change = event {
@@ -118,6 +127,13 @@ impl MostalgiaApp {
                 }
                 MoriEvent::PopOut => this.set_mori_desktop(true, cx),
                 MoriEvent::BackToApp => this.set_mori_desktop(false, cx),
+                MoriEvent::StartRecording { mic, system } => this.start_recording_with(*mic, *system, cx),
+                MoriEvent::SetPaused { paused } => {
+                    let paused = *paused;
+                    this.recording.update(cx, |r, cx| r.set_paused(paused, cx));
+                }
+                MoriEvent::StopRecording => this.recording.update(cx, |r, cx| r.stop(cx)),
+                MoriEvent::OpenMoriSettings => this.open_mori_settings(window, cx),
                 MoriEvent::NotesSaved { meeting_id } => {
                     if let Some(m) = this.meeting_view().filter(|m| m.read(cx).id == *meeting_id) {
                         m.update(cx, |m, cx| m.reload(cx));
@@ -331,6 +347,13 @@ impl MostalgiaApp {
                     self.set_mori_desktop(false, cx);
                     window.activate_window();
                 }
+                FromMori::StartRecording { mic, system } => self.start_recording_with(mic, system, cx),
+                FromMori::PauseRecording { paused } => self.recording.update(cx, |r, cx| r.set_paused(paused, cx)),
+                FromMori::StopRecording => self.recording.update(cx, |r, cx| r.stop(cx)),
+                FromMori::OpenMoriSettings => {
+                    self.open_mori_settings(window, cx);
+                    window.activate_window();
+                }
                 FromMori::NotesSaved { meeting_id } => {
                     if let Some(m) = self.meeting_view().filter(|m| m.read(cx).id == meeting_id) {
                         m.update(cx, |m, cx| m.reload(cx));
@@ -427,6 +450,22 @@ impl MostalgiaApp {
         self.screen = Screen::Recording;
         self.recording.update(cx, |r, cx| r.start(cx));
         cx.notify();
+    }
+
+    /// Mori's record button: a recording from exactly these sources (the
+    /// setup screen's saved choice stays as it is).
+    fn start_recording_with(&mut self, mic: bool, system: bool, cx: &mut Context<Self>) {
+        self.screen = Screen::Recording;
+        self.recording.update(cx, |r, cx| r.start_with(mic, system, cx));
+        cx.notify();
+    }
+
+    /// Settings → Appearance, where Mori's options are.
+    fn open_mori_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings(window, cx);
+        if let Some(s) = self.settings_view() {
+            s.update(cx, |s, cx| s.show_category("darstellung", cx));
+        }
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {

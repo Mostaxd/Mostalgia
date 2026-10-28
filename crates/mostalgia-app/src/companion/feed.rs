@@ -39,7 +39,7 @@ impl FeedRef<'_> {
     pub fn live_state(&self) -> Option<LiveState> {
         match self {
             FeedRef::Window(r) => r.live_state(),
-            FeedRef::Remote(r) => r.live,
+            FeedRef::Remote(r) => r.live_state(),
         }
     }
 
@@ -74,6 +74,8 @@ impl FeedRef<'_> {
 #[derive(Default)]
 pub struct RemoteFeed {
     live: Option<LiveState>,
+    /// When `live` arrived (its recording time runs on from there).
+    live_at: Option<Instant>,
     session: Option<u64>,
     lines: Vec<WireLine>,
     interim: Vec<WireLine>,
@@ -97,7 +99,9 @@ impl RemoteFeed {
                     speech_secs: l.speech_secs,
                     last_line_end: l.last_line_end,
                     lines: l.lines,
+                    elapsed_secs: l.elapsed_secs,
                 });
+                self.live_at = Some(now);
             }
             None => {
                 self.live = None;
@@ -118,6 +122,17 @@ impl RemoteFeed {
         self.lines.truncate(from);
         self.lines.extend(lines);
         self.interim = interim;
+    }
+
+    /// The recording as last reported, its time run on since (unless paused).
+    fn live_state(&self) -> Option<LiveState> {
+        let mut live = self.live?;
+        if !live.paused
+            && let Some(at) = self.live_at
+        {
+            live.elapsed_secs += at.elapsed().as_secs_f64();
+        }
+        Some(live)
     }
 
     /// How many finalized lines arrived (for the app's next delta).

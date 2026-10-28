@@ -37,6 +37,9 @@ pub struct WireLive {
     /// to catch up before asking for points).
     #[serde(default)]
     pub lines: usize,
+    /// Recording time so far (without pauses), for her record controls.
+    #[serde(default)]
+    pub elapsed_secs: f64,
 }
 
 /// App → Mori.
@@ -55,6 +58,8 @@ pub enum ToMori {
     OpenMeeting { meeting: Option<(i64, String)> },
     /// Settings changed (language, theme, Mori's options).
     ReloadConfig,
+    /// The recording she asked for (`FromMori::StartRecording`) didn't start.
+    StartFailed { message: String },
     Quit,
 }
 
@@ -75,6 +80,14 @@ pub enum FromMori {
     NotesSaved { meeting_id: i64 },
     /// The user wants her back inside the app window.
     BackToApp,
+    /// Start a recording from exactly these sources (her record button).
+    StartRecording { mic: bool, system: bool },
+    /// Pause / resume the recording in progress.
+    PauseRecording { paused: bool },
+    /// Stop (and save) the recording in progress.
+    StopRecording,
+    /// Open Settings → Appearance (her options).
+    OpenMoriSettings,
 }
 
 pub fn encode<T: Serialize>(msg: &T) -> String {

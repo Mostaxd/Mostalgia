@@ -392,6 +392,7 @@ impl SettingsView {
         let disk = Config::load();
         self.config.companion_pos = disk.companion_pos;
         self.config.companion_desktop_pos = disk.companion_desktop_pos;
+        self.config.companion_hidden = disk.companion_hidden;
         if let Err(e) = self.config.save() {
             eprintln!("[mostalgia] saving settings: {e:#}");
         }
@@ -434,6 +435,7 @@ impl SettingsView {
         let disk = Config::load();
         self.config.companion_pos = disk.companion_pos;
         self.config.companion_desktop_pos = disk.companion_desktop_pos;
+        self.config.companion_hidden = disk.companion_hidden;
         if let Err(e) = self.config.save() {
             eprintln!("[mostalgia] saving settings: {e:#}");
         }
@@ -795,7 +797,7 @@ impl SettingsView {
                     })
                     .when(!conn.is_local() && interval > 0, |el| {
                         el.child(div().text_xs().text_color(theme.muted_foreground).child(trf(
-                            "Live-Punkte senden etwa alle {} s das neue Transkript an {}; jede Frage sendet das Live-Transkript. Das kostet Tokens bei {}.",
+                            "Live-Notizen senden etwa alle {} s das neue Transkript an {}; jede Frage sendet das Live-Transkript. Das kostet Tokens bei {}.",
                             &[&interval, &conn.name, &conn.name],
                         )))
                     })
@@ -838,8 +840,8 @@ impl SettingsView {
                         .into_any_element(),
                 ))
                 .child(row(
-                    tr("Live-Punkte"),
-                    Some(tr("Fragt nach so vielen Sekunden neuer Sprache nach neuen Punkten.")),
+                    tr("Live-Notizen"),
+                    Some(tr("Sucht nach so vielen Sekunden neuer Sprache nach neuen Notizen.")),
                     h_flex().flex_wrap().gap_1().children([0, 60, 90, 120, 180].map(|s| interval_button(s, cx))).into_any_element(),
                 ))
                 .child(row(

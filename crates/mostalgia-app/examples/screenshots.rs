@@ -215,6 +215,48 @@ fn main() {
             });
             std::thread::sleep(std::time::Duration::from_millis(300));
             shot("14b-mori-chat-library", &mut cx);
+            // The Notes tab while recording (record controls with the time
+            // in the header), her menu, then hidden: the collapsed bar with
+            // cards popping out of it, its menu.
+            mori(&mut cx, &|c, cx| c.demo_notes_tab(true, cx));
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            shot("16-mori-notes-live", &mut cx);
+            mori(&mut cx, &|c, cx| {
+                c.demo_close(cx);
+                c.demo_expand(false, cx);
+                c.demo_menu(Some((70., 90.)), cx);
+            });
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            shot("17-mori-menu", &mut cx);
+            mori(&mut cx, &|c, cx| {
+                c.demo_menu(None, cx);
+                c.demo_hidden(true, cx);
+                c.demo_points(
+                    &[
+                        (PointKind::Decision, "Release moves to Friday.", 60.0),
+                        (PointKind::Action, "Ben: book the room for the design review.", 63.0),
+                    ],
+                    &[],
+                    cx,
+                );
+            });
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            shot("18-mori-bar-cards", &mut cx);
+            mori(&mut cx, &|c, cx| {
+                c.demo_pos(Some((1., 1.)), cx);
+                c.demo_points(&[(PointKind::Question, "Who signs off on the budget?", 66.0)], &[], cx);
+            });
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            shot("18b-mori-bar-cards-above", &mut cx);
+            mori(&mut cx, &|c, cx| c.demo_menu(Some((54., -100.)), cx));
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            shot("18c-mori-bar-menu", &mut cx);
+            mori(&mut cx, &|c, cx| {
+                c.demo_menu(None, cx);
+                c.demo_notes_tab(true, cx);
+            });
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            shot("18d-mori-bar-notes", &mut cx);
             mori(&mut cx, &|c, cx| c.demo_reset(cx));
         }
         if full {
@@ -287,6 +329,43 @@ fn main() {
                 cx.update_window(handle, |_, window, _| window.refresh()).unwrap();
                 std::thread::sleep(std::time::Duration::from_millis(if tab == 3 { 800 } else { 400 }));
                 shot(name, &mut cx);
+            }
+            // Mori without a recording: the record button's source choice, a
+            // failed start, the open meeting's saved notes, the bar's choice.
+            if cx.update(|cx| view.read(cx).companion_view().read(cx).is_enabled()) {
+                let mori = |cx: &mut HeadlessAppContext, f: &dyn Fn(&mut mostalgia_app::companion::Companion, &mut Context<mostalgia_app::companion::Companion>)| {
+                    cx.update_window(handle, |_, _, cx| {
+                        let c = view.read(cx).companion_view();
+                        c.update(cx, |c, cx| f(c, cx));
+                    })
+                    .unwrap();
+                };
+                cx.update_window(handle, |_, _, cx| {
+                    let rec = view.read(cx).recording_view();
+                    rec.update(cx, |r, cx| r.demo_end(cx));
+                })
+                .unwrap();
+                mori(&mut cx, &|c, cx| {
+                    c.demo_reset(cx);
+                    c.demo_pos(None, cx);
+                    c.demo_record_choice(false, cx);
+                });
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                shot("15-mori-record-choice", &mut cx);
+                mori(&mut cx, &|c, cx| c.demo_start_failed("No speech model downloaded yet – choose one in Settings → Recording.", cx));
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                shot("15b-mori-start-failed", &mut cx);
+                mori(&mut cx, &|c, cx| c.demo_notes_tab(true, cx));
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                shot("16b-mori-notes-saved", &mut cx);
+                mori(&mut cx, &|c, cx| {
+                    c.demo_close(cx);
+                    c.demo_hidden(true, cx);
+                    c.demo_record_choice(true, cx);
+                });
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                shot("18e-mori-bar-choice", &mut cx);
+                mori(&mut cx, &|c, cx| c.demo_reset(cx));
             }
             cx.update_window(handle, |_, _, cx| {
                 if let Some(m) = view.read(cx).meeting_view() {

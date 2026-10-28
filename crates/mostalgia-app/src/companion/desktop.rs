@@ -245,6 +245,7 @@ pub struct DesktopMori {
     demo_next: usize,
     demo_expanded: bool,
     demo_scrolled: bool,
+    demo_menu: bool,
     replay: Option<Replay>,
     _subscriptions: Vec<Subscription>,
 }
@@ -267,11 +268,15 @@ impl DesktopMori {
             MoriEvent::OpenSettings => send(&FromMori::OpenSettings),
             MoriEvent::BackToApp => send(&FromMori::BackToApp),
             MoriEvent::NotesSaved { meeting_id } => send(&FromMori::NotesSaved { meeting_id: *meeting_id }),
+            MoriEvent::StartRecording { mic, system } => send(&FromMori::StartRecording { mic: *mic, system: *system }),
+            MoriEvent::SetPaused { paused } => send(&FromMori::PauseRecording { paused: *paused }),
+            MoriEvent::StopRecording => send(&FromMori::StopRecording),
+            MoriEvent::OpenMoriSettings => send(&FromMori::OpenMoriSettings),
             MoriEvent::PopOut => {}
         });
         let moment = cx.subscribe(&companion, |_, _, event: &super::ShowLiveMoment, _| send(&FromMori::ShowLiveMoment { secs: event.secs }));
         cx.observe_window_appearance(window, |_, window, cx| ui::apply_theme(window, cx)).detach();
-        let this = Self { companion, feed, rx, demo: demo.then(Instant::now), demo_next: 0, demo_expanded: false, demo_scrolled: false, replay: demo.then(Replay::load).flatten(), _subscriptions: vec![sub, moment] };
+        let this = Self { companion, feed, rx, demo: demo.then(Instant::now), demo_next: 0, demo_expanded: false, demo_scrolled: false, demo_menu: false, replay: demo.then(Replay::load).flatten(), _subscriptions: vec![sub, moment] };
         cx.spawn_in(window, async move |this, cx| {
             loop {
                 cx.background_executor().timer(Duration::from_millis(50)).await;
@@ -298,6 +303,7 @@ impl DesktopMori {
                     self.companion.update(cx, |c, cx| c.recording_saved(meeting_id, cx));
                 }
                 ToMori::OpenMeeting { meeting } => self.companion.update(cx, |c, cx| c.set_open_meeting(meeting, cx)),
+                ToMori::StartFailed { message } => self.companion.update(cx, |c, cx| c.recording_start_failed(message, cx)),
                 ToMori::ReloadConfig => {
                     let config = Config::load();
                     mostalgia_core::i18n::set_lang(mostalgia_core::i18n::resolve(&config.ui_language));
@@ -338,6 +344,7 @@ impl DesktopMori {
                 speech_secs: due as f64 * 5.,
                 last_line_end: due as f64 * EVERY + 2.4,
                 lines: due,
+                elapsed_secs: t,
             };
             if t > (replay.lines.len() as f64 + 8.) * EVERY && !replay.ended {
                 // The recording ends a while after the last line.
@@ -365,20 +372,28 @@ impl DesktopMori {
             }
             return;
         }
-        let speaking = t % 7. < 4.;
+        // MORI_DEMO_PAUSED=1: the recording is paused; MORI_DEMO_POINTS=0:
+        // no cards.
+        let paused = std::env::var_os("MORI_DEMO_PAUSED").is_some_and(|v| v == "1");
+        let speaking = !paused && t % 7. < 4.;
         let since = (t % 7.) * 1000.;
         let live = WireLive {
             session: 1,
-            paused: false,
+            paused,
             speech_ago_ms: speaking.then_some(0),
             speech_since_ago_ms: speaking.then_some(since as u64),
             speech_secs: 0.,
             last_line_end: t,
             lines: 0,
+            elapsed_secs: t,
         };
         self.feed.update(cx, |f, _| f.set_live(Some(live)));
         // A new card every 3 s from 4 s on.
-        let due = if t < 4. { 0 } else { (((t - 4.) / 3.) as usize + 1).min(DEMO_POINTS.len()) };
+        let due = if t < 4. || std::env::var_os("MORI_DEMO_POINTS").is_some_and(|v| v == "0") {
+            0
+        } else {
+            (((t - 4.) / 3.) as usize + 1).min(DEMO_POINTS.len())
+        };
         if self.demo_next < due {
             let batch: Vec<(mostalgia_core::companion::PointKind, &str, f64)> = DEMO_POINTS[self.demo_next..due].to_vec();
             let first = self.demo_next;
@@ -398,6 +413,15 @@ impl DesktopMori {
             self.demo_expanded = true;
             eprintln!("[mori] demo: expanded");
             self.companion.update(cx, |c, cx| c.demo_expand(true, cx));
+        }
+        // MORI_DEMO_MENU_AT=<s>: her menu opens then (below the bar / by her).
+        if let Some(e) = at("MORI_DEMO_MENU_AT")
+            && t >= e
+            && !self.demo_menu
+        {
+            self.demo_menu = true;
+            eprintln!("[mori] demo: menu");
+            self.companion.update(cx, |c, cx| c.demo_menu(Some((54., 44.)), cx));
         }
         if let Some(e) = at("MORI_DEMO_SCROLL_AT")
             && t >= e

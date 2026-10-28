@@ -128,6 +128,7 @@ impl DesktopHost {
             speech_secs: l.speech_secs,
             last_line_end: l.last_line_end,
             lines: l.lines,
+            elapsed_secs: l.elapsed_secs,
         });
         if r.last_live != Some(key) {
             out.push(ToMori::Live { live: live.clone() });
