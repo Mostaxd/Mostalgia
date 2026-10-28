@@ -13,7 +13,9 @@ pub mod host;
 pub mod ipc;
 mod x11;
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -23,7 +25,7 @@ use gpui_kit::component::{ActiveTheme, StyledExt, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use mostalgia_core::ask::AskEvent;
-use mostalgia_core::companion::{AnswerEvent, Point};
+use mostalgia_core::companion::{AnswerEvent, Point, PointsReply};
 use mostalgia_core::config::Config;
 use mostalgia_core::i18n::{self, tr};
 
@@ -40,6 +42,8 @@ pub enum MoriEvent {
     PopOut,
     /// "Back into the app" on the desktop.
     BackToApp,
+    /// Her points were stored with this meeting.
+    NotesSaved { meeting_id: i64 },
 }
 
 impl EventEmitter<MoriEvent> for Companion {}
@@ -104,8 +108,10 @@ pub(crate) struct LivePoint {
     id: usize,
     point: Point,
     pinned: bool,
+    /// Hidden from the stack (dismissed or cleared); still saved.
     dismissed: bool,
-    shown_at: Instant,
+    /// When the card was first on screen (its fold timer).
+    shown_at: Option<Instant>,
 }
 
 /// The last failure, shown next to her with her Error pose.
@@ -171,7 +177,27 @@ pub struct Companion {
     // Live points
     points: Vec<LivePoint>,
     next_point: usize,
-    points_rx: Option<Receiver<Result<Vec<Point>, String>>>,
+    points_rx: Option<Receiver<Result<PointsReply, String>>>,
+    points_run: Option<points::PointsRun>,
+    points_runs: usize,
+    /// Since when a due request waits for the transcript to catch up.
+    points_wait_since: Option<Instant>,
+    /// The recording as last seen (for a last request when it ends).
+    last_live: Option<LiveState>,
+    /// The recording was saved as this meeting while a request ran.
+    late_save: Option<i64>,
+    points_scroll: ScrollHandle,
+    /// The list follows new cards (it's scrolled to her end).
+    points_follow: bool,
+    points_user_scrolled: bool,
+    points_scroll_to_end: bool,
+    /// New cards that arrived while scrolled away.
+    points_unseen: usize,
+    points_above: bool,
+    /// The stack's bounds at the last paint, and as last given to the
+    /// desktop window's input region.
+    stack_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    stack_applied: Option<Bounds<Pixels>>,
     /// Finalized speech (secs) at the last points request.
     points_mark: f64,
     /// Transcript time the next points request starts from.
@@ -237,6 +263,19 @@ impl Companion {
             points: Vec::new(),
             next_point: 0,
             points_rx: None,
+            points_run: None,
+            points_runs: 0,
+            points_wait_since: None,
+            last_live: None,
+            late_save: None,
+            points_scroll: ScrollHandle::new(),
+            points_follow: true,
+            points_user_scrolled: false,
+            points_scroll_to_end: false,
+            points_unseen: 0,
+            points_above: false,
+            stack_bounds: Rc::new(Cell::new(None)),
+            stack_applied: None,
             points_mark: 0.,
             points_from: 0.,
             expanded: false,
@@ -440,7 +479,7 @@ impl Companion {
         let grown = self.grown();
         let cards = self.expanded || self.error.is_some() || !self.visible_points().is_empty();
         let open = self.open;
-        let Some(p) = &mut self.desktop else { return };
+        let Some(p) = &self.desktop else { return };
         let ((vw, vh), _) = p.layout((w, h), grown);
         self.viewport = (vw, vh);
         // While the window manager moves the window, leave it alone.
@@ -454,17 +493,23 @@ impl Companion {
             input.push(if p.right { (0., 0., (o.x - 4.).max(0.), vh) } else { (o.x + w + 4., 0., vw - (o.x + w + 4.), vh) });
         }
         if cards {
-            let (x0, x1) = if p.right { ((o.x + w - desktop::CARD_W - 8.).max(0.), o.x + w + pad) } else { ((o.x - pad).max(0.), o.x + desktop::CARD_W + 8.) };
-            let (y0, y1) = if self.expanded {
-                (0., vh)
-            } else if p.bottom {
-                (0., o.y)
-            } else {
-                (o.y + h, vh)
+            // The stack as painted last (a frame behind: `tick` re-renders
+            // when it changes), else its whole region.
+            let b = self.stack_bounds.get();
+            self.stack_applied = b;
+            let rect = match b {
+                Some(b) => (f32::from(b.origin.x) - 2., f32::from(b.origin.y) - 2., f32::from(b.size.width) + 4., f32::from(b.size.height) + 4.),
+                None => {
+                    let r = self.points_region(o, (w, h));
+                    let y0 = if r.above { r.anchor - r.max_h } else { r.anchor };
+                    (r.left - 3., y0, r.width + 6., r.max_h)
+                }
             };
-            input.push((x0, y0, x1 - x0, y1 - y0));
+            input.push(rect);
         }
-        p.apply((w, h), grown, &input);
+        if let Some(p) = &mut self.desktop {
+            p.apply((w, h), grown, &input);
+        }
     }
 
     /// The frame image for her current pose, rendered at the pixel size
@@ -539,6 +584,9 @@ impl Companion {
             self.points.clear();
             self.points_mark = 0.;
             self.points_from = 0.;
+            self.points_wait_since = None;
+            self.points_follow = true;
+            self.points_unseen = 0;
             self.expanded = false;
             reset = true;
         }
@@ -568,8 +616,12 @@ impl Companion {
             let feed = self.recording.read(cx);
             (feed.live_state(), feed.session_id())
         };
+        let ended = self.was_recording && live.is_none();
         if self.track_recording(live.is_some(), session) {
             self.reset(cx);
+        }
+        if ended {
+            self.final_points(cx);
         }
         // The window manager dropped her window somewhere.
         let wm_moving = self.drag.as_ref().is_some_and(|d| d.moved) && self.desktop.as_ref().and_then(|p| p.drag).is_some_and(|d| d.wm_move);
@@ -580,13 +632,17 @@ impl Companion {
         }
         let moving = self.drag.as_ref().is_some_and(|d| d.moved) && self.desktop.is_some();
         let mut changed = self.poll_chat(cx);
-        changed |= self.poll_points();
+        changed |= self.poll_points(cx);
         if let Some(l) = live {
             self.maybe_request_points(l, cx);
         }
         let visible = self.visible_points().len();
         changed |= visible != self.visible_seen;
         self.visible_seen = visible;
+        // The stack's size changed: her window's input region follows.
+        if self.desktop.is_some() && self.stack_bounds.get() != self.stack_applied {
+            changed = true;
+        }
 
         let pose = self.wanted_pose(live);
         // With reduced motion she holds each pose a while (errors show at once).
@@ -618,32 +674,59 @@ impl Companion {
         })
     }
 
-    /// Stores the pinned points with the meeting just saved, then clears them.
-    pub fn save_pinned(&mut self, meeting_id: i64, cx: &mut Context<Self>) {
-        let pinned: Vec<&LivePoint> = self.points.iter().filter(|p| p.pinned && !p.dismissed).collect();
-        if !pinned.is_empty() {
-            let result = mostalgia_core::store::Store::open(&mostalgia_core::paths::database()).and_then(|store| {
-                for p in &pinned {
-                    store.add_note(meeting_id, p.point.kind.as_str(), &p.point.text, p.point.at_secs)?;
-                }
-                Ok(())
-            });
-            if let Err(e) = result {
+    /// Stores every point of the recording with the meeting just saved
+    /// (dismissed and cleared ones too; pinned ones marked), then clears
+    /// them. A request still running saves its points there when it returns.
+    pub fn save_points(&mut self, meeting_id: i64, cx: &mut Context<Self>) {
+        let points: Vec<(Point, bool)> = self.points.iter().map(|p| (p.point.clone(), p.pinned)).collect();
+        self.store_points(meeting_id, points.iter().map(|(p, pinned)| (p, *pinned)));
+        if self.points_rx.is_some() {
+            self.late_save = Some(meeting_id);
+        }
+        self.points.clear();
+        self.expanded = false;
+        self.points_unseen = 0;
+        // (The app saves them before it opens the meeting; on the desktop it
+        // waits to hear it to reload the meeting.)
+        if self.desktop_mode {
+            cx.emit(MoriEvent::NotesSaved { meeting_id });
+        }
+        cx.notify();
+    }
+
+    /// Adds points to a meeting's notes; a failure shows on her. Returns
+    /// whether it worked.
+    fn store_points<'a>(&mut self, meeting_id: i64, points: impl Iterator<Item = (&'a Point, bool)>) -> bool {
+        let points: Vec<(&Point, bool)> = points.collect();
+        if points.is_empty() {
+            return true;
+        }
+        let result = mostalgia_core::store::Store::open(&mostalgia_core::paths::database()).and_then(|store| {
+            for (p, pinned) in &points {
+                store.add_note_pinned(meeting_id, p.kind.as_str(), &p.text, p.at_secs, *pinned)?;
+            }
+            Ok(())
+        });
+        match result {
+            Ok(()) => {
+                eprintln!("[mori] saved {} points with meeting {meeting_id}", points.len());
+                true
+            }
+            Err(e) => {
+                eprintln!("[mori] saving points with meeting {meeting_id}: {e:#}");
                 self.error = Some(MoriError {
                     message: mostalgia_core::i18n::trf("Moris Notizen konnten nicht gespeichert werden: {}", &[&format!("{e:#}")]),
                     points: false,
                 });
+                false
             }
         }
-        self.points.clear();
-        self.expanded = false;
-        cx.notify();
     }
 
-    /// A recording was saved as `meeting_id`: her pinned points (and the
-    /// chat) go with it.
+    /// A recording was saved as `meeting_id`: her points (and the chat) go
+    /// with it.
     pub fn recording_saved(&mut self, meeting_id: i64, cx: &mut Context<Self>) {
-        self.save_pinned(meeting_id, cx);
+        self.save_points(meeting_id, cx);
         self.save_session_chat(meeting_id, cx);
     }
 
@@ -654,7 +737,18 @@ impl Companion {
         self.open = false;
         self.turns.clear();
         self.points.clear();
+        self.expanded = false;
+        self.points_follow = true;
+        self.points_unseen = 0;
         self.scope_choice = None;
+        cx.notify();
+    }
+
+    /// Puts her at this spot (fractions of the free room, `None` = the
+    /// default top right; screenshots).
+    #[doc(hidden)]
+    pub fn demo_pos(&mut self, pos: Option<(f32, f32)>, cx: &mut Context<Self>) {
+        self.pos = pos;
         cx.notify();
     }
 

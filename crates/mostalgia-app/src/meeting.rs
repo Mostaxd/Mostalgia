@@ -75,6 +75,11 @@ pub struct MeetingView {
     notice: Option<SharedString>,
     edit: Option<Edit>,
     scroll: ScrollHandle,
+    /// A jump target (segment id) to scroll into view once it's laid out;
+    /// the flag is set when that happened.
+    scroll_target: Option<(i64, std::rc::Rc<std::cell::Cell<bool>>)>,
+    /// The line a jump landed on, highlighted for a moment.
+    flash: Option<(i64, std::time::Instant)>,
     /// The app's cached local Whisper, reused for transcribing again.
     engine: Option<SharedEngine>,
     /// The "transcribe again" dialog, while open.
@@ -85,6 +90,8 @@ pub struct MeetingView {
     transcribe_error: Option<SharedString>,
     /// The "Chat with Mori" section is folded away.
     chat_folded: bool,
+    /// Notes tab: grouped by kind (else by time).
+    notes_grouped: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -102,11 +109,14 @@ impl MeetingView {
             notice: None,
             edit: None,
             scroll: ScrollHandle::new(),
+            scroll_target: None,
+            flash: None,
             engine: None,
             retranscribe: None,
             retranscribing: None,
             transcribe_error: None,
             chat_folded: false,
+            notes_grouped: true,
             _subscriptions: Vec::new(),
         };
         this.reload(cx);
@@ -482,8 +492,26 @@ impl MeetingView {
 
     /// Shows the transcript at `secs` and plays from there (for links
     /// from search and "ask your meetings" answers).
+    /// Opens the transcript at `secs`: scrolls that line into view,
+    /// highlights it and plays from there.
     pub fn jump_to(&mut self, secs: f64, cx: &mut Context<Self>) {
         self.tab = 1;
+        if let Some(seg) = self.meeting.as_ref().and_then(|m| {
+            m.segments.iter().rev().find(|s| s.start_secs <= secs + 0.5).or(m.segments.first())
+        }) {
+            self.scroll_target = Some((seg.id, Default::default()));
+            self.flash = Some((seg.id, std::time::Instant::now()));
+            // Fade the highlight out again.
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(Duration::from_millis(2200)).await;
+                this.update(cx, |this, cx| {
+                    this.flash = None;
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
         self.play_from(secs, cx);
     }
 
@@ -757,14 +785,52 @@ impl MeetingView {
     }
 
     fn render_summary(&mut self, m: &Meeting, cx: &mut Context<Self>) -> AnyElement {
-        let summary = self.render_summary_body(m, cx);
+        self.render_summary_body(m, cx)
+    }
+
+    /// Everything Mori produced: her notes (grouped by kind or by time,
+    /// pinned first within a group) and the chat from the recording.
+    fn render_notes_tab(&mut self, m: &Meeting, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
         if m.notes.is_empty() && m.chat.is_empty() {
-            return summary;
+            return v_flex()
+                .pt_16()
+                .items_center()
+                .gap_2()
+                .text_color(theme.muted_foreground)
+                .child(Icon::new(IconName::FileText).large())
+                .child(div().font_medium().child(tr("Keine Notizen für diese Besprechung")))
+                .child(div().text_sm().child(tr("Mori war bei dieser Aufnahme nicht dabei. Schalte sie unter Einstellungen → Darstellung → Mori ein.")))
+                .into_any_element();
         }
+        let grouped = self.notes_grouped;
+        let toggle = h_flex()
+            .gap_1()
+            .child(
+                Button::new("notes-by-kind")
+                    .xsmall()
+                    .label(tr("Nach Art"))
+                    .when(grouped, |b| b.primary())
+                    .when(!grouped, |b| b.ghost())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.notes_grouped = true;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("notes-by-time")
+                    .xsmall()
+                    .label(tr("Nach Zeit"))
+                    .when(!grouped, |b| b.primary())
+                    .when(grouped, |b| b.ghost())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.notes_grouped = false;
+                        cx.notify();
+                    })),
+            );
         v_flex()
             .gap_6()
-            .child(summary)
-            .when(!m.notes.is_empty(), |el| el.child(self.render_notes(m, cx)))
+            .when(!m.notes.is_empty(), |el| el.child(h_flex().justify_end().child(toggle)).child(self.render_notes(m, cx)))
             .when(!m.chat.is_empty(), |el| el.child(self.render_chat(m, cx)))
             .into_any_element()
     }
@@ -807,12 +873,12 @@ impl MeetingView {
             .into_any_element()
     }
 
-    /// Mori's pinned points; a click plays the meeting from there.
+    /// Mori's notes; a click plays the meeting from there.
     fn render_notes(&mut self, m: &Meeting, cx: &mut Context<Self>) -> AnyElement {
         use mostalgia_core::companion::PointKind;
         let theme = cx.theme().clone();
-        let rows = m.notes.iter().map(|n| {
-            let (id, at) = (n.id, n.at_secs);
+        let row = |n: &mostalgia_core::store::Note, cx: &mut Context<Self>| {
+            let (id, at, pinned) = (n.id, n.at_secs, n.pinned);
             let kind = PointKind::parse(&n.kind);
             let color = match kind {
                 Some(PointKind::Decision) => theme.success,
@@ -839,19 +905,38 @@ impl MeetingView {
                         .font_family(theme.mono_font_family.clone())
                         .child(ui::hms(at)),
                 )
-                .child(
-                    h_flex()
-                        .flex_none()
-                        .w(px(120.))
-                        .pt_0p5()
-                        .gap_1p5()
-                        .text_xs()
-                        .font_semibold()
-                        .text_color(color)
-                        .child(div().size(px(6.)).rounded_full().bg(color))
-                        .child(kind.map_or(n.kind.clone(), |k| k.label().to_string())),
-                )
+                .when(!self.notes_grouped, |el| {
+                    el.child(
+                        h_flex()
+                            .flex_none()
+                            .w(px(120.))
+                            .pt_0p5()
+                            .gap_1p5()
+                            .text_xs()
+                            .font_semibold()
+                            .text_color(color)
+                            .child(div().size(px(6.)).rounded_full().bg(color))
+                            .child(kind.map_or(n.kind.clone(), |k| k.label().to_string())),
+                    )
+                })
                 .child(ui::bidi_text(n.text.clone(), true).flex_1().min_w_0().text_sm())
+                .child(
+                    Button::new(("mori-note-pin", id as usize))
+                        .xsmall()
+                        .ghost()
+                        .icon(Icon::new(IconName::Bookmark).text_color(if pinned { color } else { theme.muted_foreground.opacity(0.6) }))
+                        .tooltip(if pinned { tr("Angeheftet – lösen") } else { tr("Anheften") })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            match Store::open(&paths::database()).and_then(|s| s.set_note_pinned(id, !pinned)) {
+                                Ok(()) => this.reload(cx),
+                                Err(e) => {
+                                    this.error = Some(format!("{e:#}").into());
+                                    cx.notify();
+                                }
+                            }
+                        })),
+                )
                 .child(
                     Button::new(("mori-note-delete", id as usize))
                         .xsmall()
@@ -871,12 +956,35 @@ impl MeetingView {
                 )
                 .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Ab hier abspielen")).build(window, cx))
                 .on_click(cx.listener(move |this, _, _, cx| this.jump_to(at, cx)))
-        });
-        v_flex()
-            .gap_1()
-            .child(ui::section_title(tr("NOTIZEN VON MORI"), cx).pb_1())
-            .children(rows)
-            .into_any_element()
+                .into_any_element()
+        };
+        let mut out = v_flex().gap_1();
+        if self.notes_grouped {
+            let groups = [
+                (PointKind::Decision, tr("ENTSCHEIDUNGEN")),
+                (PointKind::Action, tr("AUFGABEN")),
+                (PointKind::Question, tr("OFFENE FRAGEN")),
+                (PointKind::Fact, tr("ZAHLEN & FAKTEN")),
+            ];
+            for (kind, title) in groups {
+                let mut notes: Vec<&mostalgia_core::store::Note> =
+                    m.notes.iter().filter(|n| PointKind::parse(&n.kind).unwrap_or(PointKind::Fact) == kind).collect();
+                if notes.is_empty() {
+                    continue;
+                }
+                notes.sort_by(|a, b| b.pinned.cmp(&a.pinned).then(a.at_secs.total_cmp(&b.at_secs)));
+                out = out.child(ui::section_title(format!("{title} ({})", notes.len()), cx).pt_3().pb_1());
+                for n in notes {
+                    out = out.child(row(n, cx));
+                }
+            }
+        } else {
+            out = out.child(ui::section_title(tr("NOTIZEN VON MORI"), cx).pb_1());
+            for n in &m.notes {
+                out = out.child(row(n, cx));
+            }
+        }
+        out.into_any_element()
     }
 
     fn render_summary_body(&mut self, m: &Meeting, cx: &mut Context<Self>) -> AnyElement {
@@ -1043,10 +1151,36 @@ impl MeetingView {
                     .into_any_element(),
             };
             let group = SharedString::from(format!("seg-{ix}"));
+            let flashing = self.flash.is_some_and(|(id, _)| id == seg_id);
+            // The jump target scrolls itself into view once it has bounds.
+            let scroll_here = self.scroll_target.as_ref().filter(|(id, done)| *id == seg_id && !done.get()).map(|(_, done)| {
+                let (done, scroll) = (done.clone(), self.scroll.clone());
+                canvas(
+                    move |bounds, window, _| {
+                        let view = scroll.bounds();
+                        if view.size.height <= px(0.) {
+                            return;
+                        }
+                        let offset = scroll.offset();
+                        let top_in_content = bounds.top() - view.top() - offset.y;
+                        let wanted = -(top_in_content - view.size.height * 0.3);
+                        let max = scroll.max_offset().y.abs();
+                        scroll.set_offset(point(offset.x, wanted.clamp(-max, px(0.))));
+                        done.set(true);
+                        window.refresh();
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full()
+            });
             rows.push(
                 h_flex()
                     .id(("seg", ix))
+                    .relative()
                     .group(group.clone())
+                    .children(scroll_here)
+                    .when(flashing, |el| el.bg(theme.warning.opacity(0.18)))
                     .items_start()
                     .gap_3()
                     .px_2()
@@ -1188,8 +1322,10 @@ impl Render for MeetingView {
         let body = match self.tab {
             0 => self.render_summary(&m, cx),
             1 => self.render_transcript(&m, cx),
+            2 => self.render_notes_tab(&m, cx),
             _ => self.render_audio(&m, cx),
         };
+        let note_count = m.notes.len();
         let lines = m.segments.len();
         self.meeting = Some(m);
         let theme = cx.theme();
@@ -1212,6 +1348,11 @@ impl Render for MeetingView {
                         }))
                         .child(Tab::new().prefix(Icon::new(IconName::Sparkles).small()).label(tr("Zusammenfassung")))
                         .child(Tab::new().prefix(Icon::new(IconName::FileText).small()).label(trf("Transkript · {}", &[&lines])))
+                        .child(Tab::new().prefix(Icon::new(IconName::Bookmark).small()).label(if note_count > 0 {
+                            trf("Notizen · {}", &[&note_count])
+                        } else {
+                            tr("Notizen").to_string()
+                        }))
                         .child(Tab::new().prefix(Icon::new(IconName::AudioLines).small()).label(tr("Audio"))),
                 ),
             )

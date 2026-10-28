@@ -156,6 +156,44 @@ fn main() {
             });
             std::thread::sleep(std::time::Duration::from_millis(500));
             shot("13-mori-points", &mut cx);
+            // Many points: the full list below her (newest at the top, next
+            // to her), then above her (newest at the bottom), then scrolled
+            // away from the newest with the "N new" pill.
+            mori(&mut cx, &|c, cx| {
+                c.demo_points(
+                    &[
+                        (PointKind::Question, "Who reviews the migration?", 41.0),
+                        (PointKind::Fact, "Churn went from 4.1% to 3.2% after the onboarding change in March, mostly in the small-business segment.", 44.0),
+                        (PointKind::Action, "Ben: book the room for the design review next Tuesday afternoon.", 47.5),
+                        (PointKind::Decision, "The beta stays invite-only until the load tests pass.", 50.0),
+                        (PointKind::Fact, "Budget: 48,000 EUR left for Q3.", 52.0),
+                        (PointKind::Question, "Do we need legal to sign off on the new data retention policy before the launch, or is the existing agreement enough?", 54.0),
+                        (PointKind::Action, "Chris updates the onboarding emails.", 55.0),
+                        (PointKind::Fact, "Support tickets are down 18% week over week.", 56.5),
+                        (PointKind::Decision, "We drop the Windows 7 installer.", 57.5),
+                    ],
+                    &[],
+                    cx,
+                );
+                c.demo_expand(true, cx);
+            });
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            shot("13b-mori-points-below", &mut cx);
+            mori(&mut cx, &|c, cx| c.demo_pos(Some((1., 1.)), cx));
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            shot("13c-mori-points-above", &mut cx);
+            mori(&mut cx, &|c, cx| c.demo_scroll_away(300., cx));
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            mori(&mut cx, &|c, cx| c.demo_points(&[(PointKind::Action, "Dana: write up the incident report by Wednesday.", 58.0)], &[], cx));
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            shot("13d-mori-points-scrolled", &mut cx);
+            mori(&mut cx, &|c, cx| {
+                c.demo_expand(false, cx);
+                c.demo_pos(Some((0., 1.)), cx);
+            });
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            shot("13e-mori-points-left-above", &mut cx);
+            mori(&mut cx, &|c, cx| c.demo_pos(None, cx));
             mori(&mut cx, &|c, cx| {
                 c.demo_pose(Some(Pose::Talking), cx);
                 c.demo_chat(
@@ -236,7 +274,7 @@ fn main() {
                 view.update(cx, |app, cx| app.open_meeting(id, window, cx));
             })
             .unwrap();
-            for (tab, name) in [(0, "3-summary"), (1, "4-transcript"), (2, "5-audio")] {
+            for (tab, name) in [(0, "3-summary"), (1, "4-transcript"), (2, "5b-notes"), (3, "5-audio")] {
                 cx.update_window(handle, |_, _, cx| {
                     if let Some(m) = view.read(cx).meeting_view() {
                         m.update(cx, |m, cx| m.set_tab(tab, cx));
@@ -247,7 +285,7 @@ fn main() {
                 // Let the tab indicator settle; the waveform loads in the background.
                 cx.run_until_parked();
                 cx.update_window(handle, |_, window, _| window.refresh()).unwrap();
-                std::thread::sleep(std::time::Duration::from_millis(if tab == 2 { 800 } else { 400 }));
+                std::thread::sleep(std::time::Duration::from_millis(if tab == 3 { 800 } else { 400 }));
                 shot(name, &mut cx);
             }
             cx.update_window(handle, |_, _, cx| {

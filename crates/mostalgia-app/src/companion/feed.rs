@@ -51,6 +51,17 @@ impl FeedRef<'_> {
         }
     }
 
+    /// Whether the transcript has every finalized line `live` counts. On
+    /// the desktop the speech counter arrives at once but the transcript
+    /// only every half second: a request made in between would miss the
+    /// very line that triggered it.
+    pub fn caught_up(&self, live: &LiveState) -> bool {
+        match self {
+            FeedRef::Window(_) => true,
+            FeedRef::Remote(r) => r.lines.len() >= live.lines,
+        }
+    }
+
     pub fn transcript_lines(&self, from_secs: f64) -> Vec<ContextLine> {
         match self {
             FeedRef::Window(r) => r.transcript_lines(from_secs),
@@ -85,6 +96,7 @@ impl RemoteFeed {
                     speech_since: ago(l.speech_since_ago_ms),
                     speech_secs: l.speech_secs,
                     last_line_end: l.last_line_end,
+                    lines: l.lines,
                 });
             }
             None => {
@@ -100,6 +112,9 @@ impl RemoteFeed {
             self.lines.clear();
         }
         // Lines the app thinks we have but we don't: take what we can.
+        if from > self.lines.len() {
+            eprintln!("[mori] transcript: lines {}..{from} never arrived", self.lines.len());
+        }
         self.lines.truncate(from);
         self.lines.extend(lines);
         self.interim = interim;

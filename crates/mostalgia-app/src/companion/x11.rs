@@ -23,6 +23,7 @@ x11rb::atom_manager! {
         _NET_WM_WINDOW_TYPE_UTILITY,
         _NET_WM_WINDOW_TYPE_NORMAL,
         _MOTIF_WM_HINTS,
+        _NET_WORKAREA,
     }
 }
 
@@ -37,6 +38,12 @@ pub struct Rect {
 impl Rect {
     pub fn contains(&self, x: i32, y: i32) -> bool {
         x >= self.x && y >= self.y && x < self.x + self.w && y < self.y + self.h
+    }
+
+    pub fn intersect(&self, o: &Rect) -> Option<Rect> {
+        let (x0, y0) = (self.x.max(o.x), self.y.max(o.y));
+        let (x1, y1) = ((self.x + self.w).min(o.x + o.w), (self.y + self.h).min(o.y + o.h));
+        (x1 > x0 && y1 > y0).then(|| Rect { x: x0, y: y0, w: x1 - x0, h: y1 - y0 })
     }
 }
 
@@ -131,6 +138,14 @@ impl X11 {
     pub fn pointer(&self) -> Result<(i32, i32, bool)> {
         let r = self.conn.query_pointer(self.root)?.reply()?;
         Ok((r.root_x as i32, r.root_y as i32, r.mask.contains(xproto::KeyButMask::BUTTON1)))
+    }
+
+    /// The desktop's work area (without panels), if the window manager
+    /// says (`_NET_WORKAREA` of the current workspace).
+    pub fn work_area(&self) -> Option<Rect> {
+        let reply = self.conn.get_property(false, self.root, self.atoms._NET_WORKAREA, AtomEnum::CARDINAL, 0, 4).ok()?.reply().ok()?;
+        let v: Vec<u32> = reply.value32()?.collect();
+        (v.len() >= 4 && v[2] > 0 && v[3] > 0).then(|| Rect { x: v[0] as i32, y: v[1] as i32, w: v[2] as i32, h: v[3] as i32 })
     }
 
     pub fn monitors(&self) -> Vec<Monitor> {

@@ -36,6 +36,8 @@ pub struct Note {
     pub text: String,
     pub at_secs: f64,
     pub created_at: DateTime<Local>,
+    /// Pinned by the user during the recording (or later).
+    pub pinned: bool,
 }
 
 /// A question asked to Mori about the meeting while it was recorded, with
@@ -123,7 +125,7 @@ pub struct NewMeeting<'a> {
     pub dir: &'a Path,
 }
 
-const SCHEMA_VERSION: i32 = 7;
+const SCHEMA_VERSION: i32 = 8;
 
 const SCHEMA: &str = "
 CREATE TABLE meetings (
@@ -227,6 +229,8 @@ const MIGRATIONS: &[&str] = &[
         created_at INTEGER NOT NULL
     );
     CREATE INDEX companion_chat_meeting ON companion_chat(meeting_id, id);",
+    // 8: all of Mori's live points are kept; the ones the user pinned are marked
+    "ALTER TABLE notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 1;",
 ];
 
 fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
@@ -514,18 +518,29 @@ impl Store {
 
     /// Saves one of Mori's notes; returns its id.
     pub fn add_note(&self, meeting_id: i64, kind: &str, text: &str, at_secs: f64) -> Result<i64> {
+        self.add_note_pinned(meeting_id, kind, text, at_secs, true)
+    }
+
+    /// Saves one of Mori's points; `pinned` marks the ones the user pinned.
+    pub fn add_note_pinned(&self, meeting_id: i64, kind: &str, text: &str, at_secs: f64, pinned: bool) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO notes (meeting_id, kind, text, at_secs, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![meeting_id, kind, text, at_secs, Local::now().timestamp()],
+            "INSERT INTO notes (meeting_id, kind, text, at_secs, created_at, pinned) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![meeting_id, kind, text, at_secs, Local::now().timestamp(), pinned],
         )?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Pins or unpins a saved note.
+    pub fn set_note_pinned(&self, note_id: i64, pinned: bool) -> Result<()> {
+        self.conn.execute("UPDATE notes SET pinned = ?2 WHERE id = ?1", params![note_id, pinned])?;
+        Ok(())
     }
 
     /// A meeting's notes, by time.
     pub fn notes(&self, meeting_id: i64) -> Result<Vec<Note>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, kind, text, at_secs, created_at FROM notes WHERE meeting_id = ?1 ORDER BY at_secs, id")?;
+            .prepare("SELECT id, kind, text, at_secs, created_at, pinned FROM notes WHERE meeting_id = ?1 ORDER BY at_secs, id")?;
         let rows = stmt.query_map([meeting_id], |r| {
             Ok(Note {
                 id: r.get(0)?,
@@ -533,6 +548,7 @@ impl Store {
                 text: r.get(2)?,
                 at_secs: r.get(3)?,
                 created_at: local(r.get(4)?),
+                pinned: r.get(5)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -705,6 +721,12 @@ mod tests {
         let m = store.get(a)?.unwrap();
         assert_eq!(m.notes.iter().map(|n| n.text.as_str()).collect::<Vec<_>>(), ["Freeze marketing spend", "Anna: forecast by Friday"]);
         assert_eq!(m.notes[0].kind, "decision");
+        assert!(m.notes[0].pinned);
+        let unpinned = store.add_note_pinned(a, "question", "Who reviews?", 40.0, false)?;
+        assert!(!store.notes(a)?.iter().find(|n| n.id == unpinned).unwrap().pinned);
+        store.set_note_pinned(unpinned, true)?;
+        assert!(store.notes(a)?.iter().find(|n| n.id == unpinned).unwrap().pinned);
+        store.delete_note(unpinned)?;
         assert!(store.delete_note(first)?);
         assert_eq!(store.notes(a)?.len(), 1);
         assert!(store.delete_meeting(a, false)?);

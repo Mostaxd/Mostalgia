@@ -18,7 +18,7 @@ const RESTART_WINDOW: Duration = Duration::from_secs(600);
 /// How often the transcript is sent along (speech activity goes with every poll).
 const TRANSCRIPT_EVERY: Duration = Duration::from_millis(500);
 
-type LiveKey = (u64, bool, Option<Instant>, Option<Instant>, u64, u64);
+type LiveKey = (u64, bool, Option<Instant>, Option<Instant>, u64, u64, usize);
 
 struct Running {
     child: Child,
@@ -119,7 +119,7 @@ impl DesktopHost {
         let ago = |t: Option<Instant>| t.map(|t| now.saturating_duration_since(t).as_millis() as u64);
         let src = recording.live_state().zip(recording.session_id());
         // Only when something changed (her copy of the instants stays right).
-        let key = src.map(|(l, session)| (session, l.paused, l.speech_at, l.speech_since, l.speech_secs.to_bits(), l.last_line_end.to_bits()));
+        let key = src.map(|(l, session)| (session, l.paused, l.speech_at, l.speech_since, l.speech_secs.to_bits(), l.last_line_end.to_bits(), l.lines));
         let live = src.map(|(l, session)| WireLive {
             session,
             paused: l.paused,
@@ -127,6 +127,7 @@ impl DesktopHost {
             speech_since_ago_ms: ago(l.speech_since),
             speech_secs: l.speech_secs,
             last_line_end: l.last_line_end,
+            lines: l.lines,
         });
         if r.last_live != Some(key) {
             out.push(ToMori::Live { live: live.clone() });

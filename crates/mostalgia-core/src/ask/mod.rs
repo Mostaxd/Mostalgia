@@ -7,7 +7,7 @@ pub mod embed;
 pub mod index;
 pub mod search;
 
-pub use answer::{AskEvent, Citation, Piece, ask, parse_answer};
+pub use answer::{AskEvent, Citation, Piece, ask, ask_as_mori, parse_answer};
 pub use search::{Filter, Hit};
 
 use anyhow::Result;

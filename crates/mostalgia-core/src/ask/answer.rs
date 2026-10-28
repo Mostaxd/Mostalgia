@@ -51,7 +51,20 @@ pub enum Piece {
     Cite(Citation),
 }
 
+thread_local! {
+    /// Mori's persona for the answer being produced on this thread, if any.
+    static PERSONA: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
 fn system_prompt() -> String {
+    let base = base_system_prompt();
+    match PERSONA.with(|p| p.borrow().clone()) {
+        Some(persona) => format!("{persona}\n\n{base}"),
+        None => base,
+    }
+}
+
+fn base_system_prompt() -> String {
     format!(
         "You answer questions about the user's recorded meetings. Today is {today}.\n\n\
 Use the tools to find the answer in the transcripts and summaries: search_meetings for content \
@@ -198,9 +211,22 @@ fn run_tool(name: &str, input: &Value) -> (String, String) {
 /// using the "ask" connection/model from the config. Streams progress to
 /// `events`; always ends with `Done` or `Error`.
 pub fn ask(question: &str, history: &[(String, String)], events: &Sender<AskEvent>) {
-    let result = Config::load().ask_request().and_then(|req| match req.connection.api {
-        Api::Anthropic => ask_claude(question, history, &req, events),
-        Api::OpenAi => ask_openai(question, history, &req, events),
+    ask_with(question, history, false, events)
+}
+
+/// [`ask`] in Mori's voice (her persona before the search instructions).
+pub fn ask_as_mori(question: &str, history: &[(String, String)], events: &Sender<AskEvent>) {
+    ask_with(question, history, true, events)
+}
+
+fn ask_with(question: &str, history: &[(String, String)], mori: bool, events: &Sender<AskEvent>) {
+    let result = Config::load().ask_request().and_then(|req| {
+        let persona = mori.then(|| crate::companion::persona(&req));
+        PERSONA.with(|p| *p.borrow_mut() = persona);
+        match req.connection.api {
+            Api::Anthropic => ask_claude(question, history, &req, events),
+            Api::OpenAi => ask_openai(question, history, &req, events),
+        }
     });
     match result {
         Ok(answer) => {

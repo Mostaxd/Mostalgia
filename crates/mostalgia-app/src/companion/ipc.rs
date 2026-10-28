@@ -33,6 +33,10 @@ pub struct WireLive {
     pub speech_since_ago_ms: Option<u64>,
     pub speech_secs: f64,
     pub last_line_end: f64,
+    /// Finalized lines so far (she waits for her copy of the transcript
+    /// to catch up before asking for points).
+    #[serde(default)]
+    pub lines: usize,
 }
 
 /// App → Mori.

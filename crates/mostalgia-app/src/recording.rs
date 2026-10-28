@@ -49,8 +49,11 @@ pub struct LiveState {
     pub speech_since: Option<Instant>,
     /// Seconds of finalized speech so far.
     pub speech_secs: f64,
-    /// End of the newest finalized line, in recording seconds.
+    /// End of the newest finalized line, in recording seconds (the latest
+    /// end over both tracks: their lines don't arrive in time order).
     pub last_line_end: f64,
+    /// Finalized lines so far.
+    pub lines: usize,
 }
 
 enum Phase {
@@ -245,7 +248,8 @@ impl RecordingView {
             speech_at: live.speech_at,
             speech_since: live.speech_since,
             speech_secs: live.speech_secs,
-            last_line_end: live.lines.last().map_or(0., |l| l.end_secs),
+            last_line_end: live.lines.iter().map(|l| l.end_secs).fold(0., f64::max),
+            lines: live.lines.len(),
         })
     }
 

@@ -25,12 +25,13 @@ fn fingerprint(m: &Meeting) -> String {
     let words: usize = m.segments.iter().map(|s| s.text.len()).sum();
     let speakers: String = m.segments.iter().filter_map(|s| s.speaker.as_deref()).collect::<Vec<_>>().join(",");
     format!(
-        "v1|{}|{}|{}|{}|{}",
+        "v1|{}|{}|{}|{}|{}|{}",
         m.title,
         m.segments.len(),
         words,
         speakers.len(),
-        m.summary.as_ref().map_or(0, |s| s.created_at.timestamp())
+        m.summary.as_ref().map_or(0, |s| s.created_at.timestamp()),
+        m.notes.iter().map(|n| n.text.len() + n.pinned as usize).sum::<usize>() + m.notes.len()
     )
 }
 
@@ -100,6 +101,16 @@ pub fn build_passages(m: &Meeting) -> Vec<NewPassage> {
             }
         }
         flush(&heading, &section, &mut out);
+    }
+    // Mori's notes, each at the moment it refers to.
+    for n in &m.notes {
+        let kind = crate::companion::PointKind::parse(&n.kind).map_or(n.kind.clone(), |k| k.label().to_string());
+        out.push(NewPassage {
+            kind: "notes",
+            start_secs: n.at_secs,
+            end_secs: n.at_secs,
+            text: format!("{head}\nMori's note at {} – {kind}: {}", format_ts(n.at_secs), n.text),
+        });
     }
     out
 }

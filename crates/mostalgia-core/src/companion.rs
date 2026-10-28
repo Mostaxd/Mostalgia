@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use crate::chunker::format_ts;
 use crate::config::Config;
+use crate::summary::SummaryRequest;
 use crate::i18n::{tr, trf};
 use crate::llm::{self, Message};
 
@@ -61,8 +62,29 @@ pub enum AnswerEvent {
     Error(String),
 }
 
+/// Who Mori is, for every prompt she answers: her name, her manner, what
+/// Mostalgia is, what she can do, and (truthfully) which model runs her.
+pub fn persona(req: &SummaryRequest) -> String {
+    format!(
+        "You are Mori, the note-taking companion in Mostalgia — a local-first meeting recorder \
+(\"Nostalgia, but for meetings you can actually recall in full\"). You're a small animated \
+character who sits next to the user's meetings, writes along while people talk and remembers \
+what was said. Your manner: warm, calm, a little witty — never at the user's expense — and \
+concise. Answer in the language the user writes in.\n\n\
+What you can do: in the chat the user picks a scope — \"Live meeting\" (the recording in \
+progress, from its live transcript), \"This meeting\" (the meeting open in the app, from its \
+transcript, summary and notes) or \"All meetings\" (searching the whole library). You cite \
+the moments you rely on so the user can jump there and listen. While a recording runs you \
+also pin up live notes — decisions, action items, open questions, numbers — which are saved \
+with the meeting. You can't join calls, send messages or change settings.\n\n\
+If asked who you are, you're Mori. You are not the language model itself: if asked which \
+model powers you, say it's the connection chosen in Mostalgia's settings — currently {} with \
+the model {} — and don't claim to be anything else.",
+        req.connection.name, req.model
+    )
+}
+
 const LIVE_SYSTEM: &str = "\
-You are Mori, a note-taking assistant inside the meeting recorder Mostalgia. \
 The user is in a meeting that is being recorded right now and asks you about it. \
 You get the live transcript so far; it comes from automatic speech recognition, \
 so silently correct obviously misheard words. Speakers: \"Me\" is the user, \
@@ -87,7 +109,8 @@ pub fn ask_live(question: &str, history: &[(String, String)], transcript: &str, 
         let mut on_delta = |d: &str| {
             let _ = events.send(AnswerEvent::Delta(d.to_string()));
         };
-        llm::chat(&req.connection, &req.model, req.effort.as_deref(), LIVE_SYSTEM, &messages, 16_000, &mut on_delta)
+        let system = format!("{}\n\n{LIVE_SYSTEM}", persona(&req));
+        llm::chat(&req.connection, &req.model, req.effort.as_deref(), &system, &messages, 16_000, &mut on_delta)
     });
     let _ = events.send(match result {
         Ok(done) => AnswerEvent::Done(done.text.trim().to_string()),
@@ -174,7 +197,7 @@ is nothing new, reply with [].";
 /// Asks the "ask" connection for new points in `transcript` (the recent
 /// part of the live transcript, lines like "[123s 02:03] Me: …"), leaving
 /// out `previous` ones. Errors name the provider.
-pub fn live_points(transcript: &str, previous: &[Point]) -> Result<Vec<Point>> {
+pub fn live_points(transcript: &str, previous: &[Point]) -> Result<PointsReply> {
     let req = Config::load().ask_request()?;
     let mut user = String::new();
     if previous.is_empty() {
@@ -187,12 +210,23 @@ pub fn live_points(transcript: &str, previous: &[Point]) -> Result<Vec<Point>> {
         user.push('\n');
     }
     user.push_str(&format!("Recent transcript:\n{transcript}"));
-    let done = llm::chat(&req.connection, &req.model, req.effort.as_deref(), POINTS_SYSTEM, &[Message::user(user)], 16_000, &mut |_| {})?;
+    let system = format!("{}\n\n{POINTS_SYSTEM}", persona(&req));
+    let done = llm::chat(&req.connection, &req.model, req.effort.as_deref(), &system, &[Message::user(user)], 16_000, &mut |_| {})?;
     let points = parse_points(&done.text).with_context(|| req.connection.name.clone())?;
-    Ok(points
+    let parsed = points.len();
+    let points: Vec<Point> = points
         .into_iter()
         .filter(|p| !previous.iter().any(|q| q.text.trim().eq_ignore_ascii_case(p.text.trim())))
-        .collect())
+        .collect();
+    Ok(PointsReply { duplicates: parsed - points.len(), points })
+}
+
+/// What a [`live_points`] request brought: the new points, and how many
+/// the model returned that repeated earlier ones (left out).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PointsReply {
+    pub points: Vec<Point>,
+    pub duplicates: usize,
 }
 
 /// Lines for [`live_points`]: like [`transcript_context`] but with the
@@ -210,6 +244,12 @@ pub fn points_context(lines: &[ContextLine], max_chars: usize) -> String {
 /// with text around it, or an object holding the array. Unknown kinds
 /// count as facts; empty texts are skipped. Anything else is an error.
 pub fn parse_points(answer: &str) -> Result<Vec<Point>> {
+    // Reasoning models may put their thinking (with brackets of its own)
+    // before the answer.
+    let mut answer = answer;
+    while let Some(end) = answer.find("</think>") {
+        answer = &answer[end + "</think>".len()..];
+    }
     let text = answer.trim();
     let text = match text.find("```") {
         Some(start) => {
@@ -219,10 +259,12 @@ pub fn parse_points(answer: &str) -> Result<Vec<Point>> {
         }
         None => text,
     };
-    let value = match (text.find('['), text.rfind(']')) {
-        (Some(a), Some(b)) if a < b => serde_json::from_str::<Value>(&text[a..=b]).ok(),
-        _ => None,
-    };
+    // The first `[` that starts a JSON array of objects (prose around it
+    // may hold brackets too, e.g. an echoed "[123s 02:03]").
+    let value = text.match_indices('[').find_map(|(a, _)| {
+        let v = serde_json::Deserializer::from_str(&text[a..]).into_iter::<Value>().next()?.ok()?;
+        v.as_array().is_some_and(|items| items.iter().all(Value::is_object)).then_some(v)
+    });
     let value = match value {
         Some(v) => v,
         None => match (text.find('{'), text.rfind('}')) {
@@ -287,6 +329,10 @@ mod tests {
         let p = parse_points(wrapped).unwrap();
         assert_eq!(p, vec![Point { kind: PointKind::Fact, text: "Launch on 3 May".into(), at_secs: 12.0 }]);
 
+        let prose = "At [120s 02:00] they agreed: [{\"kind\": \"decision\", \"text\": \"Ship on Friday\", \"at_secs\": 120}] (see [1]).";
+        assert_eq!(parse_points(prose).unwrap(), vec![Point { kind: PointKind::Decision, text: "Ship on Friday".into(), at_secs: 120.0 }]);
+        let thinking = "<think>Maybe [x]? The list: [\"a\"]</think>\n[{\"kind\": \"fact\", \"text\": \"Budget 10% under plan\", \"at_secs\": 15}]";
+        assert_eq!(parse_points(thinking).unwrap().len(), 1);
         assert!(parse_points("[]").unwrap().is_empty());
         assert!(parse_points("Nothing new so far.").is_err());
         assert!(parse_points("[{\"kind\": \"decision\", \"text\": ").is_err());

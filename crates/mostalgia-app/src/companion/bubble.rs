@@ -196,7 +196,7 @@ impl Companion {
                 let (tx, rx) = crossbeam_channel::unbounded();
                 std::thread::spawn(move || {
                     let _ = ask::index_pending();
-                    ask::ask(&question, &history, &tx);
+                    ask::ask_as_mori(&question, &history, &tx);
                 });
                 self.chat_rx = Some(ChatRx::Library(rx));
             }

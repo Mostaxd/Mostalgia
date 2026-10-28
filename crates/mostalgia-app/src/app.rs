@@ -116,6 +116,11 @@ impl MostalgiaApp {
                 }
                 MoriEvent::PopOut => this.set_mori_desktop(true, cx),
                 MoriEvent::BackToApp => this.set_mori_desktop(false, cx),
+                MoriEvent::NotesSaved { meeting_id } => {
+                    if let Some(m) = this.meeting_view().filter(|m| m.read(cx).id == *meeting_id) {
+                        m.update(cx, |m, cx| m.reload(cx));
+                    }
+                }
             }),
         ];
         let mut this = Self {
