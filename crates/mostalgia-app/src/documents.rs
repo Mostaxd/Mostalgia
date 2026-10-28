@@ -3,7 +3,9 @@
 //! the data directory and indexed in the background; answers in "Ask",
 //! the companion's chat and her live answer suggestions can cite them.
 //! The reader shows a document's text as it was indexed, with a cited
-//! page or section highlighted.
+//! page or section highlighted. Documents can be grouped in collections
+//! (say, one per project), each switched on or off for answers as a whole;
+//! a document is moved by dragging it onto a collection or from the reader.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -13,10 +15,11 @@ use crossbeam_channel::{Receiver, Sender};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, StyledExt, h_flex, switch::Switch, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use mostalgia_core::docs::{self, Chunk, DocHit, Document, Kind};
+use mostalgia_core::docs::{self, Chunk, Collection, DocHit, Document, Kind};
 use mostalgia_core::i18n::{self, tr, trf};
 
 use crate::ui;
@@ -34,12 +37,52 @@ enum Progress {
 }
 
 enum Job {
-    Add(PathBuf),
+    /// A file to add, into a collection if given.
+    Add(PathBuf, Option<i64>),
     Reindex(i64),
+}
+
+/// A document being dragged onto a collection.
+#[derive(Clone)]
+struct DraggedDoc {
+    id: i64,
+    title: String,
+}
+
+impl Render for DraggedDoc {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        h_flex()
+            .gap_1p5()
+            .px_2()
+            .py_1()
+            .rounded(theme.radius)
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.popover)
+            .text_color(theme.popover_foreground)
+            .text_sm()
+            .shadow_md()
+            .child(Icon::new(IconName::FileText).xsmall())
+            .child(self.title.clone())
+    }
+}
+
+/// Naming a collection: a new one (`target` `None`) or a rename.
+struct NameEdit {
+    target: Option<i64>,
+    /// A new collection: put this document into it.
+    assign: Option<i64>,
+    input: Entity<InputState>,
+    _subscription: Subscription,
 }
 
 pub struct DocumentsView {
     docs: Vec<Document>,
+    collections: Vec<Collection>,
+    /// Folded groups in the list (`None`: documents in no collection).
+    folded: HashSet<Option<i64>>,
+    name_edit: Option<NameEdit>,
     selected: Option<i64>,
     /// The selected document's text, and the location to highlight.
     chunks: Vec<Chunk>,
@@ -76,6 +119,9 @@ impl DocumentsView {
         });
         let mut this = Self {
             docs: Vec::new(),
+            collections: Vec::new(),
+            folded: HashSet::new(),
+            name_edit: None,
             selected: None,
             chunks: Vec::new(),
             highlight: None,
@@ -99,8 +145,8 @@ impl DocumentsView {
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
-        match docs::list() {
-            Ok(list) => self.docs = list,
+        match docs::list().and_then(|d| Ok((d, docs::collections()?))) {
+            Ok((list, collections)) => (self.docs, self.collections) = (list, collections),
             Err(e) => self.errors.push(format!("{e:#}")),
         }
         if self.selected.is_some_and(|id| !self.docs.iter().any(|d| d.id == id)) {
@@ -129,19 +175,20 @@ impl DocumentsView {
         cx.notify();
     }
 
-    /// The file picker.
-    fn pick_files(&mut self, cx: &mut Context<Self>) {
+    /// The file picker; the files go into `collection` if given.
+    fn pick_files(&mut self, collection: Option<i64>, cx: &mut Context<Self>) {
         let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: true, prompt: Some(tr("Hinzufügen").into()) });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = picked.await {
-                this.update(cx, |this, cx| this.add_paths(paths, cx)).ok();
+                this.update(cx, |this, cx| this.add_paths(paths, collection, cx)).ok();
             }
         })
         .detach();
     }
 
-    /// Queues files (and the supported files in dropped folders).
-    pub fn add_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+    /// Queues files (and the supported files in dropped folders), to go
+    /// into `collection` if given.
+    pub fn add_paths(&mut self, paths: Vec<PathBuf>, collection: Option<i64>, cx: &mut Context<Self>) {
         let mut files = Vec::new();
         let mut skipped = Vec::new();
         let mut stack = paths;
@@ -161,7 +208,7 @@ impl DocumentsView {
         }
         files.sort();
         for f in files {
-            self.queue(Job::Add(f), cx);
+            self.queue(Job::Add(f, collection), cx);
         }
         cx.notify();
     }
@@ -188,8 +235,11 @@ impl DocumentsView {
         std::thread::spawn(move || {
             while let Ok(job) = jobs_rx.recv_timeout(Duration::from_millis(300)) {
                 let id = match job {
-                    Job::Add(path) => match docs::add(&path) {
+                    Job::Add(path, collection) => match docs::add(&path) {
                         Ok((id, new)) => {
+                            if collection.is_some() {
+                                let _ = docs::set_collection(id, collection);
+                            }
                             let _ = tx.send(Progress::Added { id, new });
                             if !new {
                                 continue;
@@ -286,6 +336,99 @@ impl DocumentsView {
             self.errors.push(format!("{e:#}"));
         }
         self.reload(cx);
+    }
+
+    /// Switches a whole collection on or off for answers.
+    fn set_collection_active(&mut self, id: i64, active: bool, cx: &mut Context<Self>) {
+        if let Err(e) = docs::set_collection_active(id, active) {
+            self.errors.push(format!("{e:#}"));
+        }
+        self.reload(cx);
+    }
+
+    /// Moves a document into a collection (`None`: out of any).
+    fn move_doc(&mut self, id: i64, collection: Option<i64>, cx: &mut Context<Self>) {
+        if let Err(e) = docs::set_collection(id, collection) {
+            self.errors.push(format!("{e:#}"));
+        }
+        self.folded.remove(&collection);
+        self.reload(cx);
+    }
+
+    fn delete_collection(&mut self, id: i64, cx: &mut Context<Self>) {
+        if let Err(e) = docs::delete_collection(id) {
+            self.errors.push(format!("{e:#}"));
+        }
+        self.folded.remove(&Some(id));
+        self.reload(cx);
+    }
+
+    /// Starts naming a new collection (`target` `None`, then `assign` goes
+    /// into it) or renaming one, in place in the list.
+    fn begin_name_edit(&mut self, target: Option<i64>, assign: Option<i64>, window: &mut Window, cx: &mut Context<Self>) {
+        let name = target.and_then(|id| self.collections.iter().find(|k| k.id == id)).map_or(String::new(), |k| k.name.clone());
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Name der Sammlung")));
+        input.update(cx, |s, cx| s.set_value(name, window, cx));
+        input.read(cx).focus_handle(cx).focus(window, cx);
+        let sub = cx.subscribe_in(&input, window, |this, input, event: &InputEvent, _, cx| match event {
+            InputEvent::PressEnter { .. } => {
+                let name = input.read(cx).value().trim().to_string();
+                this.commit_name(&name, cx);
+            }
+            InputEvent::Blur => {
+                this.name_edit = None;
+                cx.notify();
+            }
+            _ => {}
+        });
+        self.name_edit = Some(NameEdit { target, assign, input, _subscription: sub });
+        cx.notify();
+    }
+
+    fn commit_name(&mut self, name: &str, cx: &mut Context<Self>) {
+        let Some(edit) = self.name_edit.take() else { return };
+        if !name.is_empty() {
+            let done = match edit.target {
+                Some(id) => docs::rename_collection(id, name),
+                None => docs::create_collection(name).and_then(|k| {
+                    self.folded.remove(&Some(k));
+                    edit.assign.map_or(Ok(()), |doc| docs::set_collection(doc, Some(k)))
+                }),
+            };
+            if let Err(e) = done {
+                self.errors.push(format!("{e:#}"));
+            }
+        }
+        self.reload(cx);
+    }
+
+    /// The reader's "in collection" button: moves the document.
+    fn collection_menu(&self, doc: &Document, cx: &mut Context<Self>) -> impl IntoElement {
+        let current = doc.collection_id.and_then(|id| self.collections.iter().find(|k| k.id == id));
+        let label = current.map_or_else(|| tr("Keine Sammlung").to_string(), |k| k.name.clone());
+        let choices: Vec<(Option<i64>, String)> =
+            self.collections.iter().map(|k| (Some(k.id), k.name.clone())).chain([(None, tr("Keine Sammlung").to_string())]).collect();
+        let (id, now) = (doc.id, current.map(|k| k.id));
+        let weak = cx.entity().downgrade();
+        Button::new("doc-collection")
+            .small()
+            .ghost()
+            .icon(IconName::FolderInput)
+            .label(label)
+            .tooltip(tr("In eine Sammlung verschieben"))
+            .dropdown_menu(move |menu, _, _| {
+                let mut menu = menu.scrollable(true).max_h(px(360.));
+                for (k, name) in &choices {
+                    let (k, weak) = (*k, weak.clone());
+                    menu = menu.item(PopupMenuItem::new(name.clone()).checked(k == now).on_click(move |_, _, cx| {
+                        weak.update(cx, |this, cx| this.move_doc(id, k, cx)).ok();
+                    }));
+                }
+                let weak = weak.clone();
+                menu.separator().item(PopupMenuItem::new(tr("Neue Sammlung…")).icon(IconName::FolderPlus).on_click(move |_, window, cx| {
+                    weak.update(cx, |this, cx| this.begin_name_edit(None, Some(id), window, cx)).ok();
+                }))
+            })
     }
 
     fn active_switch(&self, key: &str, d: &Document, cx: &mut Context<Self>) -> Switch {
@@ -385,46 +528,168 @@ impl DocumentsView {
             }
             return v_flex().gap_0p5().children(items).into_any_element();
         }
-        for d in &self.docs {
-            let id = d.id;
-            let failed = d.error.is_some() && !self.busy.contains(&id);
-            let meta = if failed { d.error.clone().unwrap_or_default() } else { self.meta(d) };
-            let busy = self.busy.contains(&id) || d.indexed_at.is_none() && d.error.is_none();
-            let meta = if d.active || failed { meta } else { format!("{} · {meta}", tr("Aus")) };
-            let switch = self.active_switch("doc-active", d, cx);
-            items.push(
-                h_flex()
-                    .id(("doc", id as usize))
-                    .px_2()
-                    .py_1p5()
-                    .gap_2()
-                    .items_start()
-                    .rounded(theme.radius)
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme.muted))
-                    .when(self.selected == Some(id), |el| el.bg(theme.accent))
-                    .child(Self::kind_badge(d.kind, cx).mt(px(2.)).when(!d.active, |el| el.opacity(0.5)))
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .when(!d.active, |el| el.opacity(0.55))
-                            .child(div().text_sm().font_medium().truncate().child(d.title.clone()))
-                            .child(
-                                h_flex()
-                                    .gap_1()
-                                    .text_xs()
-                                    .text_color(if failed { theme.danger } else { theme.muted_foreground })
-                                    .when(busy, |el| el.child(gpui_kit::component::spinner::Spinner::new().xsmall()))
-                                    .child(div().truncate().child(meta)),
-                            ),
-                    )
-                    .child(div().flex_none().mt(px(2.)).child(switch))
-                    .on_click(cx.listener(move |this, _, _, cx| this.open(id, None, cx)))
-                    .into_any_element(),
-            );
+        // Grouped by collection (by name), then the documents in none.
+        let collections = self.collections.clone();
+        let known: HashSet<i64> = collections.iter().map(|k| k.id).collect();
+        if self.name_edit.as_ref().is_some_and(|e| e.target.is_none()) {
+            items.push(self.name_row(cx));
+        }
+        for k in &collections {
+            let docs: Vec<&Document> = self.docs.iter().filter(|d| d.collection_id == Some(k.id)).collect();
+            items.push(self.render_group(Some(k), &docs, cx));
+        }
+        let loose: Vec<&Document> = self.docs.iter().filter(|d| d.collection_id.is_none_or(|k| !known.contains(&k))).collect();
+        if collections.is_empty() {
+            items.extend(loose.iter().map(|d| self.doc_row(d, cx)));
+        } else if !loose.is_empty() {
+            items.push(self.render_group(None, &loose, cx));
         }
         v_flex().gap_0p5().children(items).into_any_element()
+    }
+
+    /// The row where a new collection is named (or one renamed).
+    fn name_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let Some(edit) = &self.name_edit else { return div().into_any_element() };
+        h_flex()
+            .flex_1()
+            .min_w_0()
+            .gap_2()
+            .when(edit.target.is_none(), |el| el.px_2().py_1().child(Icon::new(IconName::FolderPlus).small().text_color(theme.primary)))
+            .child(div().flex_1().child(Input::new(&edit.input).small()))
+            .into_any_element()
+    }
+
+    /// A collection (`None`: the documents in none) with its documents;
+    /// documents and files can be dropped on it.
+    fn render_group(&self, k: Option<&Collection>, docs: &[&Document], cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let key = k.map(|k| k.id);
+        let folded = self.folded.contains(&key);
+        let renaming = k.is_some() && self.name_edit.as_ref().is_some_and(|e| e.target == key);
+        let on = k.is_none_or(|k| k.active);
+        let name = k.map_or_else(|| tr("Ohne Sammlung").to_string(), |k| k.name.clone());
+        let count = if docs.len() == 1 { tr("1 Dokument").to_string() } else { trf("{} Dokumente", &[&docs.len()]) };
+        let gid = key.map_or(0, |id| id as usize + 1);
+        let header = h_flex()
+            .id(("doc-group", gid))
+            .px_2()
+            .py_1()
+            .gap_1p5()
+            .rounded(theme.radius)
+            .cursor_pointer()
+            .hover(|s| s.bg(theme.muted))
+            .child(Icon::new(if folded { IconName::ChevronRight } else { IconName::ChevronDown }).xsmall().text_color(theme.muted_foreground))
+            .child(Icon::new(if k.is_some() { IconName::Folder } else { IconName::FileText }).small().text_color(if on && k.is_some() { theme.primary } else { theme.muted_foreground }))
+            .when(renaming, |el| el.child(self.name_row(cx)))
+            .when(!renaming, |el| {
+                el.child(
+                    h_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap_1p5()
+                        .when(!on, |el| el.opacity(0.55))
+                        .child(div().text_sm().font_semibold().truncate().child(name.clone()))
+                        .child(div().flex_none().text_xs().text_color(theme.muted_foreground).child(count)),
+                )
+            })
+            .when_some(k.filter(|_| !renaming), |el, k| {
+                let id = k.id;
+                let weak = cx.entity().downgrade();
+                el.child(
+                    Button::new(("doc-collection-menu", id as usize)).xsmall().ghost().icon(IconName::Ellipsis).dropdown_menu(move |menu, _, _| {
+                        let (rename, add, delete) = (weak.clone(), weak.clone(), weak.clone());
+                        menu.item(PopupMenuItem::new(tr("Umbenennen")).icon(IconName::Pencil).on_click(move |_, window, cx| {
+                            rename.update(cx, |this, cx| this.begin_name_edit(Some(id), None, window, cx)).ok();
+                        }))
+                        .item(PopupMenuItem::new(tr("Dateien hinzufügen…")).icon(IconName::Upload).on_click(move |_, _, cx| {
+                            add.update(cx, |this, cx| this.pick_files(Some(id), cx)).ok();
+                        }))
+                        .separator()
+                        .item(PopupMenuItem::new(tr("Sammlung auflösen (Dokumente bleiben)")).icon(IconName::Trash).on_click(move |_, _, cx| {
+                            delete.update(cx, |this, cx| this.delete_collection(id, cx)).ok();
+                        }))
+                    }),
+                )
+                .child(
+                    Switch::new(("doc-collection-active", id as usize))
+                        .small()
+                        .checked(k.active)
+                        .tooltip(if k.active {
+                            tr("Diese Sammlung wird für Antworten genutzt – klicken zum Ausschalten")
+                        } else {
+                            tr("Ausgeschaltet – Antworten nutzen keine Dokumente dieser Sammlung")
+                        })
+                        .on_change(cx.listener(move |this, on: &bool, _, cx| this.set_collection_active(id, *on, cx))),
+                )
+            })
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if !this.folded.remove(&key) {
+                    this.folded.insert(key);
+                }
+                cx.notify();
+            }));
+        v_flex()
+            .id(("doc-group-drop", gid))
+            .gap_0p5()
+            .rounded(theme.radius)
+            .drag_over::<DraggedDoc>(|style, _, _, cx| style.bg(cx.theme().primary.opacity(0.1)))
+            .drag_over::<ExternalPaths>(|style, _, _, cx| style.bg(cx.theme().primary.opacity(0.1)))
+            .on_drop(cx.listener(move |this, d: &DraggedDoc, _, cx| this.move_doc(d.id, key, cx)))
+            .on_drop(cx.listener(move |this, paths: &ExternalPaths, _, cx| this.add_paths(paths.paths().to_vec(), key, cx)))
+            .child(header)
+            .when(!folded, |el| {
+                el.when(docs.is_empty(), |el| {
+                    el.child(div().pl(px(30.)).py_1().text_xs().text_color(theme.muted_foreground).child(tr("Leer – Dokumente hierher ziehen")))
+                })
+                .children(docs.iter().map(|d| div().pl_3().child(self.doc_row(d, cx))))
+            })
+            .into_any_element()
+    }
+
+    /// A document in the list.
+    fn doc_row(&self, d: &Document, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let id = d.id;
+        let failed = d.error.is_some() && !self.busy.contains(&id);
+        let meta = if failed { d.error.clone().unwrap_or_default() } else { self.meta(d) };
+        let busy = self.busy.contains(&id) || d.indexed_at.is_none() && d.error.is_none();
+        let meta = match () {
+            _ if failed || d.used => meta,
+            _ if !d.active => format!("{} · {meta}", tr("Aus")),
+            _ => format!("{} · {meta}", tr("Sammlung aus")),
+        };
+        let switch = self.active_switch("doc-active", d, cx);
+        h_flex()
+            .id(("doc", id as usize))
+            .on_drag(DraggedDoc { id, title: d.title.clone() }, |d, _, _, cx| cx.new(|_| d.clone()))
+            .px_2()
+            .py_1p5()
+            .gap_2()
+            .items_start()
+            .rounded(theme.radius)
+            .cursor_pointer()
+            .hover(|s| s.bg(theme.muted))
+            .when(self.selected == Some(id), |el| el.bg(theme.accent))
+            .child(Self::kind_badge(d.kind, cx).mt(px(2.)).when(!d.used, |el| el.opacity(0.5)))
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .when(!d.used, |el| el.opacity(0.55))
+                    .child(div().text_sm().font_medium().truncate().child(d.title.clone()))
+                    .child(
+                            h_flex()
+                            .gap_1()
+                            .text_xs()
+                            .text_color(if failed { theme.danger } else { theme.muted_foreground })
+                            .when(busy, |el| el.child(gpui_kit::component::spinner::Spinner::new().xsmall()))
+                            .child(div().truncate().child(meta)),
+                    ),
+            )
+            .child(div().flex_none().mt(px(2.)).child(switch))
+            .on_click(cx.listener(move |this, _, _, cx| this.open(id, None, cx)))
+            .into_any_element()
     }
 
     fn render_empty(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -445,7 +710,7 @@ impl DocumentsView {
                     .text_color(theme.muted_foreground)
                     .child(tr("Lege Handbücher, Spezifikationen, Notizen oder Berichte hier ab – Markdown, Text, PDF, Word, OpenDocument oder HTML, auf Deutsch, Englisch oder in anderen Sprachen. Sie werden lokal gelesen und durchsuchbar gemacht. Antworten in „Fragen“, im Chat und als Live-Antwortvorschläge können sie dann zitieren.")),
             )
-            .child(Button::new("docs-add-empty").primary().icon(IconName::Upload).label(tr("Dateien hinzufügen")).on_click(cx.listener(|this, _, _, cx| this.pick_files(cx))))
+            .child(Button::new("docs-add-empty").primary().icon(IconName::Upload).label(tr("Dateien hinzufügen")).on_click(cx.listener(|this, _, _, cx| this.pick_files(None, cx))))
             .child(div().text_xs().text_color(theme.muted_foreground).child(tr("…oder Dateien und Ordner hierher ziehen")))
             .into_any_element()
     }
@@ -484,9 +749,14 @@ impl DocumentsView {
                             .mr_2()
                             .text_xs()
                             .text_color(theme.muted_foreground)
-                            .child(if doc.active { tr("Für Antworten") } else { tr("Aus") })
+                            .child(match () {
+                                _ if doc.used => tr("Für Antworten"),
+                                _ if !doc.active => tr("Aus"),
+                                _ => tr("Sammlung aus"),
+                            })
                             .child(self.active_switch("doc-active-reader", &doc, cx)),
                     )
+                    .child(self.collection_menu(&doc, cx))
                     .child(
                         Button::new("doc-open-file")
                             .small()
@@ -613,7 +883,20 @@ impl Render for DocumentsView {
                         .flex_none()
                         .border_r_1()
                         .border_color(theme.border)
-                        .child(div().p_3().child(Input::new(&self.search).small().prefix(Icon::new(IconName::Search).small().text_color(theme.muted_foreground)).cleanable(true)))
+                        .child(
+                            h_flex()
+                                .p_3()
+                                .gap_1()
+                                .child(div().flex_1().child(Input::new(&self.search).small().prefix(Icon::new(IconName::Search).small().text_color(theme.muted_foreground)).cleanable(true)))
+                                .child(
+                                    Button::new("docs-new-collection")
+                                        .small()
+                                        .ghost()
+                                        .icon(IconName::FolderPlus)
+                                        .tooltip(tr("Neue Sammlung"))
+                                        .on_click(cx.listener(|this, _, window, cx| this.begin_name_edit(None, None, window, cx))),
+                                ),
+                        )
                         .child(div().flex_1().min_h_0().child(v_flex().id("doc-list").size_full().px_2().pb_2().overflow_y_scroll().child(list))),
                 )
                 .child(div().flex_1().min_w_0().h_full().child(reader))
@@ -623,7 +906,7 @@ impl Render for DocumentsView {
             .id("documents")
             .size_full()
             .drag_over::<ExternalPaths>(|style, _, _, cx| style.bg(cx.theme().primary.opacity(0.06)))
-            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.add_paths(paths.paths().to_vec(), cx)))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.add_paths(paths.paths().to_vec(), None, cx)))
             .child(
                 h_flex()
                     .px_8()
@@ -638,7 +921,7 @@ impl Render for DocumentsView {
                         el.child(h_flex().gap_2().text_xs().text_color(theme.muted_foreground).child(gpui_kit::component::spinner::Spinner::new().xsmall()).child(s))
                     })
                     .when(!empty, |el| {
-                        el.child(Button::new("docs-add").small().primary().icon(IconName::Upload).label(tr("Hinzufügen")).on_click(cx.listener(|this, _, _, cx| this.pick_files(cx))))
+                        el.child(Button::new("docs-add").small().primary().icon(IconName::Upload).label(tr("Hinzufügen")).on_click(cx.listener(|this, _, _, cx| this.pick_files(None, cx))))
                     }),
             )
             .when(!messages.is_empty(), |el| {

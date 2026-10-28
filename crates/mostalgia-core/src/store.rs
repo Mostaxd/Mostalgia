@@ -235,7 +235,7 @@ pub struct NewMeeting<'a> {
     pub dir: &'a Path,
 }
 
-const SCHEMA_VERSION: i32 = 12;
+const SCHEMA_VERSION: i32 = 13;
 
 const SCHEMA: &str = "
 CREATE TABLE meetings (
@@ -392,6 +392,14 @@ const MIGRATIONS: &[&str] = &[
     END;",
     // 12: documents can be switched off for answers (kept, not searched)
     "ALTER TABLE documents ADD COLUMN active INTEGER NOT NULL DEFAULT 1;",
+    // 13: document collections (by project), switched on or off as a whole
+    "CREATE TABLE doc_collections (
+        id         INTEGER PRIMARY KEY,
+        name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        active     INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL
+    );
+    ALTER TABLE documents ADD COLUMN collection_id INTEGER REFERENCES doc_collections(id) ON DELETE SET NULL;",
 ];
 
 /// Moves a meeting's current unpinned notes into a new archived version;
