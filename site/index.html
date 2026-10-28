@@ -654,22 +654,23 @@
         <span class="plat soon">Windows <b>planned</b></span>
       </p>
       <p>Built in Rust with GPUI. Vulkan works on NVIDIA, AMD and Intel without extra toolkits; no GPU at all works too, on the CPU or with a cloud engine.</p>
-      <a class="btn btn-primary" href="https://github.com/Mostaxd/Mostalgia">Source and full guide on GitHub</a>
+      <p class="cta">
+        <a class="btn btn-primary" href="https://github.com/Mostaxd/Mostalgia/releases/latest/download/Mostalgia-x86_64.AppImage">Download for Linux</a>
+        <a class="btn btn-ghost" href="https://github.com/Mostaxd/Mostalgia#install">Source and full guide</a>
+      </p>
+      <p class="fine">One AppImage for x86_64 (Ubuntu 22.04, Debian 12, Fedora 36 or newer). The speech models download on first launch.</p>
     </div>
     <div class="terminal">
       <div class="term-bar"><i></i><i></i><i></i><span>bash</span><button class="copy" id="copyBtn" type="button">Copy</button></div>
-<pre id="installCmd"><span class="c"># 1. Models: Whisper, Silero VAD, speaker + search models</span>
-./scripts/download-model.sh
+<pre id="installCmd"><span class="c"># 1. Make the download executable and start it</span>
+chmod +x Mostalgia-x86_64.AppImage
+./Mostalgia-x86_64.AppImage
 
-<span class="c"># 2. Build (add the Vulkan feature for your GPU)</span>
-cargo build --release --features vulkan
+<span class="c"># 2. First launch: it joins your app menu and</span>
+<span class="c">#    downloads the speech models (~2.1 GB, once)</span>
 
-<span class="c"># 3. App grid entry and the Super+Shift+R shortcut</span>
-./scripts/install-desktop.sh
-./scripts/install-gnome-shortcut.sh
-
-<span class="c"># 4. Connect an AI for summaries and Ask</span>
-mostalgia connections add ollama</pre>
+<span class="c"># 3. Connect an AI for summaries and Ask</span>
+./Mostalgia-x86_64.AppImage connections add ollama</pre>
     </div>
   </div>
 </section>

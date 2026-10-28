@@ -31,7 +31,7 @@ impl SpeechDetector {
         if !model.exists() {
             eprintln!(
                 "[mostalgia] VAD model {} not found — using the energy gate \
-                 (run scripts/download-model.sh for Silero VAD)",
+                 (run `mostalgia download-models` for Silero VAD)",
                 model.display()
             );
             return Ok(Self::Energy(EnergyGate::new()));

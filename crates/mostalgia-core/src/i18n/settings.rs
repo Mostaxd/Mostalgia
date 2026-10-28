@@ -63,7 +63,7 @@ pub const EN: &[(&str, &str)] = &[
     ("„Ich“ (Mikrofon) und „Andere“ (Desktop) an jeder Zeile.", "“Ich” (me, microphone) and “Andere” (others, desktop) on every line."),
     ("Mehrere Sprecher unterscheiden", "Tell several speakers apart"),
     ("Teilt „Andere“ in Sprecher 1, 2, … auf. Live ungefähr, im fertigen Transkript genau.", "Splits “Andere” into Speaker 1, 2, … Approximate live, accurate in the final transcript."),
-    ("Modelle fehlen — scripts/download-model.sh ausführen.", "Models missing — run scripts/download-model.sh."),
+    ("Modelle fehlen — unter Einstellungen → System herunterladen.", "Models missing — download them in Settings → System."),
     ("Trennschärfe", "Separation"),
     ("Werden zwei Personen zusammengelegt: „Mehr Sprecher“. Wird eine Person geteilt: „Weniger“.", "If two people get merged: “More speakers”. If one person gets split: “Fewer”."),
     ("Weniger", "Fewer"),
@@ -257,4 +257,6 @@ pub const EN: &[(&str, &str)] = &[
     ("Alle Sprachen", "All languages"),
     ("Sprachen in meinen Besprechungen", "Languages spoken in my meetings"),
     ("„Automatisch erkennen“ wählt nur unter diesen, erkennt auf längeren Abschnitten und bleibt pro Spur dabei – deutsche Sätze mit englischen Fachwörtern bleiben deutsch. Jetzt: {}", "“Detect automatically” only chooses among these, detects on longer stretches and sticks with it per track – German sentences full of English terms stay German. Now: {}"),
+    ("Suche für „Fragen“ (e5-small)", "Search for Ask (e5-small)"),
+    ("Fehlende Modelle laden ({})", "Download missing models ({})"),
 ];

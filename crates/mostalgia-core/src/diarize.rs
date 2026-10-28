@@ -144,7 +144,7 @@ fn cluster_threshold() -> f32 {
 /// voices (each name at most once).
 #[cfg(feature = "diarization")]
 pub fn separate(samples: &[f32], speakers: Speakers, known: &crate::voices::Voices) -> Result<Separation> {
-    let (seg_model, emb_model) = models().ok_or_else(|| anyhow!(crate::i18n::tr("Modelle für die Sprechertrennung fehlen — scripts/download-model.sh ausführen")))?;
+    let (seg_model, emb_model) = models().ok_or_else(|| anyhow!(crate::i18n::tr("Modelle für die Sprechertrennung fehlen — unter Einstellungen → System herunterladen")))?;
     let threshold = cluster_threshold();
     let same_voice = std::env::var("MOSTALGIA_SAME_VOICE").ok().and_then(|v| v.parse().ok()).unwrap_or_else(|| same_voice(threshold));
     let mut extractor = extractor(&emb_model, 4)?;
@@ -359,7 +359,7 @@ fn embed(extractor: &mut sherpa_rs::speaker_id::EmbeddingExtractor, audio: &[f32
 pub fn voice_print(audio: &[f32]) -> Result<Vec<f32>> {
     #[cfg(feature = "diarization")]
     {
-        let (_, emb_model) = models().ok_or_else(|| anyhow!(crate::i18n::tr("Modelle für die Sprechertrennung fehlen — scripts/download-model.sh ausführen")))?;
+        let (_, emb_model) = models().ok_or_else(|| anyhow!(crate::i18n::tr("Modelle für die Sprechertrennung fehlen — unter Einstellungen → System herunterladen")))?;
         let mut extractor = extractor(&emb_model, 4)?;
         embed(&mut extractor, audio).ok_or_else(|| anyhow!("computing the voice print failed"))
     }
@@ -453,7 +453,7 @@ impl LiveSpeakers {
     pub fn new() -> Result<Self> {
         #[cfg(feature = "diarization")]
         {
-            let (_, emb_model) = models().ok_or_else(|| anyhow!(crate::i18n::tr("Modelle für die Sprechertrennung fehlen — scripts/download-model.sh ausführen")))?;
+            let (_, emb_model) = models().ok_or_else(|| anyhow!(crate::i18n::tr("Modelle für die Sprechertrennung fehlen — unter Einstellungen → System herunterladen")))?;
             Ok(Self {
                 extractor: extractor(&emb_model, 2)?,
                 voices: Vec::new(),

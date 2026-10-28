@@ -8,6 +8,8 @@ repository.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
+# Unpacking the speaker-segmentation model (shipped as .tar.bz2).
+bzip2 = "0.4"
 candle-core = "0.11"
 candle-nn = "0.11"
 candle-transformers = "0.11"
@@ -27,6 +29,7 @@ regex = "1"
 symphonia = { version = "0.5", default-features = false, features = ["aac", "adpcm", "alac", "flac", "mp1", "mp2", "mp3", "pcm", "vorbis", "caf", "isomp4", "mkv", "ogg", "aiff", "wav"] }
 sherpa-rs = { version = "0.6.8", default-features = false, features = ["download-binaries"], optional = true }
 sherpa-rs-sys = { version = "0.6.8", default-features = false, features = ["download-binaries"], optional = true }
+tar = "0.4"
 tokenizers = { version = "0.23.2", default-features = false, features = ["onig"] }
 whisper-rs = "0.16.0"
 whisper-rs-sys = "0.15.0"

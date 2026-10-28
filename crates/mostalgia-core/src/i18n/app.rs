@@ -137,4 +137,13 @@ pub const EN: &[(&str, &str)] = &[
     ("Entscheidungslog", "Decision log"),
     ("Entscheidungen sammeln", "Collect decisions"),
     ("Eine Seite „Entscheidungen“ in der Seitenleiste: alle Entscheidungen aus den Zusammenfassungen, durchsuchbar, mit Sprung zur Stelle im Transkript. Kostet keine zusätzlichen KI-Anfragen.", "A “Decisions” page in the sidebar: every decision from the summaries, searchable, each opening its spot in the transcript. Costs no extra AI requests."),
+    ("Modelle herunterladen", "Download the models"),
+    ("Mostalgia transkribiert auf deinem Rechner. Dafür lädt es einmalig diese Modelle ({}):", "Mostalgia transcribes on your computer. For that it downloads these models once ({}):"),
+    ("Whisper large-v3-turbo und Silero VAD – Transkription", "Whisper large-v3-turbo and Silero VAD — transcription"),
+    ("pyannote und WeSpeaker – Sprechertrennung", "pyannote and WeSpeaker — telling speakers apart"),
+    ("multilingual-e5-small – Suche für „Fragen“", "multilingual-e5-small — search for Ask"),
+    ("Du transkribierst nur mit einem Cloud-Dienst? Dann geht es auch ohne; die Modelle lassen sich später unter Einstellungen → System laden.", "Only transcribing with a cloud service? Then you can skip this and download the models later in Settings → System."),
+    ("{} von {} geladen", "{} of {} downloaded"),
+    ("Nicht jetzt", "Not now"),
+    ("Herunterladen", "Download"),
 ];

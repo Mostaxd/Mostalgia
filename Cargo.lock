@@ -4905,6 +4905,7 @@ name = "mostalgia-core"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "bzip2",
  "candle-core",
  "candle-nn",
  "candle-transformers",
@@ -4926,6 +4927,7 @@ dependencies = [
  "sherpa-rs",
  "sherpa-rs-sys",
  "symphonia",
+ "tar",
  "tokenizers 0.23.2",
  "whisper-rs",
  "whisper-rs-sys",
