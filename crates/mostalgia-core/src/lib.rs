@@ -21,6 +21,7 @@ pub mod playback;
 pub mod recorder;
 pub mod store;
 pub mod summary;
+pub mod text_import;
 pub mod transcribe;
 pub mod vad;
 

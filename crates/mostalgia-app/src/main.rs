@@ -20,9 +20,17 @@ fn main() {
         cx.bind_keys([
             KeyBinding::new("ctrl-q", Quit, None),
             KeyBinding::new("ctrl-k", app::OpenAsk, None),
+            KeyBinding::new("ctrl-=", app::ZoomIn, None),
+            KeyBinding::new("ctrl-+", app::ZoomIn, None),
+            KeyBinding::new("ctrl-shift-=", app::ZoomIn, None),
+            KeyBinding::new("ctrl--", app::ZoomOut, None),
+            KeyBinding::new("ctrl-0", app::ZoomReset, None),
             KeyBinding::new("delete", app::DeleteSelected, Some("Library")),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.on_action(|_: &app::ZoomIn, cx| app::MostalgiaApp::zoom_unfocused(Some(true), cx));
+        cx.on_action(|_: &app::ZoomOut, cx| app::MostalgiaApp::zoom_unfocused(Some(false), cx));
+        cx.on_action(|_: &app::ZoomReset, cx| app::MostalgiaApp::zoom_unfocused(None, cx));
 
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(1240.), px(820.)), cx)),

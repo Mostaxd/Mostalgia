@@ -20,6 +20,8 @@ pub struct MeetingSummary {
     pub duration_secs: f64,
     pub segment_count: i64,
     pub has_summary: bool,
+    /// Added from a transcript as text (no audio), see `text_import`.
+    pub text_import: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -176,6 +178,16 @@ impl Meeting {
             .map(|s| (s, self.dir.join(s.file_name())))
             .filter(|(_, p)| p.exists())
             .collect()
+    }
+
+    /// Added from a transcript as text: no audio (see `text_import`).
+    pub fn is_text_import(&self) -> bool {
+        crate::text_import::is_text_import(self.transcript_engine.as_deref())
+    }
+
+    /// Imported from text that had no times: the lines' times are made up.
+    pub fn is_untimed(&self) -> bool {
+        crate::text_import::is_untimed(self.transcript_engine.as_deref())
     }
 }
 
@@ -465,7 +477,8 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "SELECT m.id, m.title, m.started_at, m.duration_secs,
                     (SELECT COUNT(*) FROM segments s WHERE s.meeting_id = m.id),
-                    EXISTS (SELECT 1 FROM summaries x WHERE x.meeting_id = m.id)
+                    EXISTS (SELECT 1 FROM summaries x WHERE x.meeting_id = m.id),
+                    m.transcript_engine
              FROM meetings m ORDER BY m.started_at DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map([limit as i64], |r| {
@@ -476,6 +489,7 @@ impl Store {
                 duration_secs: r.get(3)?,
                 segment_count: r.get(4)?,
                 has_summary: r.get(5)?,
+                text_import: crate::text_import::is_text_import(r.get::<_, Option<String>>(6)?.as_deref()),
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)

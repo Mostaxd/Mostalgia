@@ -170,6 +170,37 @@ enum Command {
         #[command(flatten)]
         summary: SummaryArgs,
     },
+    /// Add a meeting you didn't record from its transcript as text: plain
+    /// text, "Name: text" lines, timestamps, Teams/Zoom/Meet exports, WebVTT
+    /// or SRT. Then it is summarized and gets notes like a recording.
+    ImportText {
+        /// The text file (.txt, .md, .vtt, .srt), or - to read standard input
+        file: PathBuf,
+        /// Title [default: from the summary]
+        #[arg(long)]
+        title: Option<String>,
+        /// When it took place, e.g. "2026-10-27 14:00" or "27.10.2026 14:00" [default: now]
+        #[arg(long)]
+        date: Option<String>,
+        /// How long it took, e.g. 45 (minutes), 45m, 1h30 or 1:30:00
+        /// [default: from the timestamps, else estimated from the length]
+        #[arg(long)]
+        duration: Option<String>,
+        /// Language code, e.g. en or de [default: detected from the text]
+        #[arg(long)]
+        language: Option<String>,
+        /// What the notes should focus on [default: the one in the settings]
+        #[arg(long)]
+        focus: Option<String>,
+        /// Note style: "default" or "modern" [default: the one in the settings]
+        #[arg(long)]
+        style: Option<String>,
+        /// Don't write notes
+        #[arg(long)]
+        no_notes: bool,
+        #[command(flatten)]
+        summary: SummaryArgs,
+    },
     /// List recorded meetings, newest first
     List {
         #[arg(long, default_value_t = 20)]
@@ -433,12 +464,15 @@ fn main() -> Result<()> {
             start(&models, &summary, cfg, speakers, no_final)
         }
         Command::Import { dir, models, summary } => import(&dir, &models, &summary),
+        Command::ImportText { file, title, date, duration, language, focus, style, no_notes, summary } => {
+            import_text(&file, TextImportArgs { title, date, duration, language, focus, style, no_notes }, &summary)
+        }
         Command::List { limit } => list(limit),
         Command::Show { id, transcript, summary } => show(id, !transcript, !summary),
         Command::Search { query, limit } => search(&query.join(" "), limit),
         Command::Summarize { id, choice } => {
             let store = open_store()?;
-            summarize(&store, id, &choice.request()?, true)?;
+            summarize(&store, id, &choice.request()?, true, false)?;
             index_for_ask(id);
             Ok(())
         }
@@ -621,7 +655,7 @@ fn finish(engine: &mut Engine, models: &ModelArgs, sum: &SummaryArgs, rec: &Reco
     }
 
     if !sum.no_summary && !meeting.segments.is_empty() {
-        if let Err(e) = sum.choice.request().and_then(|req| summarize(&store, id, &req, false)) {
+        if let Err(e) = sum.choice.request().and_then(|req| summarize(&store, id, &req, false, false)) {
             eprintln!("[mostalgia] {}", trf("Zusammenfassung übersprungen: {}", &[&format!("{e:#}")]));
         }
     }
@@ -641,7 +675,8 @@ fn retranscribe(id: i64, models: &ModelArgs) -> Result<()> {
     Ok(())
 }
 
-fn summarize(store: &Store, id: i64, req: &summary::SummaryRequest, required: bool) -> Result<()> {
+/// `keep_title`: don't rename the meeting after the summary's heading.
+fn summarize(store: &Store, id: i64, req: &summary::SummaryRequest, required: bool, keep_title: bool) -> Result<()> {
     let meeting = store.get(id)?.with_context(|| trf("Keine Besprechung #{}", &[&id]))?;
     if !req.connection.is_configured() {
         let msg = trf(
@@ -669,7 +704,7 @@ fn summarize(store: &Store, id: i64, req: &summary::SummaryRequest, required: bo
     let s = summary::summarize(req, &meeting)?;
     eprintln!("[mostalgia] {}", trf("Zusammenfassung dauerte {} s", &[&format!("{:.1}", t.elapsed().as_secs_f64())]));
     store.save_summary(id, &s.provider, &s.model, s.effort.as_deref(), &s.markdown)?;
-    if let Some(title) = &s.title {
+    if let Some(title) = s.title.as_ref().filter(|_| !keep_title) {
         store.set_title(id, title)?;
     }
     println!("\n{}", s.markdown);
@@ -711,6 +746,85 @@ fn import(dir: &Path, models: &ModelArgs, sum: &SummaryArgs) -> Result<()> {
     finish(&mut engine, models, sum, &rec)
 }
 
+struct TextImportArgs {
+    title: Option<String>,
+    date: Option<String>,
+    duration: Option<String>,
+    language: Option<String>,
+    focus: Option<String>,
+    style: Option<String>,
+    no_notes: bool,
+}
+
+/// `import-text`: the text → a meeting → search index, summary, notes.
+fn import_text(file: &Path, args: TextImportArgs, sum: &SummaryArgs) -> Result<()> {
+    use mostalgia_core::{companion, text_import};
+    let bytes = if file.as_os_str() == "-" {
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut std::io::stdin(), &mut buf)?;
+        buf
+    } else {
+        std::fs::read(file).with_context(|| trf("{} lässt sich nicht lesen", &[&file.display()]))?
+    };
+    let text = text_import::decode(&bytes)?;
+    let started_at = match &args.date {
+        Some(d) => text_import::parse_date_time(d, Local::now())
+            .with_context(|| trf("Unbekanntes Datum {} (z. B. \"2026-10-27 14:00\")", &[&format!("{d:?}")]))?,
+        None => Local::now(),
+    };
+    let duration_secs = match &args.duration {
+        Some(d) => Some(text_import::parse_duration(d).with_context(|| trf("Unbekannte Dauer {} (z. B. 45, 1h30 oder 1:30:00)", &[&format!("{d:?}")]))?),
+        None => None,
+    };
+    // Check the note style before anything is saved.
+    let config = Config::load();
+    let style = match &args.style {
+        Some(s) => companion::NoteStyle::parse(s).with_context(|| trf("Unbekannter Notizstil: {} (default oder modern)", &[s]))?,
+        None => config.notes_style(),
+    };
+    let mut store = open_store()?;
+    let done = text_import::import(
+        &mut store,
+        &text_import::Request { text: &text, title: args.title.as_deref(), started_at, duration_secs, language: args.language.as_deref() },
+    )?;
+    let id = done.meeting_id;
+    eprintln!(
+        "[mostalgia] {}",
+        trf(
+            "Erkannt: {} · {} Zeilen · {} Sprecher · {} · {} min · {}",
+            &[
+                &done.format.label(),
+                &done.lines,
+                &done.speakers,
+                &if done.timed { tr("mit Zeiten") } else { tr("ohne Zeiten") },
+                &(done.duration_secs / 60.).round(),
+                &if done.language == "auto" { tr("Sprache unbekannt").to_string() } else { text_import::language_display(&done.language) },
+            ],
+        )
+    );
+    if !sum.no_summary {
+        if let Err(e) = sum.choice.request().and_then(|req| summarize(&store, id, &req, false, args.title.is_some())) {
+            eprintln!("[mostalgia] {}", trf("Zusammenfassung übersprungen: {}", &[&format!("{e:#}")]));
+        }
+    }
+    if !args.no_notes {
+        let focus = args.focus.clone().unwrap_or_else(|| config.companion_notes_focus.clone());
+        let notes = config.notes_request().and_then(|req| {
+            eprintln!("[mostalgia] {}", trf("{} liest die Besprechung mit {} · {} …", &[&config.companion_character().name(), &req.connection.name, &req.model]));
+            companion::regenerate_notes(id, style, &focus, &mut |_, _| {})
+        });
+        match notes {
+            Ok(n) => eprintln!("[mostalgia] {}", trf("{} Notizen ({} · {})", &[&n.added, &n.provider, &n.model])),
+            Err(e) => eprintln!("[mostalgia] {}", trf("Notizen übersprungen: {}", &[&format!("{e:#}")])),
+        }
+    }
+    index_for_ask(id);
+    // The summary may have renamed it.
+    let title = store.title(id)?.map(|(t, _)| t).unwrap_or_default();
+    println!("\n{}", trf("Gespeichert als Besprechung #{}: {} — `mostalgia show {}` zeigt sie an.", &[&id, &title, &id]));
+    Ok(())
+}
+
 fn list(limit: usize) -> Result<()> {
     let meetings = open_store()?.list(limit)?;
     if meetings.is_empty() {
@@ -742,7 +856,9 @@ fn show(id: i64, with_summary: bool, with_transcript: bool) -> Result<()> {
         (m.duration_secs / 60.0).round(),
         m.dir.display()
     );
-    if let Some(engine) = &m.transcript_engine {
+    if m.is_text_import() {
+        println!("{}", if m.is_untimed() { tr("Aus Text importiert, ohne Audio und ohne Zeiten") } else { tr("Aus Text importiert, ohne Audio") });
+    } else if let Some(engine) = &m.transcript_engine {
         println!("{}", trf("Transkribiert mit {}", &[engine]));
     }
     if let Some(error) = &m.transcript_error {
@@ -769,7 +885,9 @@ fn show(id: i64, with_summary: bool, with_transcript: bool) -> Result<()> {
     if with_transcript {
         println!("{}:", tr("Transkript"));
         for s in &m.segments {
-            println!("[{}] {}: {}", format_ts(s.start_secs), i18n::speaker(s.speaker_label()), s.text);
+            let time = if m.is_untimed() { String::new() } else { format!("[{}] ", format_ts(s.start_secs)) };
+            let who = if m.is_text_import() && s.speaker.is_none() { String::new() } else { format!("{}: ", i18n::speaker(s.speaker_label())) };
+            println!("{time}{who}{}", s.text);
         }
     }
     Ok(())
@@ -1068,4 +1186,22 @@ fn transcribe_file(file: &Path, models: &ModelArgs) -> Result<()> {
         )
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn import_text_args() {
+        let cli = Cli::try_parse_from(["mostalgia", "import-text", "--title", "Kickoff", "--date", "2026-10-27 14:00", "--duration", "45", "--no-summary", "-"]).unwrap();
+        let Command::ImportText { file, title, date, duration, language, no_notes, summary, .. } = cli.command else { panic!("not import-text") };
+        assert_eq!(file, PathBuf::from("-"));
+        assert_eq!((title.as_deref(), date.as_deref(), duration.as_deref(), language), (Some("Kickoff"), Some("2026-10-27 14:00"), Some("45"), None));
+        assert!(summary.no_summary && !no_notes);
+        // `import` still takes a recording folder.
+        let cli = Cli::try_parse_from(["mostalgia", "import", "/tmp/session-1"]).unwrap();
+        assert!(matches!(cli.command, Command::Import { .. }));
+        assert!(Cli::try_parse_from(["mostalgia", "import-text"]).is_err());
+    }
 }

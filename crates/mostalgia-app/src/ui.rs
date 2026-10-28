@@ -11,9 +11,12 @@ use crate::themes;
 /// Applies the configured theme; "system" follows GNOME's light/dark. A
 /// chosen UI font overrides the theme's, and themes on the old default mono
 /// font get JetBrains Mono for the timer and timestamps.
+/// The configured text sizes are applied here too (Settings → Appearance,
+/// Ctrl+= / Ctrl+- / Ctrl+0), so they survive theme changes.
 pub fn apply_theme(window: &mut Window, cx: &mut App) {
     let dark = matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark);
     let config = mostalgia_core::config::Config::load();
+    set_text_scales(&config);
     let mut spec = themes::resolve(&config.theme, dark);
     if !config.font.is_empty() {
         spec.font = config.font.clone();
@@ -22,6 +25,44 @@ pub fn apply_theme(window: &mut Window, cx: &mut App) {
         spec.mono_font = MONO_FONT.into();
     }
     themes::apply(&spec, cx);
+    cx.refresh_windows();
+}
+
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// App-wide and transcript text size as f32 bits (0 = not read yet).
+static UI_SCALE: AtomicU32 = AtomicU32::new(0);
+static TRANSCRIPT_SCALE: AtomicU32 = AtomicU32::new(0);
+
+/// Takes the text sizes from `config` (done by [`apply_theme`]).
+pub fn set_text_scales(config: &mostalgia_core::config::Config) {
+    UI_SCALE.store(config.ui_scale().to_bits(), Ordering::Relaxed);
+    TRANSCRIPT_SCALE.store(config.transcript_scale().to_bits(), Ordering::Relaxed);
+}
+
+fn scale_of(cell: &AtomicU32) -> f32 {
+    if cell.load(Ordering::Relaxed) == 0 {
+        set_text_scales(&mostalgia_core::config::Config::load());
+    }
+    f32::from_bits(cell.load(Ordering::Relaxed))
+}
+
+/// The app-wide text size (1.0 = 100 %). Text and rem-based spacing follow
+/// it through the theme's rem size; fixed pixel widths that hold text
+/// (Mori's bubble, note cards …) multiply by it.
+pub fn ui_scale() -> f32 {
+    scale_of(&UI_SCALE)
+}
+
+/// The transcript's own text size on top of the app's (1.0 = 100 %).
+pub fn transcript_scale() -> f32 {
+    scale_of(&TRANSCRIPT_SCALE)
+}
+
+/// Text size for transcript and notes text: `base` rems (1.0 = the body
+/// size) times the transcript scale.
+pub fn transcript_rems(base: f32) -> Rems {
+    rems(base * transcript_scale())
 }
 
 pub const MONO_FONT: &str = "JetBrains Mono";
@@ -209,9 +250,9 @@ pub fn mark_row(b: &mostalgia_core::store::Bookmark, rule: bool, cx: &App) -> Di
     h_flex()
         .gap_3()
         .py_1()
-        .text_xs()
+        .text_size(transcript_rems(0.75))
         .text_color(color)
-        .child(div().w(px(52.)).flex_none().font_family(theme.mono_font_family.clone()).child(hms(b.at_secs)))
+        .child(div().w(transcript_rems(3.75)).flex_none().font_family(theme.mono_font_family.clone()).child(hms(b.at_secs)))
         .child(Icon::new(icon).xsmall())
         .child(b.display_label())
         .when(rule, |el| el.child(div().flex_1().h(px(1.)).bg(color.opacity(0.3))))

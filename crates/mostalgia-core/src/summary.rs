@@ -91,10 +91,20 @@ pub fn provider_display(stored: &str) -> String {
 }
 
 /// Renders a meeting's transcript the way the summary prompt expects.
+/// (A meeting imported from text: no made-up times, and lines without a
+/// speaker have no label.)
 pub fn transcript_text(meeting: &Meeting) -> String {
     let mut out = String::new();
+    let (imported, untimed) = (meeting.is_text_import(), meeting.is_untimed());
     for s in &meeting.segments {
-        out.push_str(&format!("[{}] {}: {}\n", format_ts(s.start_secs), llm_speaker(s.speaker_label()), s.text));
+        if !untimed {
+            out.push_str(&format!("[{}] ", format_ts(s.start_secs)));
+        }
+        if !(imported && s.speaker.is_none()) {
+            out.push_str(&format!("{}: ", llm_speaker(s.speaker_label())));
+        }
+        out.push_str(&s.text);
+        out.push('\n');
     }
     out
 }

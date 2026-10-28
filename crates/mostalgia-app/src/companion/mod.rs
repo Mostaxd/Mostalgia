@@ -454,7 +454,7 @@ impl Companion {
     /// Her size, or the collapsed bar's while she's hidden.
     fn size(&self) -> (f32, f32) {
         if self.hidden {
-            return (controls::BAR_W, controls::BAR_H);
+            return (controls::bar_w(), controls::bar_h());
         }
         let h = BASE_HEIGHT * self.scale;
         (h * art::FRAME_W / art::FRAME_H, h)

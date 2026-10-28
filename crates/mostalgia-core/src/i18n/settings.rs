@@ -235,4 +235,12 @@ pub const EN: &[(&str, &str)] = &[
     ("Danach zeigt eine Notiz-Karte nur noch eine ruhige Zeile.", "After this a note card shrinks to one quiet line."),
     ("Abstand zwischen Karten", "Gap between cards"),
     ("Kommen mehrere Notizen auf einmal, erscheinen sie so weit nacheinander.", "When several notes arrive at once, they appear this far apart."),
+    // Text size
+    ("Sehr groß", "Extra large"),
+    ("Textgröße", "Text size"),
+    ("Textgröße der App", "App text size"),
+    ("Gilt überall, auch für die Begleiterin. Tastenkürzel: Strg + = größer, Strg + − kleiner, Strg + 0 zurücksetzen.", "Applies everywhere, including the companion. Shortcuts: Ctrl + = bigger, Ctrl + − smaller, Ctrl + 0 reset."),
+    ("Feiner einstellen", "Fine-tune"),
+    ("Transkript und Notizen", "Transcript and notes"),
+    ("Live-Transkript, Transkript, Zusammenfassung und Notizen einer Besprechung – zusätzlich zur Textgröße der App.", "Live transcript, and a meeting's transcript, summary and notes – on top of the app text size."),
 ];

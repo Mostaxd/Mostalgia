@@ -93,4 +93,17 @@ pub const EN: &[(&str, &str)] = &[
     ("{} liest die Besprechung mit {} · {} …", "{} is reading the meeting with {} · {} …"),
     ("Teil {} von {}", "Part {} of {}"),
     ("{} neue Notizen, {} angeheftete behalten, {} Wiederholungen weggelassen ({} · {})", "{} new notes, {} pinned kept, {} repeats left out ({} · {})"),
+    // import-text
+    ("{} lässt sich nicht lesen", "Can't read {}"),
+    ("Unbekanntes Datum {} (z. B. \"2026-10-27 14:00\")", "Unknown date {} (e.g. \"2026-10-27 14:00\")"),
+    ("Unbekannte Dauer {} (z. B. 45, 1h30 oder 1:30:00)", "Unknown duration {} (e.g. 45, 1h30 or 1:30:00)"),
+    ("Erkannt: {} · {} Zeilen · {} Sprecher · {} · {} min · {}", "Recognized: {} · {} lines · {} speakers · {} · {} min · {}"),
+    ("mit Zeiten", "with times"),
+    ("ohne Zeiten", "without times"),
+    ("Sprache unbekannt", "language unknown"),
+    ("{} Notizen ({} · {})", "{} notes ({} · {})"),
+    ("Notizen übersprungen: {}", "Notes skipped: {}"),
+    ("Gespeichert als Besprechung #{}: {} — `mostalgia show {}` zeigt sie an.", "Saved as meeting #{}: {} — `mostalgia show {}` shows it."),
+    ("Aus Text importiert, ohne Audio und ohne Zeiten", "Imported from text, no audio and no times"),
+    ("Aus Text importiert, ohne Audio", "Imported from text, no audio"),
 ];

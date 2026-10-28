@@ -22,6 +22,13 @@ use crate::ui;
 
 const BUBBLE_W: f32 = 400.;
 const BUBBLE_MAX_H: f32 = 520.;
+/// The bubble's size at the app's text size.
+fn bubble_w() -> f32 {
+    BUBBLE_W * ui::ui_scale()
+}
+fn bubble_max_h() -> f32 {
+    BUBBLE_MAX_H * ui::ui_scale()
+}
 /// How long "Chat cleared · Undo" stays.
 const UNDO_FOR: Duration = Duration::from_secs(6);
 
@@ -446,7 +453,7 @@ impl Companion {
         let setup = self.setup.clone()?;
         let theme = cx.theme().clone();
         let (vw, vh) = self.viewport;
-        let width = BUBBLE_W.min(vw - 16.);
+        let width = bubble_w().min(vw - 16.);
         // Beside her, on the side with room; over her on very narrow windows.
         let right_room = vw - (o.x + w);
         let left = if o.x >= width + 12. && (o.x + w / 2. > vw / 2. || right_room < width + 12.) {
@@ -456,7 +463,7 @@ impl Companion {
         } else {
             (vw - width - 8.).max(8.)
         };
-        let max_h = BUBBLE_MAX_H.min(vh - 56.);
+        let max_h = bubble_max_h().min(vh - 56.);
         let top = (o.y + h * 0.1).min(vh - max_h - 8.).max(48.);
         let recording = self.recording.read(cx).is_recording();
         let scope = self.scope(cx);

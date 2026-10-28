@@ -131,6 +131,13 @@ pub struct Config {
     /// How her bar (figure hidden) shows that a recording runs:
     /// "sparkles" (default), "spinner" or "dot" (the red recording dot).
     pub companion_bar_indicator: String,
+
+    // ── Text size ──
+    /// App-wide text size (1.0 = 100 %), see [`Config::ui_scale`].
+    pub ui_scale: f32,
+    /// Extra size for the transcript and notes (1.0 = 100 %, on top of
+    /// `ui_scale`), see [`Config::transcript_scale`].
+    pub transcript_scale: f32,
 }
 
 /// When Mori looks for live notes during a recording.
@@ -167,6 +174,24 @@ pub const CARD_COLLAPSE_MAX: f32 = 120.;
 /// …and seconds between cards that arrive together.
 pub const CARD_STAGGER_DEFAULT: f32 = 3.5;
 pub const CARD_STAGGER_MAX: f32 = 15.;
+
+/// App-wide text size: allowed range and the steps Ctrl+= / Ctrl+-
+/// go through.
+pub const UI_SCALE_RANGE: (f32, f32) = (0.8, 1.5);
+pub const UI_SCALE_STEPS: &[f32] = &[0.8, 0.9, 1.0, 1.1, 1.15, 1.2, 1.3, 1.4, 1.5];
+/// Transcript text size (on top of the app's).
+pub const TRANSCRIPT_SCALE_RANGE: (f32, f32) = (0.9, 1.5);
+pub const TRANSCRIPT_SCALE_STEPS: &[f32] = &[0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5];
+
+/// The next step up (`up`) or down from `value` in `steps`, or `None` at
+/// the end.
+pub fn scale_step(steps: &[f32], value: f32, up: bool) -> Option<f32> {
+    if up {
+        steps.iter().find(|s| **s > value + 0.001).copied()
+    } else {
+        steps.iter().rev().find(|s| **s < value - 0.001).copied()
+    }
+}
 
 fn clamp_or(v: f32, (lo, hi): (f32, f32), default: f32) -> f32 {
     if v.is_finite() && v > 0. { v.clamp(lo, hi) } else { default }
@@ -266,6 +291,8 @@ impl Default for Config {
             companion_desktop_pos: None,
             companion_hidden: false,
             companion_bar_indicator: "sparkles".into(),
+            ui_scale: 1.0,
+            transcript_scale: 1.0,
         }
     }
 }
@@ -357,6 +384,28 @@ impl Config {
             return Some(CARD_COLLAPSE_DEFAULT);
         }
         (s > 0.).then(|| s.clamp(1., CARD_COLLAPSE_MAX))
+    }
+
+    /// App-wide text size, clamped to [`UI_SCALE_RANGE`] (broken values: 1).
+    pub fn ui_scale(&self) -> f32 {
+        clamp_or(self.ui_scale, UI_SCALE_RANGE, 1.)
+    }
+
+    /// Transcript text size, clamped to [`TRANSCRIPT_SCALE_RANGE`].
+    pub fn transcript_scale(&self) -> f32 {
+        clamp_or(self.transcript_scale, TRANSCRIPT_SCALE_RANGE, 1.)
+    }
+
+    /// Ctrl+= / Ctrl+- : one step bigger or smaller; Ctrl+0 (`None`): back
+    /// to 100 %. Returns whether it changed.
+    pub fn zoom(&mut self, up: Option<bool>) -> bool {
+        let now = self.ui_scale();
+        let next = match up {
+            Some(up) => scale_step(UI_SCALE_STEPS, now, up).unwrap_or(now),
+            None => 1.,
+        };
+        self.ui_scale = next;
+        (next - now).abs() > 0.001
     }
 
     /// Seconds between cards that arrive together.
@@ -524,6 +573,44 @@ pub fn effort_for(conn: &crate::connections::Connection, model: &str, effort: &s
 mod tests {
     use super::*;
     use crate::companion::Character;
+
+    #[test]
+    fn text_scales_default_and_clamp() {
+        let mut c = Config::default();
+        assert_eq!((c.ui_scale(), c.transcript_scale()), (1., 1.));
+        // Older configs without the fields get 100 %.
+        let old: Config = serde_json::from_str(r#"{"theme":"system"}"#).unwrap();
+        assert_eq!((old.ui_scale, old.transcript_scale), (1., 1.));
+        c.ui_scale = 9.;
+        c.transcript_scale = 0.1;
+        assert_eq!((c.ui_scale(), c.transcript_scale()), (1.5, 0.9));
+        for broken in [0., -1., f32::NAN, f32::INFINITY] {
+            c.ui_scale = broken;
+            c.transcript_scale = broken;
+            assert_eq!((c.ui_scale(), c.transcript_scale()), (1., 1.));
+        }
+    }
+
+    #[test]
+    fn zoom_steps_and_resets() {
+        let mut c = Config::default();
+        assert!(c.zoom(Some(true)));
+        assert_eq!(c.ui_scale, 1.1);
+        c.ui_scale = 1.5;
+        assert!(!c.zoom(Some(true)));
+        assert_eq!(c.ui_scale, 1.5);
+        assert!(c.zoom(Some(false)));
+        assert_eq!(c.ui_scale, 1.4);
+        // An odd value in between goes to the next step.
+        c.ui_scale = 1.17;
+        c.zoom(Some(false));
+        assert_eq!(c.ui_scale, 1.15);
+        c.ui_scale = 0.8;
+        assert!(!c.zoom(Some(false)));
+        assert!(c.zoom(None));
+        assert_eq!(c.ui_scale, 1.);
+        assert!(!c.zoom(None));
+    }
 
     #[test]
     fn character_maps_off_and_unknown() {

@@ -98,4 +98,9 @@ pub const EN: &[(&str, &str)] = &[
     ("Chat mit {}", "Chat with {}"),
     ("NOTIZEN VON {}", "NOTES FROM {}"),
     ("CHAT MIT {}", "CHAT WITH {}"),
+    // Imported from text
+    ("Im Transkript zeigen", "Show in the transcript"),
+    ("Aus Text importiert", "Imported from text"),
+    ("Aus Text importiert · ohne Audio und ohne Zeiten", "Imported from text · no audio and no times"),
+    ("Aus Text importiert · ohne Audio", "Imported from text · no audio"),
 ];

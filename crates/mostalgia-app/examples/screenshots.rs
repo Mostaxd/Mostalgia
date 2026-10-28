@@ -84,6 +84,35 @@ fn main() {
             println!("{}", path.display());
         };
 
+        // TEXTIMPORT=<ids>: only "meeting from text" — the dialog, empty and
+        // filled with a Teams-style transcript, then the given imported
+        // meetings (summary, transcript, notes).
+        if let Ok(ids) = std::env::var("TEXTIMPORT") {
+            cx.update_window(handle, |_, window, cx| view.update(cx, |app, cx| app.open_text_import(window, cx))).unwrap();
+            shot("20-text-import-empty", &mut cx);
+            cx.update_window(handle, |_, window, cx| {
+                if let Some(t) = view.read(cx).text_import_view() {
+                    t.update(cx, |t, cx| t.demo("", "2026-10-27 10:00", Some("Q3 launch sync.txt"), TEAMS_SAMPLE, window, cx));
+                }
+            })
+            .unwrap();
+            shot("20b-text-import-filled", &mut cx);
+            for id in ids.split(',').filter_map(|s| s.trim().parse::<i64>().ok()) {
+                cx.update_window(handle, |_, window, cx| view.update(cx, |app, cx| app.open_meeting(id, window, cx))).unwrap();
+                for (tab, name) in [(0, "summary"), (1, "transcript"), (2, "notes")] {
+                    cx.update_window(handle, |_, _, cx| {
+                        if let Some(m) = view.read(cx).meeting_view() {
+                            m.update(cx, |m, cx| m.set_tab(tab, cx));
+                        }
+                    })
+                    .unwrap();
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    shot(&format!("21-imported-{id}-{name}"), &mut cx);
+                }
+            }
+            continue;
+        }
+
         if full {
             shot("1-new-recording", &mut cx);
             // The setup screen with cloud transcription chosen.
@@ -528,3 +557,20 @@ fn main() {
         shot("9-ask", &mut cx);
     }
 }
+
+/// A Teams-style transcript for the "meeting from text" dialog.
+const TEAMS_SAMPLE: &str = "Anna Schmidt   0:03
+Morning, everyone. Let's start with the Q3 launch plan, then pricing.
+
+Ben Müller   0:21
+Sure. Engineering is on track for the beta on September 12th, but the payment integration still needs about two weeks.
+
+Anna Schmidt   0:48
+Two weeks pushes us past the 12th. Can we ship the beta without payments and switch them on later?
+
+Clara Jensen   1:10
+From the marketing side that works, as long as we announce paid plans in the launch post.
+
+Ben Müller   1:32
+Then I'll put payments behind a feature flag.
+";

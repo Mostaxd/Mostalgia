@@ -46,6 +46,13 @@ pub(super) const STACK_EDGE: f32 = 8.;
 const APP_TOP: f32 = super::DEFAULT_TOP - 8.;
 /// Height of the stack's header row (count, Clear, Collapse).
 const HEADER_H: f32 = 30.;
+/// Card width and header height at the app's text size.
+fn card_w() -> f32 {
+    CARD_W * ui::ui_scale()
+}
+fn header_h() -> f32 {
+    HEADER_H * ui::ui_scale()
+}
 /// Characters of transcript sent with a points request (beyond them the
 /// meeting memory takes over, see `companion::memory_due`).
 const POINTS_CONTEXT_CHARS: usize = 24_000;
@@ -537,7 +544,7 @@ impl Companion {
     /// there's more room), on her side, never over her.
     pub(super) fn points_region(&self, o: Point2, (w, h): (f32, f32)) -> Region {
         let (vw, vh) = self.viewport;
-        let width = CARD_W.min(vw - 16.).max(120.);
+        let width = card_w().min(vw - 16.).max(120.);
         let right_side = match &self.desktop {
             Some(p) => p.right,
             None => o.x + w / 2. > vw / 2.,
@@ -782,7 +789,7 @@ impl Companion {
         let header = (self.expanded || visible.len() >= 2).then(|| {
             h_flex()
                 .flex_shrink_0()
-                .h(px(HEADER_H - 4.))
+                .h(px(header_h() - 4.))
                 .gap_1()
                 .pl_2()
                 .pr_0p5()
@@ -812,7 +819,7 @@ impl Companion {
                     })))
                 })
         });
-        let list_max = (r.max_h - if header.is_some() { HEADER_H } else { 0. }).max(48.);
+        let list_max = (r.max_h - if header.is_some() { header_h() } else { 0. }).max(48.);
         let list = v_flex()
             .id("mori-points-list")
             .track_scroll(&self.points_scroll)

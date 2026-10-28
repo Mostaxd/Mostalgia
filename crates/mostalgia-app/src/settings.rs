@@ -662,12 +662,12 @@ impl SettingsView {
             let id_for_click = id.clone();
             v_flex()
                 .id(SharedString::from(format!("theme-{id}")))
-                .w(px(148.))
+                .w(px(148. * ui::ui_scale()))
                 .gap_1p5()
                 .cursor_pointer()
                 .child(
                     h_flex()
-                        .h(px(84.))
+                        .h(px(84. * ui::ui_scale()))
                         .rounded(px(radius.min(10.)))
                         .overflow_hidden()
                         .border_2()
@@ -772,6 +772,95 @@ impl SettingsView {
                 "Eigene Designs: JSON-Dateien in {} (Format wie assets/themes.json).",
                 &[&mostalgia_core::config::Config::path().with_file_name("themes").display()],
             )))
+    }
+}
+
+// ── Textgröße ──
+
+/// Widths of the library sidebar and the category list, for the column count.
+const SIDEBAR_W: f32 = 272.;
+const NAV_W: f32 = 220.;
+
+/// App-wide text size presets: (id, label, scale).
+const TEXT_SIZES: [(&str, &str, f32); 4] =
+    [("text-size-s", "Klein", 0.9), ("text-size-m", "Standard", 1.0), ("text-size-l", "Groß", 1.15), ("text-size-xl", "Sehr groß", 1.3)];
+
+fn percent(scale: f32) -> String {
+    format!("{} %", (scale * 100.).round())
+}
+
+impl SettingsView {
+    /// Ctrl+= / Ctrl+- / Ctrl+0 changed the text size: take it from disk.
+    pub fn reload_text_scale(&mut self, cx: &mut Context<Self>) {
+        self.config.ui_scale = Config::load().ui_scale;
+        cx.notify();
+    }
+
+    fn set_text_scale(&mut self, transcript: bool, value: f32, window: &mut Window, cx: &mut Context<Self>) {
+        if transcript {
+            self.config.transcript_scale = value;
+        } else {
+            self.config.ui_scale = value;
+        }
+        self.save(cx);
+        ui::apply_theme(window, cx);
+    }
+
+    /// − 115 % + through `steps`.
+    fn scale_stepper(&self, id: &'static str, transcript: bool, value: f32, steps: &'static [f32], cx: &mut Context<Self>) -> AnyElement {
+        use mostalgia_core::config::scale_step;
+        let button = |suffix: &str, icon: IconName, up: bool, cx: &mut Context<Self>| {
+            let to = scale_step(steps, value, up);
+            Button::new(SharedString::from(format!("{id}-{suffix}")))
+                .small()
+                .outline()
+                .icon(icon)
+                .disabled(to.is_none())
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if let Some(v) = to {
+                        this.set_text_scale(transcript, v, window, cx);
+                    }
+                }))
+        };
+        h_flex()
+            .gap_1()
+            .child(button("less", IconName::Minus, false, cx))
+            .child(div().min_w(rems(4.5)).text_center().text_sm().font_medium().child(percent(value)))
+            .child(button("more", IconName::Plus, true, cx))
+            .into_any_element()
+    }
+
+    fn render_text_size(&mut self, cx: &mut Context<Self>) -> Div {
+        use mostalgia_core::config::{TRANSCRIPT_SCALE_STEPS, UI_SCALE_STEPS};
+        let theme = cx.theme().clone();
+        let row = |label: &str, hint: Option<&str>, control: AnyElement| settings_row(label, hint, control, &theme);
+        let scale = self.config.ui_scale();
+        let presets: Vec<AnyElement> = TEXT_SIZES
+            .iter()
+            .map(|&(id, label, value)| {
+                let selected = (scale - value).abs() < 0.01;
+                Button::new(id)
+                    .small()
+                    .label(tr(label))
+                    .when(selected, |b| b.primary())
+                    .when(!selected, |b| b.ghost())
+                    .on_click(cx.listener(move |this, _, window, cx| this.set_text_scale(false, value, window, cx)))
+                    .into_any_element()
+            })
+            .collect();
+        ui::card(cx)
+            .child(div().font_semibold().child(tr("Textgröße")))
+            .child(row(
+                tr("Textgröße der App"),
+                Some(tr("Gilt überall, auch für die Begleiterin. Tastenkürzel: Strg + = größer, Strg + − kleiner, Strg + 0 zurücksetzen.")),
+                h_flex().flex_wrap().gap_1().children(presets).into_any_element(),
+            ))
+            .child(row(tr("Feiner einstellen"), None, self.scale_stepper("ui-scale", false, scale, UI_SCALE_STEPS, cx)))
+            .child(row(
+                tr("Transkript und Notizen"),
+                Some(tr("Live-Transkript, Transkript, Zusammenfassung und Notizen einer Besprechung – zusätzlich zur Textgröße der App.")),
+                self.scale_stepper("transcript-scale", true, self.config.transcript_scale(), TRANSCRIPT_SCALE_STEPS, cx),
+            ))
     }
 }
 
@@ -889,7 +978,7 @@ impl SettingsView {
         let tile = |id: String, selected: bool, picture: AnyElement, name: String, tagline: String, choice: Option<Character>, cx: &mut Context<Self>| {
             v_flex()
                 .id(SharedString::from(id))
-                .w(px(150.))
+                .w(px(150. * ui::ui_scale()))
                 .p_2()
                 .gap_1()
                 .rounded(theme.radius_lg)
@@ -2694,6 +2783,13 @@ impl Render for SettingsView {
             wide: true,
             element: self.render_themes(cx).into_any_element(),
         });
+        cards.push(Card {
+            category: Category::Darstellung,
+            title: "Textgröße",
+            keywords: "textgröße schriftgröße größer kleiner zoom skalierung transkript lesbarkeit text size font size bigger smaller scale zoom transcript readability accessibility",
+            wide: false,
+            element: self.render_text_size(cx).into_any_element(),
+        });
 
         // ── Begleiterin ──
         cards.push(Card {
@@ -2880,19 +2976,26 @@ impl Render for SettingsView {
             })
             .collect();
         let empty = visible.is_empty();
+        // Two columns when both fit at the text size, else one (with large
+        // text a fixed minimum width would push cards out of the window).
+        let card_min = 290. * ui::ui_scale();
+        let content_w = f32::from(window.viewport_size().width) - SIDEBAR_W - NAV_W - f32::from(window.rem_size()) * 4.;
+        let two_columns = content_w >= 2. * card_min + 16.;
         let grid = h_flex().w_full().flex_wrap().items_start().gap_4().children(visible.into_iter().map(|c| {
             let caption = searching.then(|| c.category.title());
             v_flex()
                 .gap_1()
                 .when(c.wide, |el| el.w_full())
                 // Two columns when there's room, one on narrow windows.
-                .when(!c.wide, |el| el.flex_1().min_w(px(290.)))
+                .when(!c.wide && two_columns, |el| el.flex_1().min_w(px(card_min)))
+                .when(!c.wide && !two_columns, |el| el.w_full())
                 .when_some(caption, |el, cap| el.child(ui::section_title(cap.to_uppercase(), cx)))
                 .child(c.element)
         }));
 
+        // Long category names are cut off with large text.
         let nav = v_flex()
-            .w(px(220.))
+            .w(px(NAV_W))
             .flex_none()
             .h_full()
             .p_3()
@@ -2914,7 +3017,7 @@ impl Render for SettingsView {
                     .when(active, |el| el.bg(theme.primary.opacity(0.12)).text_color(theme.primary).font_medium())
                     .when(!active, |el| el.hover(|s| s.bg(theme.muted)))
                     .child(Icon::new(cat.icon()).small())
-                    .child(cat.title())
+                    .child(div().min_w_0().truncate().child(cat.title()))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.search.update(cx, |s, cx| s.set_value("", window, cx));
                         this.query.clear();

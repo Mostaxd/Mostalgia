@@ -31,6 +31,19 @@ pub(super) const GROWN_MIN_H: f32 = 580.;
 pub(super) const CARDS_H: f32 = 300.;
 /// The most room the cards' list takes above or below her (it scrolls).
 pub(super) const CARDS_MAX_H: f32 = 560.;
+/// The sizes above at the app's text size (the bubble and cards grow with it).
+fn side_w() -> f32 {
+    SIDE_W * ui::ui_scale()
+}
+fn grown_min_h() -> f32 {
+    GROWN_MIN_H * ui::ui_scale()
+}
+fn cards_h() -> f32 {
+    CARDS_H * ui::ui_scale()
+}
+fn cards_max_h() -> f32 {
+    CARDS_MAX_H * ui::ui_scale()
+}
 /// The least room it gets, however close she is to the screen edge.
 const CARDS_MIN_H: f32 = 140.;
 
@@ -69,9 +82,9 @@ impl Placement {
     /// Room (logical px) for the cards' stack above her (`bottom`) or
     /// below her, up to her monitor's work area edge.
     pub fn cards_room(&self, (_, h): (f32, f32)) -> f32 {
-        let Some(m) = self.work else { return CARDS_H };
+        let Some(m) = self.work else { return cards_h() };
         let space = if self.bottom { self.mori.1 - m.y } else { m.y + m.h - (self.mori.1 + self.px(h)) };
-        (space as f32 / self.scale - super::points::STACK_GAP - super::points::STACK_EDGE).clamp(CARDS_MIN_H, CARDS_MAX_H)
+        (space as f32 / self.scale - super::points::STACK_GAP - super::points::STACK_EDGE).clamp(CARDS_MIN_H, cards_max_h())
     }
 
     /// The window size and her top-left in it (logical px), small or grown.
@@ -82,7 +95,7 @@ impl Placement {
             return ((w + 2. * PAD, h + 2. * PAD), (PAD, PAD));
         }
         let cards = PAD + h + super::points::STACK_GAP + self.cards_room((w, h)) + super::points::STACK_EDGE;
-        let size = (w + 2. * PAD + SIDE_W, cards.max(GROWN_MIN_H));
+        let size = (w + 2. * PAD + side_w(), cards.max(grown_min_h()));
         let ox = if self.right { size.0 - w - PAD } else { PAD };
         let oy = if self.bottom { size.1 - h - PAD } else { PAD };
         (size, (ox, oy))

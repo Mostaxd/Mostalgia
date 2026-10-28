@@ -8,6 +8,7 @@ pub mod control;
 pub mod meeting;
 pub mod recording;
 pub mod settings;
+pub mod text_import;
 pub mod themes;
 pub mod ui;
 

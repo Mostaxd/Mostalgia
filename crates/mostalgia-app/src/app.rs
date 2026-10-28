@@ -20,13 +20,15 @@ use crate::recording::{RecordingEvent, RecordingView, SharedEngine};
 use crate::settings::{SettingsEvent, SettingsView};
 use crate::{control, ui};
 
-actions!(mostalgia, [OpenAsk]);
+actions!(mostalgia, [OpenAsk, ZoomIn, ZoomOut, ZoomReset]);
 
 enum Screen {
     Recording,
     Ask(Entity<crate::ask_view::AskView>),
     Meeting(Entity<MeetingView>),
     Settings(Entity<SettingsView>),
+    /// "Besprechung aus Text" (a meeting that wasn't recorded).
+    TextImport(Entity<crate::text_import::TextImportView>),
 }
 
 pub struct MostalgiaApp {
@@ -533,6 +535,34 @@ impl MostalgiaApp {
         cx.notify();
     }
 
+    /// The "meeting from text" screen.
+    pub fn open_text_import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::text_import::{TextImportEvent, TextImportView};
+        let view = cx.new(|cx| TextImportView::new(window, cx));
+        let sub = cx.subscribe_in(&view, window, |this, _, event: &TextImportEvent, window, cx| match event {
+            TextImportEvent::Imported { meeting_id, keep_title, focus, style } => {
+                this.reload(cx);
+                this.open_meeting(*meeting_id, window, cx);
+                if let Some(m) = this.meeting_view() {
+                    let (keep_title, focus, style) = (*keep_title, focus.clone(), *style);
+                    m.update(cx, |m, cx| m.after_text_import(keep_title, focus, style, cx));
+                }
+            }
+            TextImportEvent::Cancel => this.show_recording(cx),
+        });
+        self._subscriptions.push(sub);
+        self.screen = Screen::TextImport(view);
+        cx.notify();
+    }
+
+    #[doc(hidden)]
+    pub fn text_import_view(&self) -> Option<Entity<crate::text_import::TextImportView>> {
+        match &self.screen {
+            Screen::TextImport(v) => Some(v.clone()),
+            _ => None,
+        }
+    }
+
     pub fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let gpu = self
             .engine
@@ -571,6 +601,34 @@ impl MostalgiaApp {
     }
 
     #[doc(hidden)]
+    /// Ctrl+= / Ctrl+- / Ctrl+0: the app-wide text size one step bigger,
+    /// smaller, or back to 100 % (saved; Mori on the desktop follows).
+    fn zoom(&mut self, up: Option<bool>, window: &mut Window, cx: &mut Context<Self>) {
+        let mut config = mostalgia_core::config::Config::load();
+        if !config.zoom(up) {
+            return;
+        }
+        if let Err(e) = config.save() {
+            eprintln!("[mostalgia] saving the text size: {e:#}");
+        }
+        ui::apply_theme(window, cx);
+        if let Some(s) = self.settings_view() {
+            s.update(cx, |s, cx| s.reload_text_scale(cx));
+        }
+        self.mori_host.send(&crate::companion::ipc::ToMori::ReloadConfig);
+        cx.notify();
+    }
+
+    /// The zoom keys while nothing has focus (they reach no view then).
+    pub fn zoom_unfocused(up: Option<bool>, cx: &mut App) {
+        let Some(handle) = cx.active_window().or_else(|| cx.windows().first().copied()) else { return };
+        let _ = handle.update(cx, |root, window, cx| {
+            let Ok(root) = root.downcast::<gpui_kit::component::Root>() else { return };
+            let Ok(app) = root.read(cx).view().clone().downcast::<MostalgiaApp>() else { return };
+            app.update(cx, |a, cx| a.zoom(up, window, cx));
+        });
+    }
+
     pub fn settings_view(&self) -> Option<Entity<SettingsView>> {
         match &self.screen {
             Screen::Settings(v) => Some(v.clone()),
@@ -730,7 +788,8 @@ impl MostalgiaApp {
                 .child(
                     v_flex()
                         .id("delete-dialog")
-                        .w(px(440.))
+                        .w(px(440. * ui::ui_scale()))
+                        .max_w(relative(0.9))
                         .p_5()
                         .gap_3()
                         .rounded(theme.radius_lg)
@@ -740,7 +799,7 @@ impl MostalgiaApp {
                         .shadow_lg()
                         // Clicks inside the dialog don't close it.
                         .on_click(|_, _, cx| cx.stop_propagation())
-                        .child(h_flex().gap_2().child(Icon::new(IconName::Trash).text_color(theme.danger)).child(div().text_lg().font_semibold().child(title)))
+                        .child(h_flex().gap_2().items_start().child(Icon::new(IconName::Trash).flex_none().mt_1().text_color(theme.danger)).child(div().flex_1().min_w_0().text_lg().font_semibold().child(title)))
                         .children(names.into_iter().map(|n| ui::bidi_text(n, false).text_sm().font_medium()))
                         .child(div().text_sm().text_color(theme.muted_foreground).child(tr(
                             "Transkript, Zusammenfassung, Lesezeichen, Sprechernamen und Suchindex werden entfernt. Das lässt sich nicht rückgängig machen.",
@@ -851,7 +910,8 @@ impl MostalgiaApp {
                                 .text_xs()
                                 .text_color(theme.muted_foreground)
                                 .child(format!("{time} · {}", ui::minutes(m.duration_secs)))
-                                .when(m.has_summary, |el| el.child(Icon::new(IconName::Sparkles).xsmall().text_color(theme.primary))),
+                                .when(m.has_summary, |el| el.child(Icon::new(IconName::Sparkles).xsmall().text_color(theme.primary)))
+                                .when(m.text_import, |el| el.child(Icon::new(IconName::FileText).xsmall())),
                         )
                         .on_click(cx.listener(move |this, ev: &ClickEvent, window, cx| this.click_meeting(id, ev.modifiers(), window, cx)))
                         .context_menu({
@@ -941,7 +1001,23 @@ impl MostalgiaApp {
                 v_flex()
                     .p_3()
                     .gap_3()
-                    .child(record_button.when(on_record_screen && !is_recording, |b| b.outline()))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(record_button.flex_1().when(on_record_screen && !is_recording, |b| b.outline()))
+                            .child(
+                                Button::new("from-text")
+                                    .outline()
+                                    .icon(IconName::FileText)
+                                    .when(matches!(self.screen, Screen::TextImport(_)), |b| b.selected(true))
+                                    .tooltip(tr("Besprechung aus Text hinzufügen"))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        if !matches!(this.screen, Screen::TextImport(_)) {
+                                            this.open_text_import(window, cx);
+                                        }
+                                    })),
+                            ),
+                    )
                     .child(
                         Button::new("ask")
                             .w_full()
@@ -1005,6 +1081,7 @@ impl Render for MostalgiaApp {
             Screen::Meeting(v) => v.clone().into(),
             Screen::Settings(v) => v.clone().into(),
             Screen::Ask(v) => v.clone().into(),
+            Screen::TextImport(v) => v.clone().into(),
         };
         let delete_dialog = self.render_delete_dialog(cx);
         let theme = cx.theme();
@@ -1015,6 +1092,9 @@ impl Render for MostalgiaApp {
             .text_color(theme.foreground)
             .font(ui::ui_font(cx))
             .on_action(cx.listener(|this, _: &OpenAsk, window, cx| this.open_ask(window, cx)))
+            .on_action(cx.listener(|this, _: &ZoomIn, window, cx| this.zoom(Some(true), window, cx)))
+            .on_action(cx.listener(|this, _: &ZoomOut, window, cx| this.zoom(Some(false), window, cx)))
+            .on_action(cx.listener(|this, _: &ZoomReset, window, cx| this.zoom(None, window, cx)))
             .child(
                 TitleBar::new().child(
                     h_flex()

@@ -110,6 +110,11 @@ pub struct MeetingView {
     /// Earlier sets of notes a regenerate replaced.
     note_versions: Vec<mostalgia_core::store::NoteVersion>,
     versions_open: bool,
+    /// Imported from text with a title of its own: the summary keeps it.
+    keep_title: bool,
+    /// Notes to write once the summary is done (after a text import):
+    /// focus and style.
+    pending_notes: Option<(String, companion::NoteStyle)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -144,6 +149,8 @@ impl MeetingView {
             notes_focus: None,
             note_versions: Vec::new(),
             versions_open: false,
+            keep_title: false,
+            pending_notes: None,
             _subscriptions: Vec::new(),
         };
         this.reload(cx);
@@ -200,6 +207,25 @@ impl MeetingView {
         cx.notify();
     }
 
+    /// Just imported from text: the summary (if that's on, keeping a title
+    /// the user gave), then the notes with the dialog's focus and style.
+    pub fn after_text_import(&mut self, keep_title: bool, focus: String, style: companion::NoteStyle, cx: &mut Context<Self>) {
+        self.keep_title = keep_title;
+        let config = Config::load();
+        let notes_ready = config.notes_request().is_ok_and(|r| r.connection.is_configured());
+        let summary_ready = config.auto_summary && config.summary_connection().is_ok_and(|c| c.is_configured());
+        if summary_ready && self.meeting.as_ref().is_some_and(|m| m.summary.is_none() && !m.segments.is_empty()) {
+            self.pending_notes = notes_ready.then_some((focus, style));
+            self.summarize(cx);
+        } else if notes_ready {
+            self.tab = 2;
+            self.run_regenerate(focus, style, cx);
+        } else {
+            self.tab = 1;
+            cx.notify();
+        }
+    }
+
     /// Writes the notes again from the saved transcript (see
     /// `companion::regenerate_notes`), in the background.
     fn start_regenerate(&mut self, cx: &mut Context<Self>) {
@@ -208,8 +234,16 @@ impl MeetingView {
         }
         let Some(input) = self.regen_panel.take() else { return };
         let focus = input.read(cx).value().trim().to_string();
-        self.regen_focus = Some(focus.clone());
         let style = self.regen_style.unwrap_or_else(|| Config::load().notes_style());
+        self.run_regenerate(focus, style, cx);
+    }
+
+    fn run_regenerate(&mut self, focus: String, style: companion::NoteStyle, cx: &mut Context<Self>) {
+        if self.regenerating.is_some() {
+            return;
+        }
+        self.regen_panel = None;
+        self.regen_focus = Some(focus.clone());
         self.regen_style = Some(style);
         let req = match Config::load().notes_request().and_then(|req| req.connection.require_key().map(|_| req)) {
             Ok(req) => req,
@@ -357,12 +391,13 @@ impl MeetingView {
         cx.notify();
         let id = self.id;
         let provider = req.connection.name.clone();
+        let keep_title = self.keep_title;
         let task = cx.background_spawn(async move {
             let store = Store::open(&paths::database())?;
             let meeting = store.get(id)?.ok_or_else(|| anyhow::anyhow!(tr("Besprechung nicht gefunden")))?;
             let s = summary::summarize(&req, &meeting)?;
             store.save_summary(id, &s.provider, &s.model, s.effort.as_deref(), &s.markdown)?;
-            if let Some(title) = &s.title {
+            if let Some(title) = s.title.as_ref().filter(|_| !keep_title) {
                 store.set_title(id, title)?;
             }
             // Summary sections become searchable too.
@@ -380,6 +415,9 @@ impl MeetingView {
                 }
                 this.reload(cx);
                 cx.emit(MeetingEvent::Changed);
+                if let Some((focus, style)) = this.pending_notes.take() {
+                    this.run_regenerate(focus, style, cx);
+                }
             })
             .ok();
         })
@@ -616,7 +654,8 @@ impl MeetingView {
                 .child(
                     v_flex()
                         .id("retranscribe-dialog")
-                        .w(px(480.))
+                        .w(px(480. * ui::ui_scale()))
+                        .max_w(relative(0.9))
                         .max_h(relative(0.9))
                         .p_5()
                         .gap_3()
@@ -700,6 +739,10 @@ impl MeetingView {
 
     fn play_from(&mut self, secs: f64, cx: &mut Context<Self>) {
         let Some(m) = &self.meeting else { return };
+        // Imported from text: nothing to play (jumps only show the line).
+        if m.is_text_import() {
+            return;
+        }
         let tracks: Vec<_> = m.tracks().into_iter().map(|(_, p)| p).collect();
         self.player = None;
         match Player::play(&tracks, secs) {
@@ -846,7 +889,7 @@ impl MeetingView {
         let title: AnyElement = match &self.edit {
             Some(Edit::Title(input)) => h_flex()
                 .gap_2()
-                .child(Input::new(input).w(px(420.)))
+                .child(Input::new(input).w(px(420. * ui::ui_scale())).max_w_full())
                 .child(Button::new("title-save").small().primary().label(tr("Speichern")).on_click(cx.listener(|this, _, _, cx| this.commit_edit(cx))))
                 .child(Button::new("title-cancel").small().ghost().label(tr("Abbrechen")).on_click(cx.listener(|this, _, _, cx| this.cancel_edit(cx))))
                 .into_any_element(),
@@ -893,20 +936,26 @@ impl MeetingView {
             .pb_4()
             .gap_4()
             .items_start()
+            // With large text in a narrow window the buttons go below.
+            .flex_wrap()
             .child(
                 v_flex()
                     .flex_1()
-                    .min_w_0()
+                    .min_w(rems(16.))
                     .gap_1()
                     .child(title)
                     .child(
                         h_flex()
-                            .gap_3()
+                            .flex_wrap()
+                            .gap_x_3()
                             .text_sm()
                             .text_color(theme.muted_foreground)
                             .child(h_flex().gap_1().child(Icon::new(IconName::Calendar).xsmall()).child(i18n::date_time(&m.started_at)))
                             .child(h_flex().gap_1().child(Icon::new(IconName::Clock).xsmall()).child(ui::minutes(m.duration_secs)))
-                            .child(h_flex().gap_1().child(Icon::new(IconName::Users).xsmall()).child(trf("{} Sprecher", &[&speakers.len()]))),
+                            .when(!(m.is_text_import() && m.segments.iter().all(|s| s.speaker.is_none())), |el| {
+                                el.child(h_flex().gap_1().child(Icon::new(IconName::Users).xsmall()).child(trf("{} Sprecher", &[&speakers.len()])))
+                            })
+                            .when(m.is_text_import(), |el| el.child(h_flex().gap_1().child(Icon::new(IconName::FileText).xsmall()).child(tr("Aus Text importiert")))),
                     ),
             )
             .child(
@@ -936,7 +985,7 @@ impl MeetingView {
                                 .on_click(cx.listener(|this, _, _, cx| this.stop_playback(cx))),
                         )
                     })
-                    .when(self.player.is_none(), |el| {
+                    .when(self.player.is_none() && !m.is_text_import(), |el| {
                         el.child(
                             Button::new("play")
                                 .icon(IconName::Play)
@@ -946,7 +995,7 @@ impl MeetingView {
                                 .on_click(cx.listener(|this, _, _, cx| this.play_from(0.0, cx))),
                         )
                     })
-                    .child({
+                    .when(!m.is_text_import(), |el| el.child({
                         let has_audio = !m.tracks().is_empty();
                         Button::new("retranscribe")
                             .small()
@@ -955,7 +1004,7 @@ impl MeetingView {
                             .tooltip(if has_audio { tr("Erneut transkribieren") } else { tr("Audiodateien gelöscht") })
                             .disabled(!has_audio || self.retranscribing.is_some())
                             .on_click(cx.listener(|this, _, _, cx| this.open_retranscribe(cx)))
-                    })
+                    }))
                     .child(
                         Button::new("delete")
                             .small()
@@ -1321,6 +1370,7 @@ impl MeetingView {
     fn render_notes(&mut self, m: &Meeting, cx: &mut Context<Self>) -> AnyElement {
         use mostalgia_core::companion::PointKind;
         let theme = cx.theme().clone();
+        let (imported, untimed) = (m.is_text_import(), m.is_untimed());
         let row = |n: &mostalgia_core::store::Note, cx: &mut Context<Self>| {
             let (id, at, pinned) = (n.id, n.at_secs, n.pinned);
             let kind = PointKind::parse(&n.kind);
@@ -1340,31 +1390,33 @@ impl MeetingView {
                 .rounded(theme.radius)
                 .cursor_pointer()
                 .hover(|s| s.bg(theme.muted))
-                .child(
-                    div()
-                        .w(px(52.))
-                        .flex_none()
-                        .pt_0p5()
-                        .text_xs()
-                        .text_color(theme.primary)
-                        .font_family(theme.mono_font_family.clone())
-                        .child(ui::hms(at)),
-                )
+                .when(!untimed, |el| {
+                    el.child(
+                        div()
+                            .w(ui::transcript_rems(3.75))
+                            .flex_none()
+                            .pt_0p5()
+                            .text_size(ui::transcript_rems(0.75))
+                            .text_color(theme.primary)
+                            .font_family(theme.mono_font_family.clone())
+                            .child(ui::hms(at)),
+                    )
+                })
                 .when(!self.notes_grouped, |el| {
                     el.child(
                         h_flex()
                             .flex_none()
-                            .w(px(120.))
+                            .w(ui::transcript_rems(8.5))
                             .pt_0p5()
                             .gap_1p5()
-                            .text_xs()
+                            .text_size(ui::transcript_rems(0.75))
                             .font_semibold()
                             .text_color(color)
                             .child(div().size(px(6.)).rounded_full().bg(color))
                             .child(kind.map_or(n.kind.clone(), |k| k.label().to_string())),
                     )
                 })
-                .child(ui::bidi_text(n.text.clone(), true).flex_1().min_w_0().text_sm())
+                .child(ui::bidi_text(n.text.clone(), true).flex_1().min_w_0().text_size(ui::transcript_rems(0.875)))
                 .child(
                     Button::new(("mori-note-pin", id as usize))
                         .xsmall()
@@ -1399,7 +1451,9 @@ impl MeetingView {
                             }
                         })),
                 )
-                .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr("Ab hier abspielen")).build(window, cx))
+                .tooltip(move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(if imported { tr("Im Transkript zeigen") } else { tr("Ab hier abspielen") }).build(window, cx)
+                })
                 .on_click(cx.listener(move |this, _, _, cx| this.jump_to(at, cx)))
                 .into_any_element()
         };
@@ -1447,11 +1501,11 @@ impl MeetingView {
         match &m.summary {
             Some(s) => v_flex()
                 .gap_4()
-                .child(if ui::is_rtl(&s.markdown) {
+                .child(div().text_size(ui::transcript_rems(1.)).child(if ui::is_rtl(&s.markdown) {
                     ui::rtl_markdown(&summary_body(&s.markdown), cx).into_any_element()
                 } else {
                     TextView::markdown("summary", summary_body(&s.markdown)).selectable(true).into_any_element()
-                })
+                }))
                 .child(
                     h_flex()
                         .gap_3()
@@ -1505,12 +1559,20 @@ impl MeetingView {
     fn render_transcript(&mut self, m: &Meeting, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let has_audio = !m.tracks().is_empty();
+        let (imported, untimed) = (m.is_text_import(), m.is_untimed());
         let engine_line = h_flex()
             .mb_3()
             .gap_2()
             .text_xs()
             .text_color(theme.muted_foreground)
-            .when_some(m.transcript_engine.clone(), |el, engine| {
+            .when(imported, |el| {
+                el.child(Icon::new(IconName::FileText).xsmall()).child(if untimed {
+                    tr("Aus Text importiert · ohne Audio und ohne Zeiten")
+                } else {
+                    tr("Aus Text importiert · ohne Audio")
+                })
+            })
+            .when_some(m.transcript_engine.clone().filter(|_| !imported), |el, engine| {
                 el.child(Icon::new(if engine.contains("Whisper") { IconName::Cpu } else { IconName::Globe }).xsmall())
                     .child(div().min_w_0().child(if m.transcript_error.is_some() {
                         engine
@@ -1519,7 +1581,7 @@ impl MeetingView {
                     }))
             })
             .child(div().flex_1())
-            .child(
+            .when(!imported, |el| el.child(
                 Button::new("retranscribe-tab")
                     .xsmall()
                     .ghost()
@@ -1528,7 +1590,7 @@ impl MeetingView {
                     .disabled(!has_audio || self.retranscribing.is_some())
                     .when(!has_audio, |b| b.tooltip(tr("Audiodateien gelöscht")))
                     .on_click(cx.listener(|this, _, _, cx| this.open_retranscribe(cx))),
-            );
+            ));
         if m.segments.is_empty() {
             return v_flex()
                 .child(engine_line)
@@ -1582,7 +1644,8 @@ impl MeetingView {
                 _ => div()
                     .flex_1()
                     .min_w_0()
-                    .line_height(rems(1.55))
+                    .text_size(ui::transcript_rems(1.))
+                    .line_height(ui::transcript_rems(1.55))
                     .child(ui::bidi_text(seg.text.clone(), true))
                     .into_any_element(),
             };
@@ -1624,21 +1687,21 @@ impl MeetingView {
                     .rounded(theme.radius)
                     .when(playing, |el| el.bg(theme.primary.opacity(0.08)))
                     .hover(|s| s.bg(theme.muted.opacity(0.5)))
-                    .child(
+                    .when(!untimed, |el| el.child(
                         div()
                             .id(("ts", ix))
-                            .w(px(52.))
+                            .w(ui::transcript_rems(3.75))
                             .flex_none()
                             .pt_0p5()
-                            .text_xs()
+                            .text_size(ui::transcript_rems(0.75))
                             .font_family(theme.mono_font_family.clone())
                             .text_color(if playing { theme.primary } else { theme.muted_foreground })
                             .cursor_pointer()
                             .hover(|s| s.text_color(theme.primary))
                             .child(ui::hms(start))
-                            .on_click(cx.listener(move |this, _, _, cx| this.play_from(start, cx))),
-                    )
-                    .child(
+                            .on_click(cx.listener(move |this, _, _, cx| this.play_from(start, cx)))
+                    ))
+                    .when(!(imported && seg.speaker.is_none()), |el| el.child(
                         div()
                             .id(("spk", ix))
                             .cursor_pointer()
@@ -1648,8 +1711,8 @@ impl MeetingView {
                                 let current = label.clone();
                                 let value = if current == "Ich" || current == "Andere" { String::new() } else { current.clone() };
                                 this.begin_edit(move |input| Edit::Speaker(current, input), value, window, cx);
-                            })),
-                    )
+                            }))
+                    ))
                     .child(body)
                     .when(!editing, |el| {
                         el.child(
@@ -1759,6 +1822,9 @@ impl Render for MeetingView {
         let header = self.render_header(&m, cx);
         let status = self.render_transcript_status(&m, cx);
         let dialog = self.render_retranscribe_dialog(cx);
+        if m.is_text_import() && self.tab > 2 {
+            self.tab = 1;
+        }
         let body = match self.tab {
             0 => self.render_summary(&m, cx),
             1 => self.render_transcript(&m, cx),
@@ -1767,6 +1833,8 @@ impl Render for MeetingView {
         };
         let note_count = m.notes.len();
         let lines = m.segments.len();
+        // No audio tab for a meeting imported from text.
+        let imported = m.is_text_import();
         self.meeting = Some(m);
         let theme = cx.theme();
 
@@ -1793,7 +1861,7 @@ impl Render for MeetingView {
                         } else {
                             tr("Notizen").to_string()
                         }))
-                        .child(Tab::new().prefix(Icon::new(IconName::AudioLines).small()).label(tr("Audio"))),
+                        .when(!imported, |bar| bar.child(Tab::new().prefix(Icon::new(IconName::AudioLines).small()).label(tr("Audio")))),
                 ),
             )
             .when_some(self.notice.clone(), |el, note| {

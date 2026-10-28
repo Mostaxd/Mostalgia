@@ -24,6 +24,19 @@ pub(super) const BAR_W: f32 = 264.;
 pub(super) const BAR_H: f32 = 40.;
 const MENU_W: f32 = 210.;
 const MENU_ITEM_H: f32 = 30.;
+/// The sizes above at the app's text size (they hold text).
+pub(super) fn bar_w() -> f32 {
+    BAR_W * ui::ui_scale()
+}
+pub(super) fn bar_h() -> f32 {
+    BAR_H * ui::ui_scale()
+}
+fn menu_w() -> f32 {
+    MENU_W * ui::ui_scale()
+}
+fn menu_item_h() -> f32 {
+    MENU_ITEM_H * ui::ui_scale()
+}
 /// A start that never answered (the app is gone) stops spinning after this.
 const START_TIMEOUT: Duration = Duration::from_secs(180);
 
@@ -241,10 +254,10 @@ impl Companion {
     pub(super) fn menu_rect(&self, o: Point2) -> Option<(f32, f32, f32, f32)> {
         let (dx, dy) = self.ctl.menu?;
         let (vw, vh) = self.viewport;
-        let h = self.menu_items() as f32 * MENU_ITEM_H + 10.;
-        let x = (o.x + dx).min(vw - MENU_W - 4.).max(4.);
+        let h = self.menu_items() as f32 * menu_item_h() + 10.;
+        let x = (o.x + dx).min(vw - menu_w() - 4.).max(4.);
         let y = (o.y + dy).min(vh - h - 4.).max(4.);
-        Some((x, y, MENU_W, h))
+        Some((x, y, menu_w(), h))
     }
 
     pub(super) fn render_menu(&mut self, o: Point2, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -253,7 +266,7 @@ impl Companion {
         let item = |id: &'static str, icon: IconName, label: String, cx: &mut Context<Self>, act: fn(&mut Companion, &mut Context<Companion>)| {
             h_flex()
                 .id(id)
-                .h(px(MENU_ITEM_H))
+                .h(px(menu_item_h()))
                 .px_2()
                 .gap_2()
                 .rounded(theme.radius)
@@ -755,8 +768,8 @@ impl Companion {
             .absolute()
             .left(px(o.x))
             .top(px(o.y))
-            .w(px(BAR_W))
-            .h(px(BAR_H))
+            .w(px(bar_w()))
+            .h(px(bar_h()))
             .pl_2()
             .pr_1()
             .gap_1()
@@ -802,7 +815,7 @@ impl Companion {
                     .icon(IconName::Ellipsis)
                     .tooltip(tr("Menü"))
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.ctl.menu = if this.ctl.menu.is_some() { None } else { Some((BAR_W - MENU_W, BAR_H + 4.)) };
+                        this.ctl.menu = if this.ctl.menu.is_some() { None } else { Some((bar_w() - menu_w(), bar_h() + 4.)) };
                         this.ctl.choice = None;
                         cx.notify();
                     }))

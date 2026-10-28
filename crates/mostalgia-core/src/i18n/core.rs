@@ -90,4 +90,14 @@ pub const EN: &[(&str, &str)] = &[
     ("Werkzeugfehler: {}", "Tool error: {}"),
     ("Modelle für die Sprechertrennung fehlen — scripts/download-model.sh ausführen", "Speaker separation models are missing — run scripts/download-model.sh"),
     ("ohne Sprechertrennung gebaut (Feature `diarization`)", "built without speaker separation (`diarization` feature)"),
+    // Text import (core)
+    ("Fließtext", "Plain text"),
+    ("Zeilen mit Sprechern", "Lines with speakers"),
+    ("Transkript mit Zeitstempeln", "Transcript with timestamps"),
+    ("WebVTT-Untertitel", "WebVTT subtitles"),
+    ("SRT-Untertitel", "SRT subtitles"),
+    ("Word- und andere Office-Dateien werden nicht unterstützt — öffne die Datei und füge den Text ein.", "Word and other Office files aren't supported — open the file and paste its text."),
+    ("PDF-Dateien werden nicht unterstützt — kopiere den Text heraus und füge ihn ein.", "PDF files aren't supported — copy the text out and paste it."),
+    ("Im Text steht nichts, woraus sich eine Besprechung machen ließe.", "There's nothing in the text to make a meeting from."),
+    ("Diese Besprechung wurde aus Text importiert – es gibt kein Audio zum Transkribieren.", "This meeting was imported from text — there's no audio to transcribe."),
 ];

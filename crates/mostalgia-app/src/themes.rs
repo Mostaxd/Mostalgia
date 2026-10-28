@@ -166,7 +166,11 @@ pub fn apply(spec: &ThemeSpec, cx: &mut App) {
     Theme::update(cx, |t| {
         t.font_family = spec.font.clone().into();
         t.mono_font_family = spec.mono_font.clone().into();
-        t.font_size = px(spec.font_size);
+        // The rem size: everything sized in rems (text, most spacing)
+        // follows the app-wide text size.
+        let scale = crate::ui::ui_scale();
+        t.font_size = px(spec.font_size * scale);
+        t.mono_font_size = px(13. * scale);
         t.radius = px(spec.radius);
         t.radius_lg = px(spec.radius * 1.5);
         t.shadow = spec.radius > 0.;

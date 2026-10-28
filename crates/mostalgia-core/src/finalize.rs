@@ -271,6 +271,7 @@ pub fn retranscribe(meeting_id: i64, engine: &mut Engine, opts: &FinalPassOption
     use crate::i18n::tr;
     let mut store = crate::store::Store::open(&crate::paths::database())?;
     let meeting = store.get(meeting_id)?.context(tr("Besprechung nicht gefunden"))?;
+    anyhow::ensure!(!meeting.is_text_import(), "{}", tr("Diese Besprechung wurde aus Text importiert – es gibt kein Audio zum Transkribieren."));
     let tracks = meeting.tracks();
     anyhow::ensure!(!tracks.is_empty(), "{}", tr("Die Audiodateien dieser Besprechung gibt es nicht mehr"));
     let mut notes = Vec::new();

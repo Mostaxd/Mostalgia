@@ -883,7 +883,8 @@ impl RecordingView {
             .p_8()
             .child(
                 v_flex()
-                    .w(px(460.))
+                    .w(px(460. * ui::ui_scale()))
+                    .max_w_full()
                     .gap_5()
                     .child(
                         v_flex()
@@ -1084,16 +1085,16 @@ impl RecordingView {
                     .py_1p5()
                     .child(
                         div()
-                            .w(px(52.))
+                            .w(ui::transcript_rems(3.75))
                             .flex_none()
                             .pt_0p5()
-                            .text_xs()
+                            .text_size(ui::transcript_rems(0.75))
                             .text_color(theme.muted_foreground)
                             .font_family(theme.mono_font_family.clone())
                             .child(ui::hms(line.start_secs)),
                     )
                     .when(speaker_labels, |el| el.child(ui::speaker_chip(label, cx)))
-                    .child(ui::bidi_text(line.text.clone(), true).flex_1().min_w_0().line_height(rems(1.5)));
+                    .child(ui::bidi_text(line.text.clone(), true).flex_1().min_w_0().text_size(ui::transcript_rems(1.)).line_height(ui::transcript_rems(1.5)));
             rows.push(if motion { anim::arrive(row, ("line-in", ix), playful) } else { row.into_any_element() });
         }
         for b in marks {
@@ -1110,16 +1111,16 @@ impl RecordingView {
                     .py_1p5()
                     .child(
                         div()
-                            .w(px(52.))
+                            .w(ui::transcript_rems(3.75))
                             .flex_none()
                             .pt_0p5()
-                            .text_xs()
+                            .text_size(ui::transcript_rems(0.75))
                             .text_color(theme.muted_foreground)
                             .font_family(theme.mono_font_family.clone())
                             .child(ui::hms(*start)),
                     )
                     .when(speaker_labels, |el| el.child(ui::speaker_chip(source.speaker_label(), cx)))
-                    .child(div().flex_1().min_w_0().italic().line_height(rems(1.5)).text_color(theme.muted_foreground).child(format!("{text} …")));
+                    .child(div().flex_1().min_w_0().italic().text_size(ui::transcript_rems(1.)).line_height(ui::transcript_rems(1.5)).text_color(theme.muted_foreground).child(format!("{text} …")));
             rows.push(if motion { anim::breathe(row, ("interim-breathe", i)) } else { row.opacity(0.6).into_any_element() });
         }
         let empty = live.lines.is_empty();
