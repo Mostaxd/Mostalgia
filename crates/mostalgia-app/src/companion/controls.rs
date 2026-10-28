@@ -140,6 +140,8 @@ pub(crate) struct ControlsState {
     pub menu: Option<(f32, f32)>,
     /// The elapsed second and sources shown last (re-render when they change).
     elapsed_shown: Option<(u64, [bool; 2])>,
+    /// People in the call picked in the source choice (0 = automatic).
+    pub people: u8,
 }
 
 struct SavedNotes {
@@ -197,7 +199,8 @@ impl Companion {
         self.ctl.error = None;
         self.ctl.starting = Some(Instant::now());
         self.idle_since = Instant::now();
-        cx.emit(MoriEvent::StartRecording { mic, system });
+        let people = std::mem::take(&mut self.ctl.people);
+        cx.emit(MoriEvent::StartRecording { mic, system, people });
         cx.notify();
     }
 
@@ -475,6 +478,23 @@ impl Companion {
             )
     }
 
+    /// How many people are in the call (helps telling the voices on the
+    /// desktop audio apart): automatic, 2, 3, 4, 5 or more.
+    fn people_buttons(&mut self, cx: &mut Context<Self>) -> Div {
+        let picked = self.ctl.people;
+        h_flex().gap_0p5().children(mostalgia_core::diarize::PEOPLE_CHOICES.into_iter().map(|n| {
+            Button::new(SharedString::from(format!("mori-people-{n}")))
+                .xsmall()
+                .label(crate::ui::people_label(n))
+                .when(picked == n, |b| b.primary())
+                .when(picked != n, |b| b.ghost())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.ctl.people = n;
+                    cx.notify();
+                }))
+        }))
+    }
+
     /// The source choice under the bubble's record button.
     pub(super) fn render_choice_popup(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.ctl.choice != Some(ChoiceIn::Bubble) || self.live(cx).is_some() || self.ctl.starting.is_some() {
@@ -504,6 +524,8 @@ impl Companion {
                 }))
                 .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Aufnehmen von:")))
                 .child(buttons)
+                .child(div().pt_1().text_xs().text_color(theme.muted_foreground).child(tr("Personen im Gespräch (mit dir):")))
+                .child(self.people_buttons(cx))
                 .when(self.notes_mode != mostalgia_core::config::NotesMode::Off, |el| {
                     el.child(div().pt_1().text_xs().text_color(theme.muted_foreground).child(trf("Worauf soll {} achten? (optional)", &[&self.name()])))
                         .child(gpui_kit::component::input::Input::new(&self.focus_input).xsmall().w(px(240.)))

@@ -20,6 +20,9 @@ pub struct Config {
     pub record_system: bool,
     /// "de", "en" or "auto".
     pub language: String,
+    /// Languages spoken in the user's meetings (Whisper codes like "de");
+    /// with "auto", detection only chooses among these. Empty = any.
+    pub meeting_languages: Vec<String>,
     /// Whisper model file (`None` = large-v3-turbo in the usual places).
     pub whisper_model: Option<PathBuf>,
     /// Silero speech threshold, 0–1 (lower = more sensitive).
@@ -253,6 +256,7 @@ impl Default for Config {
             record_mic: true,
             record_system: true,
             language: "auto".into(),
+            meeting_languages: Vec::new(),
             whisper_model: None,
             vad_threshold: vad::DEFAULT_THRESHOLD,
             speaker_labels: true,

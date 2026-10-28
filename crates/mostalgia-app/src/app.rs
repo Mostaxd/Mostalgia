@@ -133,7 +133,7 @@ impl MostalgiaApp {
                 }
                 MoriEvent::PopOut => this.set_mori_desktop(true, cx),
                 MoriEvent::BackToApp => this.set_mori_desktop(false, cx),
-                MoriEvent::StartRecording { mic, system } => this.start_recording_with(*mic, *system, cx),
+                MoriEvent::StartRecording { mic, system, people } => this.start_recording_with(*mic, *system, *people, cx),
                 MoriEvent::SetPaused { paused } => {
                     let paused = *paused;
                     this.recording.update(cx, |r, cx| r.set_paused(paused, cx));
@@ -388,7 +388,7 @@ impl MostalgiaApp {
                     self.set_mori_desktop(false, cx);
                     window.activate_window();
                 }
-                FromMori::StartRecording { mic, system } => self.start_recording_with(mic, system, cx),
+                FromMori::StartRecording { mic, system, people } => self.start_recording_with(mic, system, people, cx),
                 FromMori::PauseRecording { paused } => self.recording.update(cx, |r, cx| r.set_paused(paused, cx)),
                 FromMori::StopRecording => self.recording.update(cx, |r, cx| r.stop(cx)),
                 FromMori::SetSource { source, on } => {
@@ -506,10 +506,16 @@ impl MostalgiaApp {
     }
 
     /// Mori's record button: a recording from exactly these sources (the
-    /// setup screen's saved choice stays as it is).
-    fn start_recording_with(&mut self, mic: bool, system: bool, cx: &mut Context<Self>) {
+    /// setup screen's saved choice stays as it is), with the people in the
+    /// call if picked there.
+    fn start_recording_with(&mut self, mic: bool, system: bool, people: u8, cx: &mut Context<Self>) {
         self.screen = Screen::Recording;
-        self.recording.update(cx, |r, cx| r.start_with(mic, system, cx));
+        self.recording.update(cx, |r, cx| {
+            if people != 0 {
+                r.set_people(people, cx);
+            }
+            r.start_with(mic, system, cx)
+        });
         cx.notify();
     }
 

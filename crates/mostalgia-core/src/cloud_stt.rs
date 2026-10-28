@@ -23,6 +23,8 @@ pub struct CloudEngine {
     client: reqwest::blocking::Client,
     /// Seconds of audio per language the service reported (auto mode).
     detected: Vec<(String, f64)>,
+    /// Meeting languages (empty = any); see [`CloudEngine::reported_probs`].
+    allowed: Vec<String>,
 }
 
 impl CloudEngine {
@@ -47,6 +49,7 @@ impl CloudEngine {
             timestamps,
             client: http(300)?,
             detected: Vec::new(),
+            allowed: Vec::new(),
         };
         engine.set_language(language);
         Ok(engine)
@@ -64,21 +67,63 @@ impl CloudEngine {
         self.language = (language != "auto" && !language.is_empty()).then(|| language.to_string());
     }
 
+    pub fn set_meeting_languages(&mut self, languages: &[String]) {
+        self.allowed = languages.to_vec();
+    }
+
+    pub fn is_auto(&self) -> bool {
+        self.language.is_none()
+    }
+
+    /// The services report no probabilities, only the language they heard;
+    /// the share of audio per reported meeting language stands in for them
+    /// (`None` until something was reported).
+    pub fn reported_probs(&self) -> Option<crate::language::Probs> {
+        if !self.is_auto() {
+            return None;
+        }
+        let counts = |only: bool| -> crate::language::Probs {
+            self.detected
+                .iter()
+                .filter(|(c, _)| !only || self.allowed.contains(c))
+                .map(|(c, secs)| (c.clone(), *secs as f32))
+                .collect()
+        };
+        let mut probs = counts(!self.allowed.is_empty());
+        if probs.is_empty() {
+            return None;
+        }
+        let total: f32 = probs.iter().map(|(_, p)| p).sum();
+        for (_, p) in &mut probs {
+            *p /= total;
+        }
+        probs.sort_by(|a, b| b.1.total_cmp(&a.1));
+        Some(probs)
+    }
+
     pub fn transcribe(&mut self, samples: &[f32]) -> Result<Vec<Segment>> {
+        self.transcribe_as(samples, None)
+    }
+
+    /// Transcribes in `language` when set to "auto" (a fixed one wins).
+    /// Always `/audio/transcriptions`, never `/audio/translations`.
+    pub fn transcribe_as(&mut self, samples: &[f32], language: Option<&str>) -> Result<Vec<Segment>> {
+        let language = self.language.clone().or_else(|| language.map(str::to_string));
         if samples.len() < SAMPLE_RATE as usize / 5 {
             return Ok(Vec::new());
         }
         let wav = encode_wav(samples)?;
         let duration = samples.len() as f64 / SAMPLE_RATE as f64;
-        match self.request(&wav, self.timestamps) {
+        match self.request(&wav, self.timestamps, language.as_deref()) {
             Err(e) if self.timestamps && format!("{e:#}").contains("response_format") => {
                 self.timestamps = false;
-                self.request(&wav, false)
+                self.request(&wav, false, language.as_deref())
             }
             other => other,
         }
         .map(|value| {
-            if let Some(code) = value["language"].as_str().and_then(language_code) {
+            let reported = value["language"].as_str().and_then(language_code);
+            if let Some(code) = language.or(reported).filter(|_| self.language.is_none()) {
                 match self.detected.iter_mut().find(|(c, _)| *c == code) {
                     Some((_, total)) => *total += duration,
                     None => self.detected.push((code, duration)),
@@ -96,7 +141,7 @@ impl CloudEngine {
         &self.detected
     }
 
-    fn request(&self, wav: &[u8], verbose: bool) -> Result<Value> {
+    fn request(&self, wav: &[u8], verbose: bool, language: Option<&str>) -> Result<Value> {
         let file = reqwest::blocking::multipart::Part::bytes(wav.to_vec())
             .file_name("audio.wav")
             .mime_str("audio/wav")?;
@@ -105,8 +150,8 @@ impl CloudEngine {
             .text("model", self.model.clone())
             .text("response_format", if verbose { "verbose_json" } else { "json" })
             .text("temperature", "0");
-        if let Some(lang) = &self.language {
-            form = form.text("language", lang.clone());
+        if let Some(lang) = language {
+            form = form.text("language", lang.to_string());
         }
         let mut request = self.client.post(format!("{}/audio/transcriptions", self.conn.base())).multipart(form);
         if let Some(key) = &self.key {

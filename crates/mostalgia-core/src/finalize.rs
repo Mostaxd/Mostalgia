@@ -52,6 +52,9 @@ pub struct FinalPassOptions {
     pub diarize: bool,
     /// Run noise suppression on the mic track first (the WAV stays raw).
     pub denoise_mic: bool,
+    /// People in the call, counting you (a `diarize::PEOPLE_CHOICES`
+    /// value; 0 = let the speaker separation decide).
+    pub people: u8,
 }
 
 /// Each speech region goes to Whisper on its own: given a longer span with
@@ -86,6 +89,18 @@ pub fn final_pass_with_notes(
     opts: &FinalPassOptions,
     notes: &mut Vec<String>,
 ) -> Result<Vec<FinalSegment>> {
+    final_pass_in(engine, tracks, opts, notes, &[None, None])
+}
+
+/// [`final_pass_with_notes`] with a language per source (mic, system)
+/// picked by the user during the recording; the others are detected.
+fn final_pass_in(
+    engine: &mut Engine,
+    tracks: &[(Source, PathBuf)],
+    opts: &FinalPassOptions,
+    notes: &mut Vec<String>,
+    picked: &[Option<String>; 2],
+) -> Result<Vec<FinalSegment>> {
     engine.reset_detected_language();
     if opts.vad_model.is_none() {
         notes.push(crate::i18n::tr("Ohne Sprachfilter (Silero-VAD-Modell fehlt — scripts/download-model.sh): Stille kann zu erfundenem Text führen").to_string());
@@ -100,19 +115,35 @@ pub fn final_pass_with_notes(
         }
         let first = out.len();
         let gate = crate::chunker::speech_gate(noise_floor(&samples));
-        let spans = match vad.as_mut() {
+        let spans: Vec<(f64, f64)> = match vad.as_mut() {
             Some(vad) => speech_spans(vad, &samples)?,
             None => vec![(0.0, samples.len() as f64 / SAMPLE_RATE as f64)],
-        };
-        for (start, end) in spans {
+        }
+        .into_iter()
+        .filter(|&(start, end)| {
             let audio = &samples[sample_range(start, end, samples.len())];
-            if audio.is_empty() || crate::vad::rms(audio) < gate {
-                continue;
-            }
-            let segments = if vad.is_some() {
-                engine.transcribe(audio)?
+            !audio.is_empty() && crate::vad::rms(audio) >= gate
+        })
+        .collect();
+        let mut language = track_language(engine, &samples, &spans, picked[*source as usize].clone())?;
+        if let Some(status) = language.status() {
+            eprintln!("[mostalgia] language {}: {}", source.as_str(), describe(&status));
+        }
+        for &(start, end) in &spans {
+            let audio = &samples[sample_range(start, end, samples.len())];
+            let lang = if engine.is_auto() {
+                let (lang, changed) = language.choose(audio, start, |a| engine.detect_language(a))?;
+                if changed && let Some(status) = language.status() {
+                    eprintln!("[mostalgia] language {} from {}: {}", source.as_str(), crate::chunker::format_ts(start), describe(&status));
+                }
+                lang
             } else {
-                engine.transcribe_track(audio)?
+                None
+            };
+            let segments = if vad.is_some() {
+                engine.transcribe_as(audio, lang.as_deref())?
+            } else {
+                engine.transcribe_track_as(audio, lang.as_deref())?
             };
             let alone = segments.len() == 1;
             for seg in segments {
@@ -133,13 +164,53 @@ pub fn final_pass_with_notes(
         }
         if diarize && *source == Source::System {
             let mut lines: Vec<&mut FinalSegment> = out[first..].iter_mut().collect();
-            if let Err(e) = crate::diarize::label_track(&samples, &mut lines) {
+            let has_mic = tracks.iter().any(|(s, _)| *s == Source::Mic);
+            let speakers = crate::diarize::Speakers::on_system_track(opts.people, has_mic);
+            if let Err(e) = crate::diarize::label_track(&samples, &mut lines, speakers) {
                 notes.push(crate::i18n::trf("Sprechertrennung übersprungen: {}", &[&format!("{e:#}")]));
             }
         }
     }
     out.sort_by(|a, b| a.start_secs.total_cmp(&b.start_secs));
     Ok(out)
+}
+
+/// A track's language in auto mode: the user's pick, or detected on its
+/// first [`crate::language::FINAL_WINDOW_SECS`] of speech (the speech
+/// spans joined) and locked; re-checked along the way for meetings that
+/// change language (see [`crate::language::LanguageLock`]).
+fn track_language(engine: &mut Engine, samples: &[f32], spans: &[(f64, f64)], picked: Option<String>) -> Result<crate::language::LanguageLock> {
+    let mut lock = crate::language::LanguageLock::new();
+    if !engine.is_auto() {
+        return Ok(lock);
+    }
+    if picked.is_some() {
+        lock.set_manual(picked);
+        return Ok(lock);
+    }
+    let max = (crate::language::FINAL_WINDOW_SECS * SAMPLE_RATE as f64) as usize;
+    let mut window = Vec::with_capacity(max);
+    for &(start, end) in spans {
+        if window.len() >= max {
+            break;
+        }
+        let audio = &samples[sample_range(start, end, samples.len())];
+        window.extend_from_slice(&audio[..audio.len().min(max - window.len())]);
+    }
+    // Detected on the whole window, locked from the first span on.
+    if !window.is_empty()
+        && let Some(probs) = engine.detect_language(&window)?
+    {
+        lock.lock(probs, spans.first().map_or(0.0, |s| s.0));
+    }
+    Ok(lock)
+}
+
+/// "de (de 0.93, en 0.06)" for the log.
+fn describe(status: &crate::language::Status) -> String {
+    let probs: Vec<String> = status.probs.iter().take(3).map(|(c, p)| format!("{c} {p:.2}")).collect();
+    let how = if status.manual { "picked" } else if status.locked { "locked" } else { "detecting" };
+    format!("{} {how} ({})", status.language, probs.join(", "))
 }
 
 /// Background level of a track: the 20th percentile of 100 ms block RMS.
@@ -206,12 +277,16 @@ pub fn engine_for(config: &crate::config::Config, choice: &crate::config::SttCho
             "{}",
             crate::i18n::trf("Whisper-Modell nicht gefunden: {} — scripts/download-model.sh ausführen", &[&model.display()])
         );
-        return Engine::load(&model, &config.language);
+        let mut engine = Engine::load(&model, &config.language)?;
+        engine.set_meeting_languages(&config.meeting_languages);
+        return Ok(engine);
     }
     let conn = config.connection(&choice.connection).with_context(|| {
         crate::i18n::trf("Transkriptions-Verbindung \"{}\" gibt es nicht mehr — in den Einstellungen wählen", &[&choice.connection])
     })?;
-    Engine::cloud(conn, &choice.model, &config.language)
+    let mut engine = Engine::cloud(conn, &choice.model, &config.language)?;
+    engine.set_meeting_languages(&config.meeting_languages);
+    Ok(engine)
 }
 
 /// What [`save_recording`] stored.
@@ -235,7 +310,7 @@ pub fn save_recording(
 ) -> Result<Saved> {
     use crate::i18n::trf;
     let mut notes = Vec::new();
-    let (segments, engine_label, error) = match final_pass_with_notes(engine, &rec.tracks, opts, &mut notes) {
+    let (segments, engine_label, error) = match final_pass_in(engine, &rec.tracks, opts, &mut notes, &rec.languages) {
         Ok(segments) => (segments, engine.label(), (!notes.is_empty()).then(|| notes.join(" · "))),
         Err(e) => (
             rec.live_lines.clone(),
@@ -279,7 +354,8 @@ pub fn retranscribe(meeting_id: i64, engine: &mut Engine, opts: &FinalPassOption
     store.replace_segments(meeting_id, &segments)?;
     let note = (!notes.is_empty()).then(|| notes.join(" · "));
     store.set_transcript_info(meeting_id, &engine.label(), note.as_deref())?;
-    store_detected_language(&store, meeting_id, &meeting.language, engine)?;
+    let configured = if engine.is_auto() { "auto" } else { meeting.language.as_str() };
+    store_detected_language(&store, meeting_id, configured, engine)?;
     drop(store);
     if let Err(e) = crate::ask::index_meeting(meeting_id) {
         eprintln!("[mostalgia] search index: {e:#}");

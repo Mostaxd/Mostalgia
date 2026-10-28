@@ -252,4 +252,9 @@ pub const EN: &[(&str, &str)] = &[
     ("Vergessen", "Forget"),
     ("Stimme vergessen", "Forget voice"),
     ("Erkennung braucht „Mehrere Sprecher unterscheiden“. Wird jemand falsch erkannt: im Transkript umbenennen — das korrigiert die Stimme.", "Recognition needs “Tell several speakers apart”. If someone is recognised wrongly, rename them in the transcript — that corrects the voice."),
+    ("Vorschlagen", "Suggest"),
+    ("Aus der App-Sprache und früheren Besprechungen", "From the app language and earlier meetings"),
+    ("Alle Sprachen", "All languages"),
+    ("Sprachen in meinen Besprechungen", "Languages spoken in my meetings"),
+    ("„Automatisch erkennen“ wählt nur unter diesen, erkennt auf längeren Abschnitten und bleibt pro Spur dabei – deutsche Sätze mit englischen Fachwörtern bleiben deutsch. Jetzt: {}", "“Detect automatically” only chooses among these, detects on longer stretches and sticks with it per track – German sentences full of English terms stay German. Now: {}"),
 ];

@@ -60,6 +60,34 @@ impl Engine {
         }
     }
 
+    /// Languages the meetings are held in (Whisper codes; empty = any).
+    /// In auto mode the engine only ever picks one of these.
+    pub fn set_meeting_languages(&mut self, languages: &[String]) {
+        match self {
+            Self::Local(w) => w.allowed = languages.to_vec(),
+            Self::Cloud(c) => c.set_meeting_languages(languages),
+        }
+    }
+
+    /// The configured language is "auto".
+    pub fn is_auto(&self) -> bool {
+        match self {
+            Self::Local(w) => w.language.is_none(),
+            Self::Cloud(c) => c.is_auto(),
+        }
+    }
+
+    /// Probabilities of the meeting languages for `samples` (most likely
+    /// first). `None` with a fixed language, or when the engine can't tell
+    /// yet: a cloud engine only knows what it reported for earlier audio.
+    pub fn detect_language(&mut self, samples: &[f32]) -> Result<Option<crate::language::Probs>> {
+        match self {
+            Self::Local(w) if w.language.is_none() => w.detect_language(samples).map(Some),
+            Self::Local(_) => Ok(None),
+            Self::Cloud(c) => Ok(c.reported_probs()),
+        }
+    }
+
     /// Forgets the languages detected so far (call before a final pass).
     pub fn reset_detected_language(&mut self) {
         match self {
@@ -88,17 +116,29 @@ impl Engine {
 
     /// Transcribes one short utterance, independent of earlier ones.
     pub fn transcribe(&mut self, samples: &[f32]) -> Result<Vec<Segment>> {
+        self.transcribe_as(samples, None)
+    }
+
+    /// [`Engine::transcribe`] in `language` (a Whisper code) when the
+    /// engine is set to "auto"; a fixed configured language always wins.
+    /// `None`: the engine detects it (among the meeting languages).
+    pub fn transcribe_as(&mut self, samples: &[f32], language: Option<&str>) -> Result<Vec<Segment>> {
         match self {
-            Self::Local(w) => w.transcribe(samples),
-            Self::Cloud(c) => c.transcribe(samples),
+            Self::Local(w) => w.run(samples, false, language),
+            Self::Cloud(c) => c.transcribe_as(samples, language),
         }
     }
 
     /// Transcribes a whole track in one go (see [`Whisper::transcribe_track`]).
     pub fn transcribe_track(&mut self, samples: &[f32]) -> Result<Vec<Segment>> {
+        self.transcribe_track_as(samples, None)
+    }
+
+    /// [`Engine::transcribe_track`] in `language` (see [`Engine::transcribe_as`]).
+    pub fn transcribe_track_as(&mut self, samples: &[f32], language: Option<&str>) -> Result<Vec<Segment>> {
         match self {
-            Self::Local(w) => w.transcribe_track(samples),
-            Self::Cloud(c) => c.transcribe(samples),
+            Self::Local(w) => w.run(samples, true, language),
+            Self::Cloud(c) => c.transcribe_as(samples, language),
         }
     }
 }
@@ -110,6 +150,8 @@ pub struct Whisper {
     /// Seconds of audio per detected language since the last reset (auto mode).
     detected: Vec<(String, f64)>,
     language: Option<String>,
+    /// Meeting languages auto mode chooses among (empty = any).
+    allowed: Vec<String>,
     threads: i32,
     gpu: Option<String>,
 }
@@ -139,6 +181,7 @@ impl Whisper {
             state,
             detected: Vec::new(),
             language,
+            allowed: Vec::new(),
             threads,
             gpu,
         })
@@ -160,28 +203,57 @@ impl Whisper {
 
     /// Transcribes one short live utterance, independent of earlier ones.
     pub fn transcribe(&mut self, samples: &[f32]) -> Result<Vec<Segment>> {
-        self.run(samples, false)
+        self.run(samples, false, None)
     }
 
     /// Transcribes a whole track in one go, carrying context across
     /// Whisper's 30 s windows. Prefer splitting at speech first (see
     /// `finalize`): on long silences this can skip or invent text.
     pub fn transcribe_track(&mut self, samples: &[f32]) -> Result<Vec<Segment>> {
-        self.run(samples, true)
+        self.run(samples, true, None)
     }
 
-    fn run(&mut self, samples: &[f32], keep_context: bool) -> Result<Vec<Segment>> {
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        params.set_language(self.language.as_deref());
-        params.set_n_threads(self.threads);
-        params.set_print_progress(false);
-        params.set_print_realtime(false);
-        params.set_print_special(false);
-        params.set_print_timestamps(false);
-        params.set_suppress_blank(true);
-        // Each chunk is an independent utterance; carrying context across
-        // chunks makes Whisper repeat itself on noisy boundaries.
-        params.set_no_context(!keep_context);
+    /// Probabilities of the meeting languages for `samples`, most likely
+    /// first. Whisper looks at 30 s at a time; longer audio is detected per
+    /// 30 s window and the results averaged by length.
+    pub fn detect_language(&mut self, samples: &[f32]) -> Result<crate::language::Probs> {
+        const WINDOW: usize = 30 * crate::SAMPLE_RATE as usize;
+        // A last window shorter than this adds nothing but noise.
+        const MIN_TAIL: usize = 5 * crate::SAMPLE_RATE as usize;
+        if samples.is_empty() {
+            return Ok(Vec::new());
+        }
+        let threads = self.threads.max(1) as usize;
+        self.state.pcm_to_mel(samples, threads).context("computing the spectrogram for language detection")?;
+        let mut parts = Vec::new();
+        let mut offset = 0;
+        while offset < samples.len() {
+            let len = (samples.len() - offset).min(WINDOW);
+            if len < MIN_TAIL && offset > 0 {
+                break;
+            }
+            let offset_ms = offset * 1000 / crate::SAMPLE_RATE as usize;
+            let (_, probs) = self.state.lang_detect(offset_ms, threads).context("detecting the language")?;
+            parts.push((crate::language::restrict(&probs, &self.allowed), len.max(1) as f64));
+            offset += WINDOW;
+        }
+        let probs = crate::language::combine(&parts);
+        if debug_enabled() {
+            let top: Vec<String> = probs.iter().take(4).map(|(c, p)| format!("{c} {p:.2}")).collect();
+            eprintln!("[whisper] language over {:.1} s: {}", samples.len() as f64 / crate::SAMPLE_RATE as f64, top.join(", "));
+        }
+        Ok(probs)
+    }
+
+    /// `language` applies in auto mode only (a fixed language wins).
+    fn run(&mut self, samples: &[f32], keep_context: bool, language: Option<&str>) -> Result<Vec<Segment>> {
+        let mut language = self.language.clone().or_else(|| language.map(str::to_string));
+        // Auto without a language from the caller: still only one of the
+        // meeting languages, never whatever this snippet sounds like most.
+        if language.is_none() && !self.allowed.is_empty() && !samples.is_empty() {
+            language = self.detect_language(samples)?.first().map(|(c, _)| c.clone());
+        }
+        let params = full_params(language.as_deref(), self.threads, keep_context);
 
         self.state
             .full(params, samples)
@@ -189,7 +261,8 @@ impl Whisper {
 
         if self.language.is_none() {
             let id = self.state.full_lang_id_from_state();
-            if let Some(code) = whisper_rs::get_lang_str(id) {
+            let heard = language.as_deref().or_else(|| whisper_rs::get_lang_str(id));
+            if let Some(code) = heard {
                 let secs = samples.len() as f64 / crate::SAMPLE_RATE as f64;
                 match self.detected.iter_mut().find(|(c, _)| c == code) {
                     Some((_, total)) => *total += secs,
@@ -225,6 +298,24 @@ impl Whisper {
         }
         Ok(out)
     }
+}
+
+/// Whisper's settings for one pass in `language` (`None`: Whisper detects it).
+fn full_params(language: Option<&str>, threads: i32, keep_context: bool) -> FullParams<'_, 'static> {
+    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+    params.set_language(language);
+    // Transcribe, never translate: German speech stays German.
+    params.set_translate(false);
+    params.set_n_threads(threads);
+    params.set_print_progress(false);
+    params.set_print_realtime(false);
+    params.set_print_special(false);
+    params.set_print_timestamps(false);
+    params.set_suppress_blank(true);
+    // Each chunk is an independent utterance; carrying context across
+    // chunks makes Whisper repeat itself on noisy boundaries.
+    params.set_no_context(!keep_context);
+    params
 }
 
 /// whisper.cpp's `gpu_device` indexes the GPU and integrated-GPU devices in
@@ -298,4 +389,18 @@ pub(crate) fn is_annotation(text: &str) -> bool {
     [('*', '*'), ('[', ']'), ('(', ')'), ('♪', '♪')]
         .iter()
         .any(|(open, close)| t.len() > 1 && t.starts_with(*open) && t.ends_with(*close))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn never_translates() {
+        for language in [Some("de"), Some("en"), None] {
+            let params = format!("{:?}", full_params(language, 4, false));
+            assert!(params.contains("translate: false"), "{params}");
+            assert!(!params.contains("translate: true"));
+        }
+    }
 }

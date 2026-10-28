@@ -11,7 +11,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, StyledExt, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
-use gpui_kit::component::menu::DropdownMenu;
+use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu, PopupMenuItem};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use mostalgia_core::config::{Config, SttChoice};
@@ -46,6 +46,8 @@ enum Edit {
     Speaker(String, Entity<InputState>),
     /// Editing the text of segment `.0`.
     Line(i64, Entity<InputState>),
+    /// Giving these lines (segment ids) to a newly typed speaker.
+    Reassign(Vec<i64>, Entity<InputState>),
     Title(Entity<InputState>),
 }
 
@@ -61,6 +63,8 @@ struct EngineOption {
 struct Retranscribe {
     options: Vec<EngineOption>,
     selected: usize,
+    /// People in the call, counting you (0 = automatic).
+    people: u8,
 }
 
 pub struct MeetingView {
@@ -88,6 +92,10 @@ pub struct MeetingView {
     retranscribing: Option<SharedString>,
     /// Why the last "transcribe again" failed.
     transcribe_error: Option<SharedString>,
+    /// Transcript lines (segment ids) selected to give to another speaker.
+    selected: Vec<i64>,
+    /// The line Shift-click selects from.
+    select_anchor: Option<usize>,
     /// The "Chat with Mori" section is folded away.
     chat_folded: bool,
     /// Notes tab: grouped by kind (else by time).
@@ -138,6 +146,8 @@ impl MeetingView {
             retranscribe: None,
             retranscribing: None,
             transcribe_error: None,
+            selected: Vec::new(),
+            select_anchor: None,
             chat_folded: false,
             notes_grouped: true,
             regen_panel: None,
@@ -464,7 +474,7 @@ impl MeetingView {
                 options.len() - 1
             }
         };
-        self.retranscribe = Some(Retranscribe { options, selected });
+        self.retranscribe = Some(Retranscribe { options, selected, people: 0 });
         cx.notify();
     }
 
@@ -474,6 +484,7 @@ impl MeetingView {
         let option = &dialog.options[dialog.selected];
         let choice = option.choice.clone();
         let label: SharedString = option.label.clone().into();
+        let people = dialog.people;
         let language = m.language.clone();
         self.player = None;
         self.position = None;
@@ -491,12 +502,17 @@ impl MeetingView {
                 vad_model: vad.exists().then_some(vad),
                 diarize: config.diarize,
                 denoise_mic: config.denoise,
+                people,
             };
             let cached = slot.as_ref().filter(|_| choice.is_local()).and_then(|s| s.lock().unwrap().take());
             let mut engine = match cached {
                 Some(engine) => engine,
                 None => finalize::engine_for(&config, &choice)?,
             };
+            // With "auto", detect again: a stored language may itself have
+            // been a wrong detection, and forcing it makes Whisper translate.
+            let language = if config.language == "auto" { config.language.clone() } else { language };
+            engine.set_meeting_languages(&config.meeting_languages);
             let result = engine.set_language(&language).and_then(|_| finalize::retranscribe(id, &mut engine, &opts));
             if let Some(slot) = slot.filter(|_| !engine.is_cloud()) {
                 *slot.lock().unwrap() = Some(engine);
@@ -638,6 +654,27 @@ impl MeetingView {
         });
         let selected = &dialog.options[dialog.selected];
         let warning = selected.cloud.as_ref().map(|name| trf("Audio geht an {}", &[name]));
+        let picked = dialog.people;
+        let has_system = self.meeting.as_ref().is_some_and(|m| m.tracks().iter().any(|(s, _)| *s == Source::System));
+        let people_row = (Config::load().diarize && has_system).then(|| {
+            h_flex()
+                .flex_wrap()
+                .gap_1()
+                .child(div().text_sm().text_color(theme.muted_foreground).mr_2().child(tr("Personen im Gespräch (mit dir)")))
+                .children(mostalgia_core::diarize::PEOPLE_CHOICES.into_iter().map(|n| {
+                    Button::new(SharedString::from(format!("retranscribe-people-{n}")))
+                        .label(ui::people_label(n))
+                        .small()
+                        .when(picked == n, |b| b.primary())
+                        .when(picked != n, |b| b.ghost())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(d) = &mut this.retranscribe {
+                                d.people = n;
+                                cx.notify();
+                            }
+                        }))
+                }))
+        });
         Some(
             div()
                 .id("retranscribe-overlay")
@@ -673,6 +710,7 @@ impl MeetingView {
                         )
                         .child(div().text_sm().text_color(theme.muted_foreground).child(tr("Mit welchem Modell soll die Aufnahme neu transkribiert werden?")))
                         .child(v_flex().id("engine-options").gap_2().min_h_0().overflow_y_scroll().children(rows))
+                        .when(people_row.is_some(), |el| el.children(people_row))
                         .child(
                             h_flex()
                                 .gap_2()
@@ -819,9 +857,19 @@ impl MeetingView {
 
     fn commit_edit(&mut self, cx: &mut Context<Self>) {
         let Some(edit) = self.edit.take() else { return };
+        if let Edit::Reassign(ids, input) = &edit {
+            let name = input.read(cx).value().trim().to_string();
+            self._subscriptions.clear();
+            if !name.is_empty() {
+                self.reassign(ids.clone(), name, cx);
+            }
+            cx.notify();
+            return;
+        }
         let result = Store::open(&paths::database()).and_then(|store| match &edit {
             Edit::Speaker(current, input) => store.rename_speaker(self.id, current, &input.read(cx).value()).map(|_| ()),
             Edit::Line(seg, input) => store.update_segment_text(*seg, &input.read(cx).value()),
+            Edit::Reassign(..) => Ok(()),
             Edit::Title(input) => {
                 let title = input.read(cx).value();
                 if title.trim().is_empty() { Ok(()) } else { store.set_title(self.id, title.trim()) }
@@ -866,6 +914,99 @@ impl MeetingView {
             .ok();
         })
         .detach();
+    }
+
+    /// "Change speaker" / "Split speaker": gives these lines to `name`,
+    /// then corrects the remembered voices (in the background): `name`
+    /// learns from its lines here, and a name the lines had before forgets
+    /// them.
+    fn reassign(&mut self, ids: Vec<i64>, name: String, cx: &mut Context<Self>) {
+        let previous = match Store::open(&paths::database()).and_then(|s| s.set_segments_speaker(self.id, &ids, &name)) {
+            Ok(previous) => previous,
+            Err(e) => {
+                self.error = Some(format!("{e:#}").into());
+                cx.notify();
+                return;
+            }
+        };
+        self.selected.clear();
+        let who = ui::speaker_display(&name);
+        self.notice = Some(if ids.len() == 1 { trf("Zeile jetzt bei {}", &[&who]) } else { trf("{} Zeilen jetzt bei {}", &[&ids.len(), &who]) }.into());
+        self.reload(cx);
+        cx.emit(MeetingEvent::Changed);
+        let has_audio = self.meeting.as_ref().is_some_and(|m| m.tracks().iter().any(|(s, _)| *s == Source::System));
+        if !has_audio || !mostalgia_core::diarize::available() {
+            return;
+        }
+        let id = self.id;
+        let task = cx.background_spawn({
+            let name = name.clone();
+            async move { voices::correct_from_meeting(id, &previous, &name) }
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(voices::Learned::Voice { .. }) => {
+                        this.notice = Some(trf("Korrigiert — die Stimme von {} ist jetzt genauer gemerkt.", &[&name]).into())
+                    }
+                    Ok(voices::Learned::TooShort { .. }) => {
+                        this.notice = Some(trf("{} spricht hier zu kurz, um die Stimme zu lernen.", &[&name]).into())
+                    }
+                    Ok(_) => {}
+                    Err(e) => this.error = Some(trf("Stimme nicht gelernt: {}", &[&format!("{e:#}")]).into()),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Ctrl-click toggles a line in the selection, Shift-click selects the
+    /// lines from the last one clicked; a plain click clears it.
+    fn click_line(&mut self, ix: usize, seg_id: i64, modifiers: Modifiers, cx: &mut Context<Self>) {
+        if modifiers.shift
+            && let (Some(anchor), Some(m)) = (self.select_anchor, &self.meeting)
+        {
+            let (a, b) = (anchor.min(ix), anchor.max(ix));
+            for seg in &m.segments[a..=b.min(m.segments.len() - 1)] {
+                if !self.selected.contains(&seg.id) {
+                    self.selected.push(seg.id);
+                }
+            }
+        } else if modifiers.secondary(cx) {
+            self.toggle_selected(ix, seg_id);
+        } else if !self.selected.is_empty() {
+            self.selected.clear();
+        } else {
+            return;
+        }
+        cx.notify();
+    }
+
+    fn toggle_selected(&mut self, ix: usize, seg_id: i64) {
+        match self.selected.iter().position(|id| *id == seg_id) {
+            Some(i) => {
+                self.selected.remove(i);
+            }
+            None => self.selected.push(seg_id),
+        }
+        self.select_anchor = Some(ix);
+    }
+
+    /// The speakers of this meeting, in order of appearance.
+    fn meeting_speakers(&self) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        if let Some(m) = &self.meeting {
+            for seg in &m.segments {
+                let label = seg.speaker_label();
+                if !names.iter().any(|n| n == label) {
+                    names.push(label.to_string());
+                }
+            }
+        }
+        names
     }
 
     fn cancel_edit(&mut self, cx: &mut Context<Self>) {
@@ -1654,10 +1795,67 @@ impl MeetingView {
                     .when(current != "Ich" && mostalgia_core::diarize::available(), |el| {
                         el.child(div().text_xs().text_color(theme.muted_foreground).child(tr("Die Stimme wird gemerkt und künftig mit diesem Namen erkannt.")))
                     })
+                    .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Nur einzelne Zeilen? Rechtsklick auf eine Zeile.")))
                     .into_any_element(),
             );
         }
 
+        if let Some(Edit::Reassign(ids, input)) = &self.edit {
+            let n = ids.len();
+            rows.push(
+                h_flex()
+                    .mb_3()
+                    .p_3()
+                    .gap_2()
+                    .flex_wrap()
+                    .rounded(theme.radius)
+                    .bg(theme.muted)
+                    .child(div().text_sm().child(if n == 1 { tr("Diese Zeile gehört zu").to_string() } else { trf("Diese {} Zeilen gehören zu", &[&n]) }))
+                    .child(Input::new(input).w(px(220.)).small())
+                    .child(Button::new("reassign-save").small().primary().label(tr("Speichern")).on_click(cx.listener(|this, _, _, cx| this.commit_edit(cx))))
+                    .child(Button::new("reassign-cancel").small().ghost().label(tr("Abbrechen")).on_click(cx.listener(|this, _, _, cx| this.cancel_edit(cx))))
+                    .into_any_element(),
+            );
+        } else if !self.selected.is_empty() {
+            let n = self.selected.len();
+            let ids = self.selected.clone();
+            let names = speaker_choices(self.meeting_speakers());
+            rows.push(
+                h_flex()
+                    .mb_3()
+                    .p_3()
+                    .gap_2()
+                    .flex_wrap()
+                    .rounded(theme.radius)
+                    .bg(theme.primary.opacity(0.08))
+                    .child(div().text_sm().font_medium().child(if n == 1 { tr("1 Zeile ausgewählt").to_string() } else { trf("{} Zeilen ausgewählt", &[&n]) }))
+                    .child(div().text_sm().text_color(theme.muted_foreground).child(tr("Zuweisen an:")))
+                    .children(names.into_iter().enumerate().map(|(i, name)| {
+                        let ids = ids.clone();
+                        Button::new(("split-to", i))
+                            .xsmall()
+                            .outline()
+                            .label(ui::speaker_display(&name))
+                            .on_click(cx.listener(move |this, _, _, cx| this.reassign(ids.clone(), name.clone(), cx)))
+                    }))
+                    .child({
+                        let ids = ids.clone();
+                        Button::new("split-new").xsmall().ghost().icon(IconName::Plus).label(tr("Neuer Name …")).on_click(cx.listener(move |this, _, window, cx| {
+                            let ids = ids.clone();
+                            this.begin_edit(move |input| Edit::Reassign(ids, input), String::new(), window, cx)
+                        }))
+                    })
+                    .child(div().flex_1())
+                    .child(Button::new("split-clear").xsmall().ghost().label(tr("Auswahl aufheben")).on_click(cx.listener(|this, _, _, cx| {
+                        this.selected.clear();
+                        cx.notify();
+                    })))
+                    .into_any_element(),
+            );
+        }
+
+        let choices = self.meeting_speakers();
+        let view = cx.entity().downgrade();
         let mut marks = m.bookmarks.iter().peekable();
         for (ix, seg) in m.segments.iter().enumerate() {
             while let Some(b) = marks.next_if(|b| b.at_secs <= seg.start_secs) {
@@ -1687,6 +1885,44 @@ impl MeetingView {
             };
             let group = SharedString::from(format!("seg-{ix}"));
             let flashing = self.flash.is_some_and(|(id, _)| id == seg_id);
+            let is_selected = self.selected.contains(&seg_id);
+            // Right-click: the selection if this line is in it, else this line.
+            let targets = if is_selected { self.selected.clone() } else { vec![seg_id] };
+            let menu = {
+                let (view, choices, current) = (view.clone(), choices.clone(), label.clone());
+                move |menu: gpui_kit::component::menu::PopupMenu, _: &mut Window, _: &mut Context<gpui_kit::component::menu::PopupMenu>| {
+                    let n = targets.len();
+                    let choices = speaker_choices(choices.clone());
+                    let mut menu = menu.item(PopupMenuItem::label(if n == 1 {
+                        tr("Sprecher ändern").to_string()
+                    } else {
+                        trf("Sprecher von {} Zeilen ändern", &[&n])
+                    }));
+                    for name in choices.iter().filter(|c| n > 1 || **c != current) {
+                        let (view, targets, name) = (view.clone(), targets.clone(), name.clone());
+                        menu = menu.item(PopupMenuItem::new(ui::speaker_display(&name)).icon(IconName::User).on_click(move |_, _, cx| {
+                            view.update(cx, |this, cx| this.reassign(targets.clone(), name.clone(), cx)).ok();
+                        }));
+                    }
+                    let (new_view, new_targets) = (view.clone(), targets.clone());
+                    menu = menu.item(PopupMenuItem::new(tr("Neuer Name …")).icon(IconName::Plus).on_click(move |_, window, cx| {
+                        let targets = new_targets.clone();
+                        new_view.update(cx, |this, cx| this.begin_edit(move |input| Edit::Reassign(targets, input), String::new(), window, cx)).ok();
+                    }));
+                    let view = view.clone();
+                    menu.separator().item(
+                        PopupMenuItem::new(if is_selected { tr("Aus der Auswahl nehmen") } else { tr("Auswählen (zum Aufteilen)") })
+                            .icon(IconName::Check)
+                            .on_click(move |_, _, cx| {
+                                view.update(cx, |this, cx| {
+                                    this.toggle_selected(ix, seg_id);
+                                    cx.notify();
+                                })
+                                .ok();
+                            }),
+                    )
+                }
+            };
             // The jump target scrolls itself into view once it has bounds.
             let scroll_here = self.scroll_target.as_ref().filter(|(id, done)| *id == seg_id && !done.get()).map(|(_, done)| {
                 let (done, scroll) = (done.clone(), self.scroll.clone());
@@ -1716,6 +1952,8 @@ impl MeetingView {
                     .group(group.clone())
                     .children(scroll_here)
                     .when(flashing, |el| el.bg(theme.warning.opacity(0.18)))
+                    .when(is_selected, |el| el.bg(theme.primary.opacity(0.14)))
+                    .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| this.click_line(ix, seg_id, ev.modifiers(), cx)))
                     .items_start()
                     .gap_3()
                     .px_2()
@@ -1764,6 +2002,7 @@ impl MeetingView {
                             ),
                         )
                     })
+                    .context_menu(menu)
                     .into_any_element(),
             );
         }
@@ -1994,4 +2233,15 @@ fn meeting_companion(m: &Meeting) -> &'static str {
 
 fn companion_name() -> &'static str {
     Config::load().companion_character().name()
+}
+
+/// Names to offer when changing a line's speaker: the meeting's speakers,
+/// then the remembered voices (read when the menu opens).
+fn speaker_choices(mut names: Vec<String>) -> Vec<String> {
+    for v in voices::Voices::load().voices {
+        if !names.contains(&v.name) {
+            names.push(v.name);
+        }
+    }
+    names
 }

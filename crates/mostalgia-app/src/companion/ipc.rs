@@ -86,8 +86,14 @@ pub enum FromMori {
     NotesSaved { meeting_id: i64 },
     /// The user wants her back inside the app window.
     BackToApp,
-    /// Start a recording from exactly these sources (her record button).
-    StartRecording { mic: bool, system: bool },
+    /// Start a recording from exactly these sources (her record button),
+    /// with the people in the call if picked (0 = automatic).
+    StartRecording {
+        mic: bool,
+        system: bool,
+        #[serde(default)]
+        people: u8,
+    },
     /// Pause / resume the recording in progress.
     PauseRecording { paused: bool },
     /// Stop (and save) the recording in progress.

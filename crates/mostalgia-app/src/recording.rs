@@ -7,6 +7,7 @@ use anyhow::Result;
 use crossbeam_channel::Receiver;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::assets::IconName;
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, StyledExt, h_flex, switch::Switch, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
@@ -105,6 +106,9 @@ struct Live {
     /// Sources (mic, system) recorded right now (switchable mid-recording;
     /// the setup screen's saved choice stays as it is).
     sources_on: [bool; 2],
+    /// The language each source (mic, system) is transcribed in, with
+    /// "auto": detected, locked or picked (`None` while detecting).
+    languages: [Option<mostalgia_core::language::Status>; 2],
 }
 
 static NEXT_SESSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -133,6 +137,7 @@ impl Live {
             speech_secs: 0.,
             session: NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             sources_on,
+            languages: [None, None],
         }
     }
 
@@ -191,6 +196,9 @@ pub struct RecordingView {
     /// Sources (mic, system) picked for this one recording (Mori's record
     /// button), instead of the setup screen's toggles; not saved.
     sources_override: Option<[bool; 2]>,
+    /// People in the call, counting you, for the next recording (a
+    /// `diarize::PEOPLE_CHOICES` value; 0 = automatic). Reset after each.
+    people: u8,
 }
 
 impl RecordingView {
@@ -206,7 +214,14 @@ impl RecordingView {
             focus: cx.focus_handle(),
             call_mode: false,
             sources_override: None,
+            people: 0,
         }
+    }
+
+    /// People in the call for the next recording (0 = automatic).
+    pub fn set_people(&mut self, people: u8, cx: &mut Context<Self>) {
+        self.people = people;
+        cx.notify();
     }
 
     /// Mic and system for the next recording: what the setup screen says,
@@ -276,6 +291,13 @@ impl RecordingView {
             kind: MarkKind::Moment,
         }];
         live.last_latency_ms = Some(212);
+        let german = mostalgia_core::language::Status {
+            language: "de".into(),
+            locked: true,
+            manual: false,
+            probs: vec![("de".into(), 0.98), ("en".into(), 0.02)],
+        };
+        live.languages = [Some(german.clone()), Some(german)];
         live.heard();
         self.phase = Phase::Recording(Box::new(live));
         cx.notify();
@@ -474,6 +496,7 @@ impl RecordingView {
         if let Err(e) = engine.set_language(&self.config.language) {
             return self.fail_start(e, cx);
         }
+        engine.set_meeting_languages(&self.config.meeting_languages);
         self.engine_label = Some((engine.label().into(), engine.is_cloud()));
         let cfg = RecordConfig {
             vad_model: self.config.vad_model_path(),
@@ -499,6 +522,104 @@ impl RecordingView {
             Err(e) => self.fail_start(e, cx),
         }
         cx.notify();
+    }
+
+    /// Transcribes `sources` in `code` from their next utterance on
+    /// (`None`: detect again).
+    fn pick_language(&mut self, sources: &[Source], code: Option<String>, cx: &mut Context<Self>) {
+        let Phase::Recording(live) = &mut self.phase else { return };
+        for &source in sources {
+            if let Some(recorder) = &live.recorder {
+                recorder.set_language(source, code.clone());
+            }
+            live.languages[source as usize] = code.clone().map(|language| mostalgia_core::language::Status {
+                language,
+                locked: true,
+                manual: true,
+                probs: Vec::new(),
+            });
+        }
+        cx.notify();
+    }
+
+    /// "Erkannt: Deutsch ▾" in the live footer (auto mode): what each
+    /// source is transcribed in, and a menu to pick another language that
+    /// applies from the next utterance on. One button while both sources
+    /// agree.
+    fn language_picker(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        use mostalgia_core::language::{COMMON, native_name};
+        let Phase::Recording(live) = &self.phase else { return Vec::new() };
+        if self.config.language != "auto" {
+            return Vec::new();
+        }
+        let on: Vec<Source> = [Source::Mic, Source::System].into_iter().filter(|s| live.sources_on[*s as usize]).collect();
+        let lang = |s: Source| live.languages[s as usize].as_ref().map(|st| st.language.clone());
+        let groups: Vec<Vec<Source>> = match on.as_slice() {
+            [a, b] if lang(*a) != lang(*b) && lang(*a).is_some() && lang(*b).is_some() => vec![vec![*a], vec![*b]],
+            [] => Vec::new(),
+            all => vec![all.to_vec()],
+        };
+        let allowed = self.config.meeting_languages.clone();
+        let weak = cx.entity().downgrade();
+        groups
+            .into_iter()
+            .map(|sources| {
+                let status = sources.iter().find_map(|s| live.languages[*s as usize].clone());
+                let label = match &status {
+                    None => tr("Sprache wird erkannt …").to_string(),
+                    Some(st) if st.manual => trf("Sprache: {}", &[&native_name(&st.language)]),
+                    Some(st) if st.locked => trf("Erkannt: {}", &[&native_name(&st.language)]),
+                    Some(st) => trf("Erkenne: {} …", &[&native_name(&st.language)]),
+                };
+                let prefix = match sources.as_slice() {
+                    [Source::Mic] => format!("{} · ", tr("Mikrofon")),
+                    [Source::System] => format!("{} · ", tr("Desktop-Audio")),
+                    _ => String::new(),
+                };
+                let tooltip = match &status {
+                    Some(st) if !st.probs.is_empty() => {
+                        let probs: Vec<String> = st.probs.iter().take(3).map(|(c, p)| format!("{} {:.0} %", native_name(c), p * 100.)).collect();
+                        trf("Gilt ab dem nächsten Satz. Wahrscheinlichkeit: {}", &[&probs.join(", ")])
+                    }
+                    _ => tr("Gilt ab dem nächsten Satz.").to_string(),
+                };
+                let current = status.as_ref().map(|s| s.language.clone());
+                let manual = status.as_ref().is_some_and(|s| s.manual);
+                let id = SharedString::from(format!("live-lang-{}", sources.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("-")));
+                let (weak, allowed) = (weak.clone(), allowed.clone());
+                Button::new(id)
+                    .xsmall()
+                    .ghost()
+                    .icon(IconName::Globe)
+                    .label(format!("{prefix}{label}"))
+                    .dropdown_caret(true)
+                    .tooltip(tooltip)
+                    .dropdown_menu(move |menu, _, _| {
+                        let mut menu = menu.scrollable(true).max_h(px(360.));
+                        let item = |menu: gpui_kit::component::menu::PopupMenu, code: Option<String>, label: String, checked: bool| {
+                            let (weak, sources) = (weak.clone(), sources.clone());
+                            menu.item(PopupMenuItem::new(label).checked(checked).on_click(move |_, _, cx| {
+                                weak.update(cx, |this, cx| this.pick_language(&sources, code.clone(), cx)).ok();
+                            }))
+                        };
+                        menu = item(menu, None, tr("Automatisch erkennen").to_string(), !manual);
+                        menu = menu.separator();
+                        let mut shown: Vec<String> = Vec::new();
+                        for code in &allowed {
+                            menu = item(menu, Some(code.clone()), native_name(code), manual && current.as_deref() == Some(code.as_str()));
+                            shown.push(code.clone());
+                        }
+                        if !allowed.is_empty() {
+                            menu = menu.separator().label(tr("Weitere Sprachen"));
+                        }
+                        for (code, name) in COMMON.iter().filter(|(c, _)| !shown.iter().any(|s| s == c)) {
+                            menu = item(menu, Some(code.to_string()), name.to_string(), manual && current.as_deref() == Some(*code));
+                        }
+                        menu
+                    })
+                    .into_any_element()
+            })
+            .collect()
     }
 
     /// A recording couldn't start: shown here and told to Mori.
@@ -585,6 +706,7 @@ impl RecordingView {
                     }
                 }
                 Event::Chunk { millis, .. } => live.last_latency_ms = Some(millis),
+                Event::Language { source, status } => live.languages[source as usize] = Some(status),
                 Event::Warning(w) => {
                     eprintln!("[mostalgia] {w}");
                     let w = SharedString::from(w);
@@ -708,6 +830,7 @@ impl RecordingView {
         let live_label = self.engine_label.as_ref().map(|(l, _)| l.to_string()).unwrap_or_default();
         let config = self.config.clone();
         let slot = self.engine.clone();
+        let people = std::mem::take(&mut self.people);
         cx.notify();
 
         let task = cx.background_spawn(async move {
@@ -717,6 +840,7 @@ impl RecordingView {
                 vad_model: vad.exists().then_some(vad),
                 diarize: config.diarize,
                 denoise_mic: config.denoise,
+                people,
             };
             let language = config.language.as_str();
             let final_choice = &config.final_engine;
@@ -727,7 +851,10 @@ impl RecordingView {
                 return saved;
             }
             let built = match final_choice.is_local().then(|| slot.lock().unwrap().take()).flatten() {
-                Some(mut engine) => engine.set_language(language).map(|_| engine),
+                Some(mut engine) => engine.set_language(language).map(|_| {
+                    engine.set_meeting_languages(&config.meeting_languages);
+                    engine
+                }),
                 None => finalize::engine_for(&config, final_choice),
             };
             keep_local(&slot, live_engine);
@@ -925,6 +1052,7 @@ impl RecordingView {
                                     })),
                             ),
                     )
+                    .when(self.config.diarize && self.sources()[1], |el| el.child(self.render_people(cx)))
                     .child(self.render_engines(cx))
                     .when_some(self.error.clone(), |el, err| {
                         el.child(
@@ -949,6 +1077,24 @@ impl RecordingView {
             )
     }
 
+    /// "People in the call": tells the speaker separation how many voices
+    /// to expect (you on the mic, everyone else on the desktop audio).
+    fn render_people(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let picked = self.people;
+        h_flex()
+            .flex_wrap()
+            .gap_1()
+            .child(div().text_sm().text_color(cx.theme().muted_foreground).mr_2().child(tr("Personen im Gespräch (mit dir)")))
+            .children(mostalgia_core::diarize::PEOPLE_CHOICES.into_iter().map(|n| {
+                Button::new(SharedString::from(format!("people-{n}")))
+                    .label(ui::people_label(n))
+                    .small()
+                    .when(picked == n, |b| b.primary())
+                    .when(picked != n, |b| b.ghost())
+                    .on_click(cx.listener(move |this, _, _, cx| this.set_people(n, cx)))
+            }))
+    }
+
     fn render_busy(&self, text: &'static str, detail: Option<SharedString>, stopping: bool, cx: &App) -> impl IntoElement {
         let spec = crate::themes::active(cx);
         let burst = stopping && spec.animations && !self.config.reduce_motion && spec.scene.as_deref() == Some("blocks");
@@ -964,6 +1110,7 @@ impl RecordingView {
     }
 
     fn render_live(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let language_picker = self.language_picker(cx);
         let speaker_labels = self.config.speaker_labels;
         let follow = self.follow;
         let engine_label = self.engine_label.clone();
@@ -1135,6 +1282,7 @@ impl RecordingView {
             .text_color(theme.muted_foreground)
             .child(trf("{} Zeilen", &[&live.lines.len()]))
             .when_some(live.last_latency_ms, |el, ms| el.child(trf("Latenz {} ms", &[&ms])))
+            .children(language_picker)
             .when_some(engine_label, |el, (label, cloud)| {
                 el.child(
                     h_flex()

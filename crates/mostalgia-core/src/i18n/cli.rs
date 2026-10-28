@@ -106,4 +106,8 @@ pub const EN: &[(&str, &str)] = &[
     ("Gespeichert als Besprechung #{}: {} — `mostalgia show {}` zeigt sie an.", "Saved as meeting #{}: {} — `mostalgia show {}` shows it."),
     ("Aus Text importiert, ohne Audio und ohne Zeiten", "Imported from text, no audio and no times"),
     ("Aus Text importiert, ohne Audio", "Imported from text, no audio"),
+    ("Sprache {}: {} ({})", "Language {}: {} ({})"),
+    ("gewählt", "picked"),
+    ("fest", "locked"),
+    ("vorläufig", "provisional"),
 ];
