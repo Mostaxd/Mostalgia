@@ -243,4 +243,13 @@ pub const EN: &[(&str, &str)] = &[
     ("Feiner einstellen", "Fine-tune"),
     ("Transkript und Notizen", "Transcript and notes"),
     ("Live-Transkript, Transkript, Zusammenfassung und Notizen einer Besprechung – zusätzlich zur Textgröße der App.", "Live transcript, and a meeting's transcript, summary and notes – on top of the app text size."),
+    ("Bekannte Stimmen", "Known voices"),
+    ("Bekommt ein Sprecher im Transkript einen Namen, merkt sich Mostalgia die Stimme und erkennt sie in künftigen Besprechungen wieder. Gespeichert wird nur ein Stimmabdruck, keine Aufnahme.", "When you name a speaker in a transcript, Mostalgia remembers the voice and recognises it in future meetings. Only a voice print is stored, no audio."),
+    ("Noch keine Stimmen gelernt — im Transkript auf „Sprecher 1“ o. ä. klicken und einen Namen eingeben.", "No voices learned yet — click “Speaker 1” or similar in a transcript and enter a name."),
+    ("aus 1 Besprechung · {} min Sprache", "from 1 meeting · {} min of speech"),
+    ("aus {} Besprechungen · {} min Sprache", "from {} meetings · {} min of speech"),
+    ("Stimme von {} vergessen?", "Forget {}’s voice?"),
+    ("Vergessen", "Forget"),
+    ("Stimme vergessen", "Forget voice"),
+    ("Erkennung braucht „Mehrere Sprecher unterscheiden“. Wird jemand falsch erkannt: im Transkript umbenennen — das korrigiert die Stimme.", "Recognition needs “Tell several speakers apart”. If someone is recognised wrongly, rename them in the transcript — that corrects the voice."),
 ];

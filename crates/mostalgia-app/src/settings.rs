@@ -18,6 +18,7 @@ use mostalgia_core::config::{Config, Mode, NotesMode, SttChoice};
 use mostalgia_core::connections::{self, Api, Connection, PRESETS};
 use mostalgia_core::llm::{self, ModelInfo};
 use mostalgia_core::paths;
+use mostalgia_core::voices::Voices;
 
 use mostalgia_core::i18n::{tr, trf};
 
@@ -82,6 +83,11 @@ pub struct SettingsView {
     preview_frame: usize,
     preview_ticking: bool,
     preview_seen: Instant,
+    /// Voices named in transcripts, recognised in later meetings.
+    voices: Voices,
+    /// The known voice being renamed, and the voice asked about forgetting.
+    voice_rename: Option<(String, Entity<InputState>)>,
+    voice_forget: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -394,6 +400,9 @@ impl SettingsView {
             preview_frame: 0,
             preview_ticking: false,
             preview_seen: Instant::now(),
+            voices: Voices::load(),
+            voice_rename: None,
+            voice_forget: None,
             _subscriptions: vec![sub, custom_sub, url_sub, focus_sub],
         };
         this.load_system_status(cx);
@@ -2716,6 +2725,13 @@ impl Render for SettingsView {
             )));
         cards.push(Card {
             category: Category::Sprecher,
+            title: "Bekannte Stimmen",
+            keywords: "stimme stimmen bekannt erkennen wiedererkennen namen lernen vergessen löschen voice voices known recognise recognize names learn forget delete",
+            wide: false,
+            element: self.render_voices(cx).into_any_element(),
+        });
+        cards.push(Card {
+            category: Category::Sprecher,
             title: "Sprecher",
             keywords: "sprecher ich andere label diarisierung trennen mehrere personen umbenennen speaker speakers me others diarization separate people rename",
             wide: false,
@@ -3062,6 +3078,117 @@ impl Render for SettingsView {
 /// A setting row: label (+ hint) and its control side by side; when the card
 /// is too narrow the control wraps below the label instead of squeezing it.
 /// The label never gets narrower than ~190 px and wraps by word.
+impl SettingsView {
+    fn render_voices(&mut self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
+        let mut card = ui::card(cx).child(div().font_semibold().child(tr("Bekannte Stimmen"))).child(
+            div().text_xs().text_color(theme.muted_foreground).child(tr(
+                "Bekommt ein Sprecher im Transkript einen Namen, merkt sich Mostalgia die Stimme und erkennt sie in künftigen Besprechungen wieder. Gespeichert wird nur ein Stimmabdruck, keine Aufnahme.",
+            )),
+        );
+        if self.voices.is_empty() {
+            return card.child(
+                div()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child(tr("Noch keine Stimmen gelernt — im Transkript auf „Sprecher 1“ o. ä. klicken und einen Namen eingeben.")),
+            );
+        }
+        let mut voices = self.voices.voices.clone();
+        voices.sort_by_key(|v| v.name.to_lowercase());
+        for (ix, voice) in voices.into_iter().enumerate() {
+            let name = voice.name.clone();
+            let meetings = voice.samples.len();
+            let minutes = (voice.secs() / 60.0).max(0.1);
+            let detail = if meetings == 1 {
+                trf("aus 1 Besprechung · {} min Sprache", &[&format!("{minutes:.1}")])
+            } else {
+                trf("aus {} Besprechungen · {} min Sprache", &[&meetings, &format!("{minutes:.1}")])
+            };
+            let renaming = self.voice_rename.as_ref().filter(|(n, _)| *n == name).map(|(_, i)| i.clone());
+            let row = h_flex().w_full().gap_2().items_center().py_1();
+            let row = if let Some(input) = renaming {
+                row.child(Input::new(&input).flex_1().small())
+                    .child(Button::new(("voice-save", ix)).small().primary().label(tr("Speichern")).on_click(cx.listener(|this, _, _, cx| this.commit_voice_rename(cx))))
+                    .child(Button::new(("voice-cancel", ix)).small().ghost().label(tr("Abbrechen")).on_click(cx.listener(|this, _, _, cx| {
+                        this.voice_rename = None;
+                        cx.notify();
+                    })))
+            } else if self.voice_forget.as_deref() == Some(name.as_str()) {
+                row.child(div().flex_1().text_sm().child(trf("Stimme von {} vergessen?", &[&name])))
+                    .child(Button::new(("voice-forget-yes", ix)).small().danger().label(tr("Vergessen")).on_click(cx.listener({
+                        let name = name.clone();
+                        move |this, _, _, cx| {
+                            this.voices.remove(&name);
+                            this.voice_forget = None;
+                            this.save_voices(cx);
+                        }
+                    })))
+                    .child(Button::new(("voice-forget-no", ix)).small().ghost().label(tr("Abbrechen")).on_click(cx.listener(|this, _, _, cx| {
+                        this.voice_forget = None;
+                        cx.notify();
+                    })))
+            } else {
+                row.child(Icon::new(IconName::AudioLines).small().text_color(theme.muted_foreground))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().text_sm().child(name.clone()))
+                            .child(div().text_xs().text_color(theme.muted_foreground).child(detail)),
+                    )
+                    .child(Button::new(("voice-rename", ix)).xsmall().ghost().icon(IconName::Pencil).tooltip(tr("Umbenennen")).on_click(cx.listener({
+                        let name = name.clone();
+                        move |this, _, window, cx| this.begin_voice_rename(name.clone(), window, cx)
+                    })))
+                    .child(Button::new(("voice-forget", ix)).xsmall().ghost().icon(IconName::Trash).tooltip(tr("Stimme vergessen")).on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            this.voice_forget = Some(name.clone());
+                            this.voice_rename = None;
+                            cx.notify();
+                        },
+                    )))
+            };
+            card = card.child(row);
+        }
+        card.child(div().text_xs().text_color(theme.muted_foreground).child(tr(
+            "Erkennung braucht „Mehrere Sprecher unterscheiden“. Wird jemand falsch erkannt: im Transkript umbenennen — das korrigiert die Stimme.",
+        )))
+    }
+
+    fn begin_voice_rename(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
+        let input = cx.new(|cx| InputState::new(window, cx));
+        input.update(cx, |state, cx| state.set_value(name.clone(), window, cx));
+        input.read(cx).focus_handle(cx).focus(window, cx);
+        let sub = cx.subscribe(&input, |this, _, event: &InputEvent, cx| {
+            if let InputEvent::PressEnter { .. } = event {
+                this.commit_voice_rename(cx);
+            }
+        });
+        self._subscriptions.push(sub);
+        self.voice_forget = None;
+        self.voice_rename = Some((name, input));
+        cx.notify();
+    }
+
+    fn commit_voice_rename(&mut self, cx: &mut Context<Self>) {
+        let Some((from, input)) = self.voice_rename.take() else { return };
+        let to = input.read(cx).value().trim().to_string();
+        if self.voices.rename(&from, &to) {
+            self.save_voices(cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    fn save_voices(&mut self, cx: &mut Context<Self>) {
+        if let Err(e) = self.voices.save() {
+            eprintln!("[mostalgia] saving voices: {e:#}");
+        }
+        cx.notify();
+    }
+}
+
 fn settings_row(label: &str, hint: Option<&str>, control: AnyElement, theme: &gpui_kit::component::Theme) -> Div {
     h_flex()
         .w_full()

@@ -103,4 +103,8 @@ pub const EN: &[(&str, &str)] = &[
     ("Aus Text importiert", "Imported from text"),
     ("Aus Text importiert · ohne Audio und ohne Zeiten", "Imported from text · no audio and no times"),
     ("Aus Text importiert · ohne Audio", "Imported from text · no audio"),
+    ("Stimme von {} gemerkt — wird in künftigen Besprechungen erkannt.", "Remembered {}’s voice — it will be recognised in future meetings."),
+    ("{} spricht hier zu kurz, um die Stimme zu lernen.", "{} doesn’t speak long enough here to learn their voice."),
+    ("Stimme nicht gelernt: {}", "Voice not learned: {}"),
+    ("Die Stimme wird gemerkt und künftig mit diesem Namen erkannt.", "The voice is remembered and recognised by this name from now on."),
 ];
