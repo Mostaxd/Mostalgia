@@ -112,4 +112,7 @@ pub const EN: &[(&str, &str)] = &[
     ("gewählt", "picked"),
     ("fest", "locked"),
     ("vorläufig", "provisional"),
+    ("Keine unterbrochenen Aufnahmen.", "No unfinished recordings."),
+    ("{} Aufnahme(n) nicht wiederhergestellt", "{} recording(s) not recovered"),
+    ("{} unterbrochene Aufnahme(n) gefunden – `mostalgia recover` macht Besprechungen daraus", "{} unfinished recording(s) found – `mostalgia recover` turns them into meetings"),
 ];

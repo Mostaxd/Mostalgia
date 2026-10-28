@@ -193,6 +193,8 @@ pub struct RecordingView {
     engine_label: Option<(SharedString, bool)>,
     phase: Phase,
     error: Option<SharedString>,
+    /// Recordings recovered after a crash, being or just processed.
+    recovered: Vec<SharedString>,
     scroll: ScrollHandle,
     /// Keep the newest line in view; turned off when the user scrolls up.
     follow: bool,
@@ -215,6 +217,7 @@ impl RecordingView {
             engine_label: None,
             phase: Phase::Setup,
             error: None,
+            recovered: Vec::new(),
             scroll: ScrollHandle::new(),
             follow: true,
             focus: cx.focus_handle(),
@@ -841,6 +844,113 @@ impl RecordingView {
         Some(live.sources_on[source as usize])
     }
 
+    /// Recordings a crash, kill or power loss left unfinished (see
+    /// `recovery`): each is repaired and goes through the normal final pass
+    /// in the background, one after another, shown in the library's
+    /// processing list and here; then it opens like any saved recording.
+    /// One that can't be repaired says so, with its folder.
+    pub fn recover_orphans(&mut self, cx: &mut Context<Self>) {
+        use crate::processing::{self, Job, Key};
+        use mostalgia_core::recovery;
+        let mut found = Vec::new();
+        for dir in recovery::orphans(&paths::recordings_dir()) {
+            match recovery::recording(&dir) {
+                Ok(rec) => {
+                    let minutes = (rec.duration_secs / 60.0).round() as u64;
+                    let line = trf(
+                        "Unterbrochene Aufnahme von {} ({} min) wiederhergestellt – wird verarbeitet …",
+                        &[&rec.started_at.format("%H:%M"), &minutes],
+                    );
+                    eprintln!("[mostalgia] {line} ({})", dir.display());
+                    self.recovered.push(line.into());
+                    let key = Key::Recovered(rec.started_at.timestamp());
+                    let title = trf("Besprechung {}", &[&i18n::date_time(&rec.started_at)]);
+                    processing::set(key, Job { title, stage: tr("Wartet …").to_string(), fraction: None });
+                    found.push(rec);
+                }
+                Err(e) => {
+                    let message = trf("Unterbrochene Aufnahme in {} lässt sich nicht wiederherstellen: {}", &[&dir.display(), &format!("{e:#}")]);
+                    eprintln!("[mostalgia] {message}");
+                    self.error = Some(message.into());
+                }
+            }
+        }
+        if found.is_empty() {
+            cx.notify();
+            return;
+        }
+        let config = self.config.clone();
+        let people = self.people;
+        let (tx, rx) = crossbeam_channel::unbounded::<(std::path::PathBuf, Result<i64, String>)>();
+        std::thread::spawn(move || {
+            for rec in found {
+                let key = Key::Recovered(rec.started_at.timestamp());
+                let vad = config.vad_model_path();
+                let opts = finalize::FinalPassOptions {
+                    vad_model: vad.exists().then_some(vad),
+                    diarize: config.diarize,
+                    denoise_mic: config.denoise,
+                    people,
+                    progress: finalize::Progress::new(move |stage| processing::stage(key, stage.label(), stage.fraction())),
+                };
+                processing::stage(key, tr("Transkript wird fertiggestellt …").to_string(), None);
+                let saved = finalize::engine_for(&config, &config.final_engine)
+                    .and_then(|mut engine| finalize::save_recording(&rec, &mut engine, &opts, &config.language, &[]));
+                processing::clear(key);
+                let result = match saved {
+                    Ok(saved) => {
+                        recovery::finish(&rec.dir);
+                        Ok(saved.meeting_id)
+                    }
+                    Err(e) => Err(trf("Wiederhergestellte Aufnahme ließ sich nicht verarbeiten: {} — sie liegt in {}", &[&format!("{e:#}"), &rec.dir.display()])),
+                };
+                let _ = tx.send((rec.dir.clone(), result));
+            }
+        });
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_millis(500)).await;
+                let mut done = false;
+                loop {
+                    match rx.try_recv() {
+                        Ok((_, result)) => {
+                            let alive = this
+                                .update(cx, |this, cx| {
+                                    match result {
+                                        Ok(id) => cx.emit(RecordingEvent::Saved(id)),
+                                        Err(e) => {
+                                            eprintln!("[mostalgia] {e}");
+                                            this.error = Some(e.into());
+                                        }
+                                    }
+                                    cx.notify();
+                                })
+                                .is_ok();
+                            if !alive {
+                                return;
+                            }
+                        }
+                        Err(crossbeam_channel::TryRecvError::Empty) => break,
+                        Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                            done = true;
+                            break;
+                        }
+                    }
+                }
+                if done {
+                    this.update(cx, |this, cx| {
+                        this.recovered.clear();
+                        cx.notify();
+                    })
+                    .ok();
+                    return;
+                }
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
     pub fn stop(&mut self, cx: &mut Context<Self>) {
         let final_label = self.config.engine_label(&self.config.final_engine);
         let Phase::Recording(live) = &self.phase else { return };
@@ -915,6 +1025,9 @@ impl RecordingView {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             crate::processing::clear(crate::processing::Key::Recording);
+            if result.is_ok() {
+                mostalgia_core::recovery::finish(&dir);
+            }
             this.update(cx, |this, cx| match result {
                 Ok(saved) => {
                     if let Some(e) = &saved.error {
@@ -1096,6 +1209,17 @@ impl RecordingView {
                     )
                     .when(self.config.diarize && self.sources()[1], |el| el.child(self.render_people(cx)))
                     .child(self.render_engines(cx))
+                    .children(self.recovered.iter().map(|line| {
+                        h_flex()
+                            .p_3()
+                            .gap_2()
+                            .items_start()
+                            .rounded(cx.theme().radius)
+                            .bg(cx.theme().warning.opacity(0.12))
+                            .text_sm()
+                            .child(Icon::new(IconName::TriangleAlert).small().text_color(cx.theme().warning).mt(px(2.)))
+                            .child(div().flex_1().min_w_0().child(line.clone()))
+                    }))
                     .when_some(self.error.clone(), |el, err| {
                         el.child(
                             div()
