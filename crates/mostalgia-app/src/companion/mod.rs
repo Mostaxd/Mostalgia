@@ -4,6 +4,7 @@
 //! dragged anywhere inside it, and opens a chat bubble when clicked.
 
 pub mod art;
+pub mod cast;
 mod bubble;
 pub use bubble::ShowLiveMoment;
 mod controls;
