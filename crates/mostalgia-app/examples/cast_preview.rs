@@ -1,5 +1,6 @@
-//! Writes every animation frame of the alternative companions (Tsumugi and
-//! Hoshi) and their notes artwork as SVG, for previewing without the app.
+//! Writes every animation frame of the alternative companions (Tsumugi,
+//! Hoshi, Kaito and Jin) and their notes artwork as SVG, for previewing
+//! without the app.
 //! Run with:
 //!
 //!     cargo run -p mostalgia-app --example cast_preview -- <out-dir>
@@ -10,7 +11,7 @@
 
 use std::path::Path;
 
-use mostalgia_app::companion::cast::{PointKind, hoshi, tsumugi};
+use mostalgia_app::companion::cast::{PointKind, hoshi, jin, kaito, tsumugi};
 
 /// A mixed run of notes, as a meeting would produce them.
 fn notes(count: usize) -> Vec<PointKind> {
@@ -41,5 +42,7 @@ fn main() {
     let out: &Path = &out;
     write_character!(tsumugi, out);
     write_character!(hoshi, out);
+    write_character!(kaito, out);
+    write_character!(jin, out);
     println!("written to {}", out.display());
 }
