@@ -235,7 +235,7 @@ pub struct NewMeeting<'a> {
     pub dir: &'a Path,
 }
 
-const SCHEMA_VERSION: i32 = 13;
+const SCHEMA_VERSION: i32 = 14;
 
 const SCHEMA: &str = "
 CREATE TABLE meetings (
@@ -400,6 +400,22 @@ const MIGRATIONS: &[&str] = &[
         created_at INTEGER NOT NULL
     );
     ALTER TABLE documents ADD COLUMN collection_id INTEGER REFERENCES doc_collections(id) ON DELETE SET NULL;",
+    // 14: the decision log — decisions across meetings, from the summaries
+    // (`origin` 'summary') or edited by the user, with the transcript time
+    // they were made at, and the later decision that replaced one
+    "CREATE TABLE decisions (
+        id            INTEGER PRIMARY KEY,
+        meeting_id    INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        text          TEXT NOT NULL,
+        speaker       TEXT,
+        at_secs       REAL,
+        origin        TEXT NOT NULL DEFAULT 'summary',
+        edited        INTEGER NOT NULL DEFAULT 0,
+        superseded    INTEGER NOT NULL DEFAULT 0,
+        superseded_by INTEGER REFERENCES decisions(id) ON DELETE SET NULL,
+        created_at    INTEGER NOT NULL
+    );
+    CREATE INDEX decisions_meeting ON decisions(meeting_id);",
 ];
 
 /// Moves a meeting's current unpinned notes into a new archived version;

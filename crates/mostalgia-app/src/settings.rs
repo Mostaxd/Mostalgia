@@ -29,6 +29,8 @@ use crate::{themes, ui};
 
 pub enum SettingsEvent {
     Changed,
+    /// Open the decision log and fill it from earlier meetings.
+    BuildDecisions,
 }
 
 impl EventEmitter<SettingsEvent> for SettingsView {}
@@ -2869,6 +2871,13 @@ impl Render for SettingsView {
         // ── KI & Transkription ──
         cards.push(Card {
             category: Category::Ki,
+            title: "Entscheidungslog",
+            keywords: "entscheidungen entscheidungslog log beschlüsse decisions decision log",
+            wide: false,
+            element: self.render_decision_log(cx).into_any_element(),
+        });
+        cards.push(Card {
+            category: Category::Ki,
             title: "Verbindungen",
             keywords: "verbindung verbindungen anbieter provider connection connections endpoint endpunkt url base-url api key schlüssel keyring schlüsselbund claude anthropic openai deepseek ollama litellm lm studio lmstudio vllm openrouter groq together custom eigener lokal local cloud test testen",
             wide: true,
@@ -3372,6 +3381,39 @@ fn theme_name(id: &str, name: &str) -> String {
 /// "1 Tag" / "7 Tage".
 fn days_label(n: u32) -> String {
     if n == 1 { tr("1 Tag").to_string() } else { trf("{} Tage", &[&n]) }
+}
+
+// ── KI: the decision log ──
+impl SettingsView {
+    fn render_decision_log(&mut self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
+        let on = self.config.decision_log;
+        let switch = Switch::new("set-decision-log").checked(on).on_change(cx.listener(|this, v: &bool, _, cx| {
+            this.config.decision_log = *v;
+            this.save(cx);
+        }));
+        let pending = (on && !Config::load().decision_log_built)
+            .then(|| Store::open(&paths::database()).and_then(|s| mostalgia_core::decisions::summarized_meetings(&s)).map(|v| v.len()).unwrap_or(0))
+            .filter(|n| *n > 0);
+        ui::card(cx)
+            .child(div().font_semibold().child(tr("Entscheidungslog")))
+            .child(settings_row(
+                tr("Entscheidungen sammeln"),
+                Some(tr("Eine Seite „Entscheidungen“ in der Seitenleiste: alle Entscheidungen aus den Zusammenfassungen, durchsuchbar, mit Sprung zur Stelle im Transkript. Kostet keine zusätzlichen KI-Anfragen.")),
+                switch.into_any_element(),
+                &theme,
+            ))
+            .when_some(pending, |el, n| {
+                el.child(
+                    Button::new("build-decisions")
+                        .small()
+                        .primary()
+                        .icon(IconName::ListChecks)
+                        .label(trf("Log aus vorhandenen Besprechungen erstellen ({})", &[&n]))
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(SettingsEvent::BuildDecisions))),
+                )
+            })
+    }
 }
 
 // ── Speicher: deleting old audio ──

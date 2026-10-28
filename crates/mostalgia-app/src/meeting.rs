@@ -498,6 +498,12 @@ impl MeetingView {
             if let Some(title) = s.title.as_ref().filter(|_| !keep_title) {
                 store.set_title(id, title)?;
             }
+            // Its decisions go into the log, if that's on.
+            if Config::load().decision_log
+                && let Some(m) = store.get(id)?
+            {
+                mostalgia_core::decisions::add_meeting(&store, &m)?;
+            }
             // Summary sections become searchable too.
             if let Err(e) = mostalgia_core::ask::index_meeting(id) {
                 eprintln!("[mostalgia] search index: {e:#}");

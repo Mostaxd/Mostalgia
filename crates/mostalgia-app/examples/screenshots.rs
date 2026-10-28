@@ -157,6 +157,18 @@ fn main() {
         // Let the line fade-ins finish.
         std::thread::sleep(std::time::Duration::from_millis(600));
         shot("2-recording", &mut cx);
+        // The decision log, filled from the demo meetings.
+        if std::env::var_os("DECISIONS").is_some() {
+            cx.update_window(handle, |_, window, cx| {
+                view.update(cx, |app, cx| app.open_decisions(false, window, cx));
+                if let Some(d) = view.read(cx).decisions_view() {
+                    d.update(cx, |d, cx| d.demo_build_now(cx));
+                }
+            })
+            .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            shot("2h-decisions", &mut cx);
+        }
         // "Import recording…": the dialog for a file.
         if let Some(file) = std::env::var_os("IMPORTDLG") {
             cx.update_window(handle, |_, window, cx| view.update(cx, |app, cx| app.demo_import(Some(file.into()), window, cx))).unwrap();
