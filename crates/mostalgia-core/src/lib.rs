@@ -20,6 +20,7 @@ pub mod finalize;
 pub mod i18n;
 pub mod language;
 pub mod llm;
+pub mod media_import;
 pub mod paths;
 pub mod playback;
 pub mod recorder;

@@ -13,6 +13,8 @@ pub enum Key {
     Recording,
     /// A recording left unfinished by a crash, by its start (unix seconds).
     Recovered(i64),
+    /// An audio or video file being imported (by when it started, ms).
+    Import(i64),
     /// A meeting's transcript being made again.
     Transcript(i64),
     /// A meeting's summary being written.
@@ -25,7 +27,7 @@ impl Key {
     /// The library meeting this is about.
     pub fn meeting(self) -> Option<i64> {
         match self {
-            Key::Recording | Key::Recovered(_) => None,
+            Key::Recording | Key::Recovered(_) | Key::Import(_) => None,
             Key::Transcript(id) | Key::Summary(id) | Key::Notes(id) => Some(id),
         }
     }

@@ -103,4 +103,11 @@ pub const EN: &[(&str, &str)] = &[
     ("Wartet …", "Waiting …"),
     ("Unterbrochene Aufnahme in {} lässt sich nicht wiederherstellen: {}", "The unfinished recording in {} can't be recovered: {}"),
     ("Wiederhergestellte Aufnahme ließ sich nicht verarbeiten: {} — sie liegt in {}", "The recovered recording couldn't be processed: {} — it's in {}"),
+    ("Audio wird gelesen … {} %", "Reading audio … {} %"),
+    ("Audio wird gelesen …", "Reading audio …"),
+    ("{} lässt sich nicht lesen ({}). Für dieses Format (z. B. Opus) wird ffmpeg gebraucht – installieren (sudo apt install ffmpeg) und erneut importieren.", "Can't read {} ({}). This format (e.g. Opus) needs ffmpeg – install it (sudo apt install ffmpeg) and import again."),
+    ("{} lässt sich auch mit ffmpeg nicht lesen", "ffmpeg can't read {} either"),
+    ("unbekanntes Format", "unknown format"),
+    ("keine Tonspur", "no audio track"),
+    ("Ton-Codec wird nicht unterstützt", "audio codec not supported"),
 ];

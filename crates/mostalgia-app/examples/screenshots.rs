@@ -157,6 +157,16 @@ fn main() {
         // Let the line fade-ins finish.
         std::thread::sleep(std::time::Duration::from_millis(600));
         shot("2-recording", &mut cx);
+        // "Import recording…": the dialog for a file.
+        if let Some(file) = std::env::var_os("IMPORTDLG") {
+            cx.update_window(handle, |_, window, cx| view.update(cx, |app, cx| app.demo_import(Some(file.into()), window, cx))).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            shot("2g-import", &mut cx);
+            cx.update_window(handle, |_, window, cx| {
+                view.update(cx, |app, cx| app.demo_import(None, window, cx));
+            })
+            .ok();
+        }
         // After Stop: the final pass under way, in the library and here.
         if std::env::var_os("FINALIZING").is_some() {
             cx.update_window(handle, |_, _, cx| {
