@@ -23,6 +23,7 @@ reqwest = { version = "0.13.5", default-features = false, features = ["blocking"
 rusqlite = { version = "0.41.0", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+regex = "1"
 sherpa-rs = { version = "0.6.8", default-features = false, features = ["download-binaries"], optional = true }
 sherpa-rs-sys = { version = "0.6.8", default-features = false, features = ["download-binaries"], optional = true }
 tokenizers = { version = "0.23.2", default-features = false, features = ["onig"] }
