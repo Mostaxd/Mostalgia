@@ -8,3 +8,8 @@ edition = "2024"
 
 [profile.release]
 lto = "thin"
+
+# gpui-component with the Linux window shadow margin removed (see
+# vendor/gpui-component/src/window_border.rs, "Mostalgia:").
+[patch.crates-io]
+gpui-component = { path = "vendor/gpui-component" }
