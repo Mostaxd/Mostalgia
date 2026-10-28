@@ -17,6 +17,7 @@ hound = "3.5.1"
 keyring = "4.2.0"
 libpulse-binding = "2.30.1"
 libpulse-simple-binding = "2.29.0"
+pdf-extract = "0.12.1"
 nnnoiseless = { version = "0.5.2", default-features = false }
 reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "json", "multipart", "rustls"] }
 rusqlite = { version = "0.41.0", features = ["bundled"] }
@@ -27,6 +28,8 @@ sherpa-rs-sys = { version = "0.6.8", default-features = false, features = ["down
 tokenizers = { version = "0.23.2", default-features = false, features = ["onig"] }
 whisper-rs = "0.16.0"
 whisper-rs-sys = "0.15.0"
+# .docx / .odt text for the documents drive (docx-rs already pulls it in).
+zip = { version = "8", default-features = false, features = ["deflate"] }
 
 
 [features]

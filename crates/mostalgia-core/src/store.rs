@@ -235,7 +235,7 @@ pub struct NewMeeting<'a> {
     pub dir: &'a Path,
 }
 
-const SCHEMA_VERSION: i32 = 10;
+const SCHEMA_VERSION: i32 = 11;
 
 const SCHEMA: &str = "
 CREATE TABLE meetings (
@@ -355,6 +355,41 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE meetings ADD COLUMN notes_focus TEXT;",
     // 10: which companion took the notes and the chat (older meetings: Mori)
     "ALTER TABLE meetings ADD COLUMN companion TEXT;",
+    // 11: the documents drive — uploaded files (a copy lives in the data
+    // directory), split into searchable chunks with embeddings
+    "CREATE TABLE documents (
+        id         INTEGER PRIMARY KEY,
+        title      TEXT NOT NULL,
+        file_name  TEXT NOT NULL,
+        path       TEXT NOT NULL,
+        kind       TEXT NOT NULL,
+        language   TEXT,
+        size_bytes INTEGER NOT NULL,
+        hash       TEXT NOT NULL,
+        pages      INTEGER,
+        added_at   INTEGER NOT NULL,
+        indexed_at INTEGER,
+        error      TEXT
+    );
+    CREATE TABLE doc_chunks (
+        id          INTEGER PRIMARY KEY,
+        document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        loc         INTEGER NOT NULL,
+        heading     TEXT NOT NULL DEFAULT '',
+        text        TEXT NOT NULL,
+        embedding   BLOB
+    );
+    CREATE INDEX doc_chunks_document ON doc_chunks(document_id, loc);
+    CREATE VIRTUAL TABLE doc_chunks_fts USING fts5(
+        heading, text, content='doc_chunks', content_rowid='id',
+        tokenize='unicode61 remove_diacritics 2'
+    );
+    CREATE TRIGGER doc_chunks_ai AFTER INSERT ON doc_chunks BEGIN
+        INSERT INTO doc_chunks_fts(rowid, heading, text) VALUES (new.id, new.heading, new.text);
+    END;
+    CREATE TRIGGER doc_chunks_ad AFTER DELETE ON doc_chunks BEGIN
+        INSERT INTO doc_chunks_fts(doc_chunks_fts, rowid, heading, text) VALUES ('delete', old.id, old.heading, old.text);
+    END;",
 ];
 
 /// Moves a meeting's current unpinned notes into a new archived version;

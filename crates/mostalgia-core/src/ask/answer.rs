@@ -66,18 +66,25 @@ fn system_prompt() -> String {
 
 fn base_system_prompt() -> String {
     format!(
-        "You answer questions about the user's recorded meetings. Today is {today}.\n\n\
+        "You answer questions about the user's recorded meetings and the documents they added. Today is {today}.\n\n\
 Use the tools to find the answer in the transcripts and summaries: search_meetings for content \
 (try several search terms and paraphrases, in the meetings' language; for time references like \
 \"last week\" set from_date/to_date), list_meetings for time ranges, read_transcript for more \
-context around a hit. Don't write text before tool calls.\n\n\
+context around a hit.{docs} Don't write text before tool calls.\n\n\
 Answer only from the tool results, briefly and concretely, in the language of the question. \
 Cite sources sparingly with the marker [[m:<meeting_id>@<seconds>]] (seconds = start_secs of the \
-passage; 0 for summaries): at most one marker per sentence or bullet, placed at its end before the \
+passage; 0 for summaries){doc_marker}: at most one marker per sentence or bullet, placed at its end before the \
 final punctuation. Use no other citation or time format (no [00:01:23], no lists of times). \
-If the transcripts don't contain the answer, say so plainly and don't guess. Speakers are \
+If the sources don't contain the answer, say so plainly and don't guess. Speakers are \
 \"Me\" (the user), \"Others\", \"Speaker N\" or have names.",
-        today = Local::now().format("%A, %d.%m.%Y")
+        today = Local::now().format("%A, %d.%m.%Y"),
+        docs = if crate::docs::any() {
+            " search_documents searches the user's documents (manuals, specs, notes, PDFs; English, German or \
+other languages): use it when the question may be about them or the meetings don't answer it."
+        } else {
+            ""
+        },
+        doc_marker = if crate::docs::any() { ", and documents with [[d:<document_id>@<loc>]] (loc as given in the hit)" } else { "" },
     )
 }
 
@@ -92,6 +99,17 @@ fn tools_claude() -> Value {
                     "query": {"type": "string", "description": "Search query, ideally a paraphrase of what you are looking for"},
                     "from_date": {"type": "string", "description": "Earliest date YYYY-MM-DD (optional)"},
                     "to_date": {"type": "string", "description": "Latest date YYYY-MM-DD (optional)"}
+                },
+                "required": ["query"]
+            }
+        },
+        {
+            "name": "search_documents",
+            "description": "Hybrid search (keywords + meaning) over the user's documents (uploaded files). Returns the best chunks with document_id, title, loc (PDF page or section number), heading and text.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query, ideally a paraphrase of what you are looking for (any language)"}
                 },
                 "required": ["query"]
             }
@@ -156,6 +174,14 @@ fn run_tool(name: &str, input: &Value) -> (String, String) {
                     })
                     .collect();
                 Ok((serde_json::to_string(&out)?, trf("Suche: {} ({} Treffer, {} ms)", &[&q, &out.len(), &ms])))
+            }
+            "search_documents" => {
+                let q = input["query"].as_str().unwrap_or_default();
+                let t = std::time::Instant::now();
+                let out = document_hits(q, 10)?;
+                let ms = t.elapsed().as_millis();
+                let n = out.as_array().map_or(0, Vec::len);
+                Ok((serde_json::to_string(&out)?, trf("Dokumente: {} ({} Treffer, {} ms)", &[&q, &n, &ms])))
             }
             "list_meetings" => {
                 let filter = Filter {
@@ -449,19 +475,45 @@ fn retrieve_then_answer(question: &str, history: &[(String, String)], req: &Summ
     let _ = events.send(AskEvent::Status(trf("{} kann keine Werkzeuge nutzen – suche vorab", &[&req.model])));
     let (hits, status) = run_tool("search_meetings", &json!({ "query": question }));
     let _ = events.send(AskEvent::Status(status));
+    let doc_hits = if crate::docs::any() {
+        let (hits, status) = run_tool("search_documents", &json!({ "query": question }));
+        let _ = events.send(AskEvent::Status(status));
+        format!("\n\nSearch results from the documents (JSON):\n{hits}")
+    } else {
+        String::new()
+    };
     let mut user = String::new();
     for (q, a) in history {
         user.push_str(&format!("Earlier question: {q}\nEarlier answer: {a}\n\n"));
     }
     user.push_str(&format!(
-        "Search results from the meetings (JSON):\n{hits}\n\nQuestion: {question}\n\n\
-Answer only from these results; cite with at most one [[m:<meeting_id>@<start_secs>]] per sentence, at its end."
+        "Search results from the meetings (JSON):\n{hits}{doc_hits}\n\nQuestion: {question}\n\n\
+Answer only from these results; cite with at most one [[m:<meeting_id>@<start_secs>]] (or [[d:<document_id>@<loc>]]) per sentence, at its end."
     ));
     let system = system_prompt().replace("Use the tools to find", "The search results are in the message; use them to find");
     let done = crate::llm::complete(&req.connection, &req.model, req.effort.as_deref(), &system, &user)?;
     let answer = done.text.trim().to_string();
     let _ = events.send(AskEvent::TextDelta(answer.clone()));
     Ok(answer)
+}
+
+/// Document search hits as the tools give them to the model.
+pub(crate) fn document_hits(query: &str, limit: usize) -> Result<Value> {
+    let hits = crate::docs::search(query, None, limit)?;
+    Ok(Value::Array(
+        hits.iter()
+            .map(|h| {
+                json!({
+                    "document_id": h.document_id,
+                    "title": h.title,
+                    "loc": h.loc,
+                    "loc_kind": if h.kind.paged() { "page" } else { "section" },
+                    "heading": h.heading,
+                    "text": h.text,
+                })
+            })
+            .collect(),
+    ))
 }
 
 /// Splits an answer into text and citations ([[m:ID@SECS]] markers),

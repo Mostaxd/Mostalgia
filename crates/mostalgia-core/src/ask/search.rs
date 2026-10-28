@@ -73,6 +73,11 @@ const STOPWORDS: &[&str] = &[ // i18n: not UI
     "to", "in", "on", "for", "about", "with", "uns", "unser", "unsere", "gesagt", "besprochen",
 ];
 
+/// Whether a word is too common to search for (German or English).
+pub(crate) fn is_stopword(w: &str) -> bool {
+    STOPWORDS.contains(&w)
+}
+
 /// FTS5 query: OR of the significant words, each prefix-matched.
 fn fts_query(query: &str) -> Option<String> {
     let terms: Vec<String> = query

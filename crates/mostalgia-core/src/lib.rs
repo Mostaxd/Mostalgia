@@ -3,6 +3,7 @@
 //! app) drive a [`recorder::Recorder`] and consume its [`recorder::Event`]s.
 
 pub mod ask;
+pub mod assist;
 pub mod audio;
 pub mod callwatch;
 pub mod chunker;
@@ -12,6 +13,7 @@ pub mod config;
 pub mod connections;
 pub mod denoise;
 pub mod diarize;
+pub mod docs;
 pub mod export;
 pub mod finalize;
 pub mod i18n;
