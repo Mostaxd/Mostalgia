@@ -1009,7 +1009,7 @@ impl MeetingView {
     /// After a rename: remembers the named person's voice for later
     /// meetings (in the background; computing a voice print takes a moment).
     fn learn_voice(&mut self, previous: String, name: String, cx: &mut Context<Self>) {
-        if !mostalgia_core::diarize::available() || previous == name {
+        if !mostalgia_core::diarize::available() || previous == name || !Config::load().recognize_voices {
             return;
         }
         let id = self.id;
@@ -1056,7 +1056,7 @@ impl MeetingView {
         self.reload(cx);
         cx.emit(MeetingEvent::Changed);
         let has_audio = self.meeting.as_ref().is_some_and(|m| m.tracks().iter().any(|(s, _)| *s == Source::System));
-        if !has_audio || !mostalgia_core::diarize::available() {
+        if !has_audio || !mostalgia_core::diarize::available() || !Config::load().recognize_voices {
             return;
         }
         let id = self.id;

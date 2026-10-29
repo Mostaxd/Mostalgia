@@ -31,6 +31,10 @@ pub struct Config {
     pub speaker_labels: bool,
     /// Tell several remote speakers apart ("Sprecher 1", "Sprecher 2", …).
     pub diarize: bool,
+    /// Name speakers whose voice is known from earlier meetings. Off, they
+    /// stay "Sprecher 1", "Sprecher 2", … until renamed by hand, and
+    /// renaming doesn't learn the voice.
+    pub recognize_voices: bool,
     /// Noise suppression (RNNoise) on the mic for transcription.
     pub denoise: bool,
     /// Show provisional text while someone is still speaking.
@@ -301,6 +305,7 @@ impl Default for Config {
             vad_threshold: vad::DEFAULT_THRESHOLD,
             speaker_labels: true,
             diarize: false,
+            recognize_voices: true,
             denoise: false,
             interim_text: true,
             diarize_threshold: 0.5,

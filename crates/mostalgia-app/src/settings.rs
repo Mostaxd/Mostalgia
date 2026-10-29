@@ -3032,6 +3032,11 @@ impl Render for SettingsView {
                         .child(choice("dia-more", "Mehr Sprecher", dt < 0.45, cx, |c| c.diarize_threshold = 0.4))
                         .into_any_element(),
                 ))
+                .child(row(
+                    tr("Bekannte Stimmen mit Namen erkennen"),
+                    Some(tr("Aus: Sprecher bleiben „Sprecher 1“, „Sprecher 2“, … — Namen vergibst du selbst im Transkript.")),
+                    switch("set-recognize-voices", self.config.recognize_voices, cx, |c, v| c.recognize_voices = v),
+                ))
             })
             .child(div().text_xs().text_color(theme.muted_foreground).child(tr(
                 "Namen vergeben: im Transkript auf einen Sprecher-Chip klicken — alle Zeilen werden umbenannt.",
@@ -3046,7 +3051,7 @@ impl Render for SettingsView {
         cards.push(Card {
             category: Category::Sprecher,
             title: "Sprecher",
-            keywords: "sprecher ich andere label diarisierung trennen mehrere personen umbenennen speaker speakers me others diarization separate people rename",
+            keywords: "sprecher ich andere label diarisierung trennen mehrere personen umbenennen namen erkennen raten speaker speakers me others diarization separate people rename names recognise recognize guess",
             wide: false,
             element: speakers.into_any_element(),
         });
