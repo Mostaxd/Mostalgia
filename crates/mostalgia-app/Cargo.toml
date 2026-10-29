@@ -44,6 +44,13 @@ notify-rust = "4.18"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse"] }
 winreg = "0.56"
+# The app's identity for toasts and the taskbar: AppUserModelID and its
+# Start Menu shortcut (COM: IShellLink, IPropertyStore).
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Storage_EnhancedStorage", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem"] }
+
+[build-dependencies]
+# The exe's icon on Windows (resource 1, which GPUI also uses for windows).
+winresource = "0.1"
 
 [features]
 default = []
