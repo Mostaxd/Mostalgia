@@ -71,7 +71,7 @@ pub struct SettingsView {
     custom_target: Option<(Slot, String)>,
     /// Processing mode last clicked, to explain what's still missing.
     chosen_mode: Option<Mode>,
-    #[cfg_attr(windows, allow(dead_code))]
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     shortcut_error: Option<String>,
     gpu: Option<String>,
     scroll: ScrollHandle,
@@ -308,7 +308,7 @@ fn read_shortcut() -> Option<String> {
     (!binding.is_empty()).then(|| binding.to_string())
 }
 
-#[cfg_attr(windows, allow(dead_code))]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 /// Binds Super+Shift+R to `mostalgia toggle` (the CLI next to this app, or
 /// the AppImage, which runs the CLI when given a command: the paths inside
 /// it only exist while it runs).
@@ -351,7 +351,7 @@ fn tray_host_running() -> bool {
 }
 
 /// "<Super><Shift>r" → "Super + Shift + R".
-#[cfg_attr(windows, allow(dead_code))]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn pretty_binding(b: &str) -> String {
     let mut parts: Vec<String> = Vec::new();
     let mut rest = b;
@@ -3105,15 +3105,15 @@ impl Render for SettingsView {
                 switch("call-stop", self.config.call_stop_auto, cx, |c, v| c.call_stop_auto = v),
             ));
         // Calls are only noticed while the app runs.
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         let calls = calls.child(row(
-            tr("Mit Windows starten"),
+            if cfg!(target_os = "macos") { tr("Bei der Anmeldung starten") } else { tr("Mit Windows starten") },
             Some(tr("Startet Mostalgia minimiert bei der Anmeldung, damit Anrufe erkannt werden.")),
             Switch::new("login-start")
                 .checked(crate::login_start::enabled())
                 .on_change(cx.listener(|_, on: &bool, _, cx| {
                     if let Err(e) = crate::login_start::set(*on) {
-                        eprintln!("[mostalgia] start with Windows: {e:#}");
+                        eprintln!("[mostalgia] start at login: {e:#}");
                     }
                     cx.notify();
                 }))
@@ -3406,7 +3406,7 @@ impl Render for SettingsView {
         });
 
         // ── Tastenkürzel & System ──
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "macos")))]
         let shortcut = ui::card(cx)
             .child(title("Tastenkürzel"))
             .child(div().text_sm().text_color(theme.muted_foreground).child(tr("Startet oder stoppt eine Aufnahme von überall – auch wenn die App geschlossen ist.")))
@@ -3433,8 +3433,8 @@ impl Render for SettingsView {
             })
             .when_some(self.shortcut_error.clone(), |el, e| el.child(div().text_xs().text_color(theme.danger).child(e)))
             .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Ändern oder entfernen: GNOME-Einstellungen → Tastatur → Eigene Tastenkürzel.")));
-        // Windows: the app registers the hotkey itself (see `control`).
-        #[cfg(windows)]
+        // Windows and macOS: the app registers the hotkey itself (see `control`).
+        #[cfg(any(windows, target_os = "macos"))]
         let shortcut = ui::card(cx)
             .child(title("Tastenkürzel"))
             .child(div().text_sm().text_color(theme.muted_foreground).child(tr("Startet oder stoppt eine Aufnahme von überall, solange Mostalgia läuft – auch minimiert.")))
@@ -3444,7 +3444,7 @@ impl Render for SettingsView {
                     .gap_2()
                     .child(Icon::new(IconName::Check).small().text_color(theme.success))
                     .child(div().text_sm().child(tr("Eingerichtet:")))
-                    .child(div().px_2().py_0p5().rounded(theme.radius).border_1().border_color(theme.border).text_sm().font_family(theme.mono_font_family.clone()).child(tr("Strg + Alt + Umschalt + R"))),
+                    .child(div().px_2().py_0p5().rounded(theme.radius).border_1().border_color(theme.border).text_sm().font_family(theme.mono_font_family.clone()).child(if cfg!(target_os = "macos") { "⌃ ⌥ ⇧ R" } else { tr("Strg + Alt + Umschalt + R") })),
             );
         cards.push(Card {
             category: Category::System,
@@ -3456,7 +3456,7 @@ impl Render for SettingsView {
         #[cfg(not(target_os = "linux"))]
         let tray = ui::card(cx)
             .child(title("Tray-Symbol"))
-            .child(h_flex().gap_2().child(Icon::new(IconName::Check).small().text_color(theme.success)).child(div().text_sm().child(tr("Aktiv – im Infobereich der Taskleiste."))));
+            .child(h_flex().gap_2().child(Icon::new(IconName::Check).small().text_color(theme.success)).child(div().text_sm().child(if cfg!(target_os = "macos") { tr("Aktiv – rechts oben in der Menüleiste.") } else { tr("Aktiv – im Infobereich der Taskleiste.") })));
         #[cfg(target_os = "linux")]
         let tray = ui::card(cx)
             .child(title("Tray-Symbol"))

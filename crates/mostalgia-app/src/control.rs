@@ -413,6 +413,22 @@ fn register_hotkey() {
 pub struct TrayHandle {
     native: std::rc::Rc<std::cell::RefCell<native::Native>>,
     timer: objc2::rc::Retained<objc2_foundation::NSTimer>,
+    /// Keeps the recording hotkey registered.
+    _hotkeys: Option<global_hotkey::GlobalHotKeyManager>,
+}
+
+/// Control+Option+Shift+R starts or stops a recording from anywhere, like
+/// Ctrl+Alt+Shift+R on Windows (Cmd+Shift+R is the browsers' reload).
+#[cfg(target_os = "macos")]
+fn register_hotkey() -> Option<(global_hotkey::GlobalHotKeyManager, u32)> {
+    use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+    let manager = global_hotkey::GlobalHotKeyManager::new().ok()?;
+    let hotkey = HotKey::new(Some(Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT), Code::KeyR);
+    if let Err(e) = manager.register(hotkey) {
+        eprintln!("[mostalgia] the recording hotkey is taken: {e}");
+        return None;
+    }
+    Some((manager, hotkey.id()))
 }
 
 #[cfg(target_os = "macos")]
@@ -422,14 +438,20 @@ impl TrayHandle {
         let native = std::rc::Rc::new(std::cell::RefCell::new(native::Native::build(tray.recording, tray.mic_on)?));
         let polled = native.clone();
         let tx = tray.tx;
+        let (hotkeys, hotkey_id) = register_hotkey().unzip();
         let block = block2::RcBlock::new(move |_timer: std::ptr::NonNull<objc2_foundation::NSTimer>| {
+            while let Ok(e) = global_hotkey::GlobalHotKeyEvent::receiver().try_recv() {
+                if Some(e.id) == hotkey_id && e.state == global_hotkey::HotKeyState::Pressed {
+                    let _ = tx.send(Command::Toggle);
+                }
+            }
             let Ok(native) = polled.try_borrow() else { return };
             for cmd in native.commands() {
                 let _ = tx.send(cmd);
             }
         });
         let timer = unsafe { objc2_foundation::NSTimer::scheduledTimerWithTimeInterval_repeats_block(0.1, true, &block) };
-        Ok(Self { native, timer })
+        Ok(Self { native, timer, _hotkeys: hotkeys })
     }
 
     pub fn set_state(&self, recording: bool, mic_on: bool) {
