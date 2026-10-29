@@ -191,6 +191,18 @@ pub struct Config {
     pub live_captions_size: Option<(f32, f32)>,
     /// Its background opacity, 0.4–1.0.
     pub live_captions_opacity: f32,
+
+    // ── Live translation ──
+    /// Translate finished lines while recording (text only, by the
+    /// translation connection). Off by default.
+    pub live_translation: bool,
+    /// Language to translate into (a code like "en").
+    pub translation_language: String,
+    /// Connection for live translation ("" = the one for live notes).
+    pub translation_provider: String,
+    /// Model for live translation ("" = that connection's live-notes or
+    /// default model).
+    pub translation_model: String,
 }
 
 /// When Mori looks for live notes during a recording.
@@ -362,6 +374,10 @@ impl Default for Config {
             live_captions_pos: None,
             live_captions_size: None,
             live_captions_opacity: 0.92,
+            live_translation: false,
+            translation_language: String::new(),
+            translation_provider: String::new(),
+            translation_model: String::new(),
         }
     }
 }
@@ -510,6 +526,43 @@ impl Config {
         };
         req.effort = None;
         Ok(req)
+    }
+
+    /// Connection and model for live translation: its own when chosen,
+    /// else the live-notes ones (fast and cheap, like translation needs).
+    pub fn translation_request(&self) -> Result<crate::summary::SummaryRequest> {
+        if self.translation_provider.is_empty() {
+            return self.notes_request();
+        }
+        let connection = self
+            .connection(&self.translation_provider)
+            .cloned()
+            .with_context(|| crate::i18n::trf("KI-Verbindung \"{}\" gibt es nicht mehr — in den Einstellungen wählen", &[&self.translation_provider]))?;
+        let model = if !self.translation_model.is_empty() {
+            self.translation_model.clone()
+        } else {
+            match self.notes_request() {
+                Ok(n) if n.connection.id == connection.id => n.model,
+                _ => {
+                    let default = connection.preset().default_model;
+                    if default.is_empty() { connection.models.first().cloned().unwrap_or_default() } else { default.to_string() }
+                }
+            }
+        };
+        anyhow::ensure!(!model.is_empty(), "{}", crate::i18n::trf("{}: kein Modell für Live-Übersetzung gewählt", &[&connection.name]));
+        Ok(crate::summary::SummaryRequest { connection, model, language: None, effort: None })
+    }
+
+    /// The language live translation writes in: the chosen one, else the
+    /// app's language.
+    pub fn translation_target(&self) -> String {
+        if !self.translation_language.is_empty() {
+            return self.translation_language.clone();
+        }
+        match crate::i18n::resolve(&self.ui_language) {
+            crate::i18n::Lang::De => "de".into(),
+            crate::i18n::Lang::En => "en".into(),
+        }
     }
 
     /// Where the live answer helper looks (unknown values: both).
@@ -789,5 +842,24 @@ mod tests {
         assert_eq!(c.notes_request().unwrap().model, "claude-haiku-5-5");
         c.companion_notes_provider = "gone".into();
         assert!(c.notes_request().is_err());
+    }
+    #[test]
+    fn translation_uses_the_live_notes_model_unless_chosen() {
+        let mut c = Config { summary_provider: "deepseek".into(), summary_model: "deepseek-chat".into(), ..Config::default() };
+        c.companion_notes_provider = "claude".into();
+        c.companion_notes_model = "claude-haiku-5-5".into();
+        let r = c.translation_request().unwrap();
+        assert_eq!((r.connection.id.as_str(), r.model.as_str()), ("claude", "claude-haiku-5-5"));
+        c.translation_provider = "deepseek".into();
+        assert_eq!(c.translation_request().unwrap().connection.id, "deepseek");
+        c.translation_model = "deepseek-other".into();
+        assert_eq!(c.translation_request().unwrap().model, "deepseek-other");
+        c.translation_provider = "gone".into();
+        assert!(c.translation_request().is_err());
+
+        c.ui_language = "de".into();
+        assert_eq!(c.translation_target(), "de");
+        c.translation_language = "ar".into();
+        assert_eq!(c.translation_target(), "ar");
     }
 }

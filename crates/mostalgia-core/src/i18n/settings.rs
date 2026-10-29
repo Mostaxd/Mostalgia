@@ -277,6 +277,17 @@ pub const EN: &[(&str, &str)] = &[
     ("Findet Stellen in Besprechungen und Dokumenten auch mit anderen Worten. Ein Wechsel bettet die ganze Bibliothek neu ein; Stichwortsuche geht immer.", "Finds passages in meetings and documents even in other words. Switching re-embeds the whole library; keyword search always works."),
     ("Suche für „Fragen“ (e5-small)", "Search for Ask (e5-small)"),
     ("Fehlende Modelle laden ({})", "Download missing models ({})"),
+    // Live translation
+    ("Wie die App ({})", "Same as the app ({})"),
+    ("Wie Live-Notizen", "Same as live notes"),
+    ("Übersetzt mit {} · {}. Nur der Text fertiger Zeilen geht dorthin, nie Audio.", "Translated by {} · {}. Only the text of finished lines goes there, never audio."),
+    ("Live-Übersetzung", "Live translation"),
+    ("Während der Aufnahme übersetzen", "Translate while recording"),
+    ("Jede fertige Zeile erscheint zusätzlich übersetzt, im Fenster und in den Live-Untertiteln. Während einer Aufnahme auch über „Übersetzen“ schaltbar.", "Each finished line also appears translated, in the window and in the live captions. During a recording you can also switch it with “Translate”."),
+    ("Übersetzen in", "Translate into"),
+    ("Zeilen, die schon in dieser Sprache sind, bleiben wie sie sind.", "Lines already in this language stay as they are."),
+    ("Modell für Übersetzung", "Model for translation"),
+    ("Ein schnelles Modell reicht. Lokal (z. B. Ollama) bleibt alles auf diesem Rechner.", "A fast model is enough. With a local one (e.g. Ollama) everything stays on this computer."),
     // Glossary
     ("Glossar", "Glossary"),
     ("z. B. Brightwell", "e.g. Brightwell"),

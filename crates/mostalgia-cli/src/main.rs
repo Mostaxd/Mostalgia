@@ -164,6 +164,10 @@ enum Command {
         /// library and summary
         #[arg(long)]
         no_final: bool,
+        /// Translate live lines into this language ("en", "de", …) with the
+        /// AI connection set for live translation (text only, never audio)
+        #[arg(long)]
+        translate: Option<String>,
     },
     /// Turn recordings a crash, kill or power loss left unfinished into
     /// meetings (the app does this on its own when it starts)
@@ -524,6 +528,7 @@ fn main() -> Result<()> {
             mic_device,
             system_device,
             no_final,
+            translate,
         } => {
             let source = match (no_mic, no_system) {
                 (true, _) => SourceChoice::System,
@@ -546,7 +551,7 @@ fn main() -> Result<()> {
             if !orphans.is_empty() {
                 eprintln!("[mostalgia] {}", trf("{} unterbrochene Aufnahme(n) gefunden – `mostalgia recover` macht Besprechungen daraus", &[&orphans.len()]));
             }
-            start(&models, &summary, cfg, speakers, no_final)
+            start(&models, &summary, cfg, speakers, no_final, translate)
         }
         Command::Import { dir, models, summary } if dir.is_file() => import_media(&dir, &models, &summary),
         Command::Import { dir, models, summary } => import(&dir, &models, &summary),
@@ -623,12 +628,21 @@ fn open_store() -> Result<Store> {
     Store::open(&paths::database())
 }
 
-fn start(models: &ModelArgs, sum: &SummaryArgs, cfg: RecordConfig, speakers: bool, no_final: bool) -> Result<()> {
+fn start(models: &ModelArgs, sum: &SummaryArgs, cfg: RecordConfig, speakers: bool, no_final: bool, translate: Option<String>) -> Result<()> {
     // Set up the engines first so a bad model path or a missing key fails
     // before anything is recorded.
     let (live_choice, final_choice) = (models.live_choice()?, models.final_choice()?);
     let engine = models.build_engine(&live_choice)?;
     let mut final_engine = if no_final || final_choice == live_choice { None } else { Some(models.build_engine(&final_choice)?) };
+    // Fails before recording when the translation connection isn't set up.
+    let translator = match &translate {
+        Some(target) => {
+            let req = mostalgia_core::config::Config::load().translation_request()?;
+            eprintln!("[mostalgia] {}", trf("Übersetze live in {} mit {} · {}", &[&mostalgia_core::summary::language_name(target), &req.connection.name, &req.model]));
+            Some(mostalgia_core::translate::LiveTranslator::start(req, target, Vec::new()))
+        }
+        None => None,
+    };
     let (tx, rx) = crossbeam_channel::unbounded();
     let recorder = Recorder::start(cfg, engine, tx)?;
 
@@ -662,7 +676,27 @@ fn start(models: &ModelArgs, sum: &SummaryArgs, cfg: RecordConfig, speakers: boo
             *shown = false;
         }
     };
-    for event in rx {
+    // Lines in order, so a translation can say which line it belongs to.
+    let mut line_starts: Vec<f64> = Vec::new();
+    loop {
+        let event = match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+            Ok(event) => Some(event),
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => None,
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+        };
+        for outcome in translator.as_ref().map(|t| t.poll()).unwrap_or_default() {
+            match outcome {
+                mostalgia_core::translate::Outcome::Done { id, text: Some(text) } => {
+                    clear_interim(&mut interim_shown);
+                    let ts = line_starts.get(id).map(|s| format_ts(*s)).unwrap_or_default();
+                    println!("         ↳ [{ts}] {text}");
+                }
+                mostalgia_core::translate::Outcome::Done { text: None, .. } => {}
+                mostalgia_core::translate::Outcome::Failed(e) => eprintln!("[mostalgia] {}", trf("Übersetzung fehlgeschlagen: {}", &[&e])),
+                mostalgia_core::translate::Outcome::Recovered => {}
+            }
+        }
+        let Some(event) = event else { continue };
         match event {
             Event::Interim { source, start_secs, text } => {
                 if debug && !text.is_empty() {
@@ -689,12 +723,16 @@ fn start(models: &ModelArgs, sum: &SummaryArgs, cfg: RecordConfig, speakers: boo
                     eprintln!("[timing] final  at {:6.2}s (speech from {start_secs:.2}s) {}: {text}", t0.elapsed().as_secs_f64(), source.as_str());
                 }
                 let ts = format_ts(start_secs);
+                let who = i18n::speaker(speaker.as_deref().unwrap_or(source.speaker_label()));
                 if speakers {
-                    let who = speaker.as_deref().unwrap_or(source.speaker_label());
-                    println!("[{ts}] {}: {text}", i18n::speaker(who));
+                    println!("[{ts}] {who}: {text}");
                 } else {
                     println!("[{ts}] {text}");
                 }
+                if let Some(t) = &translator {
+                    t.push(line_starts.len(), &who, &text);
+                }
+                line_starts.push(start_secs);
             }
             Event::Chunk { audio_secs, millis, .. } => {
                 eprintln!("[mostalgia] {}", trf("{} s Abschnitt in {} ms transkribiert", &[&format!("{audio_secs:.1}"), &millis]));

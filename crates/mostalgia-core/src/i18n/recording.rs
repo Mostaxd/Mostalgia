@@ -110,4 +110,11 @@ pub const EN: &[(&str, &str)] = &[
     ("unbekanntes Format", "unknown format"),
     ("keine Tonspur", "no audio track"),
     ("Ton-Codec wird nicht unterstützt", "audio codec not supported"),
+    // Live translation
+    ("Übersetzung fehlgeschlagen: {}", "Translation failed: {}"),
+    ("Übersetzung nicht möglich: {}", "Can't translate: {}"),
+    ("Übersetzt → {}", "Translating → {}"),
+    ("Übersetzen", "Translate"),
+    ("Live-Übersetzung ausschalten", "Turn off live translation"),
+    ("Fertige Zeilen live übersetzen — nur Text geht an die gewählte KI, nie Audio", "Translate finished lines live — only text goes to the chosen AI, never audio"),
 ];

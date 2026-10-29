@@ -35,6 +35,7 @@ pub mod store;
 pub mod summary;
 pub mod text_import;
 pub mod transcribe;
+pub mod translate;
 pub mod vad;
 pub mod voices;
 

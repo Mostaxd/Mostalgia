@@ -16,6 +16,7 @@ use mostalgia_core::config::{Config, Mode, SttChoice};
 use mostalgia_core::recorder::{Event, RecordConfig, Recorder, Recording};
 use mostalgia_core::store::{Bookmark, MarkKind, NewMeeting, Store};
 use mostalgia_core::transcribe::Engine;
+use mostalgia_core::translate::Outcome;
 use mostalgia_core::i18n::{self, tr, trf};
 use mostalgia_core::{cloud_stt, finalize};
 use mostalgia_core::{Source, paths};
@@ -43,6 +44,10 @@ struct LiveLine {
     start_secs: f64,
     end_secs: f64,
     text: SharedString,
+    /// Live translation of the line, once it came back (`None` while it
+    /// is on its way, when it is off, or when the line already is in the
+    /// target language).
+    translation: Option<SharedString>,
 }
 
 /// What Mori needs to know about a recording in progress (cheap to read).
@@ -115,6 +120,13 @@ struct Live {
     /// The language each source (mic, system) is transcribed in, with
     /// "auto": detected, locked or picked (`None` while detecting).
     languages: [Option<mostalgia_core::language::Status>; 2],
+    /// Live translation while it's on.
+    translator: Option<mostalgia_core::translate::LiveTranslator>,
+    /// Why live translation couldn't start or its last request failed.
+    translation_error: Option<SharedString>,
+    /// Translations in the order they came back (line start, text), for
+    /// the floating captions.
+    translated: Vec<(f64, SharedString)>,
 }
 
 static NEXT_SESSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -145,6 +157,9 @@ impl Live {
             session: NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             sources_on,
             languages: [None, None],
+            translator: None,
+            translation_error: None,
+            translated: Vec::new(),
         }
     }
 
@@ -312,6 +327,7 @@ impl RecordingView {
                 start_secs: *start_secs,
                 end_secs: start_secs + 4.,
                 text: SharedString::from(text.to_string()),
+                translation: None,
             })
             .collect();
         live.speech_secs = live.lines.len() as f64 * 4.;
@@ -491,6 +507,11 @@ impl RecordingView {
         self.config.companion_card_stagger_secs = disk.companion_card_stagger_secs;
         self.config.companion_notes_provider = disk.companion_notes_provider.clone();
         self.config.companion_notes_model = disk.companion_notes_model.clone();
+        // So is live translation (Settings, or its switch here).
+        self.config.live_translation = disk.live_translation;
+        self.config.translation_language = disk.translation_language.clone();
+        self.config.translation_provider = disk.translation_provider.clone();
+        self.config.translation_model = disk.translation_model.clone();
         self.config.companion_pos = disk.companion_pos;
         self.config.companion_clear_button = disk.companion_clear_button;
         self.config.companion_desktop = disk.companion_desktop;
@@ -503,6 +524,50 @@ impl RecordingView {
         if let Err(e) = self.config.save() {
             eprintln!("[mostalgia] saving settings: {e:#}");
         }
+    }
+
+    /// Turns live translation on or off for this recording (and as the
+    /// default for the next ones). On, the last few lines are translated
+    /// too, so the switch shows something right away.
+    fn set_translation(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.config.live_translation = on;
+        let mut disk = Config::load();
+        if disk.live_translation != on {
+            disk.live_translation = on;
+            if let Err(e) = disk.save() {
+                eprintln!("[mostalgia] saving settings: {e:#}");
+            }
+        }
+        let Phase::Recording(live) = &mut self.phase else { return };
+        live.translator = None;
+        live.translation_error = None;
+        if on {
+            // The language and model as chosen in Settings just now.
+            let config = Config::load();
+            match config.translation_request() {
+                Ok(req) => {
+                    let t = mostalgia_core::translate::LiveTranslator::start(req, &config.translation_target(), Vec::new());
+                    let from = live.lines.len().saturating_sub(4);
+                    for (id, line) in live.lines.iter().enumerate().skip(from) {
+                        if line.translation.is_none() {
+                            let who = line.speaker.as_deref().unwrap_or(line.source.speaker_label());
+                            t.push(id, &mostalgia_core::i18n::speaker(who), &line.text);
+                        }
+                    }
+                    live.translator = Some(t);
+                }
+                Err(e) => live.translation_error = Some(trf("Übersetzung nicht möglich: {}", &[&format!("{e:#}")]).into()),
+            }
+        }
+        cx.notify();
+    }
+
+    /// Translations since the `from`th (line start, text), for the floating
+    /// captions, and how many there are in all.
+    pub fn translations_delta(&self, from: usize) -> (Vec<(f64, String)>, usize) {
+        let Phase::Recording(live) = &self.phase else { return (Vec::new(), 0) };
+        let new = live.translated.iter().skip(from).map(|(at, t)| (*at, t.to_string())).collect();
+        (new, live.translated.len())
     }
 
     pub fn start(&mut self, cx: &mut Context<Self>) {
@@ -569,6 +634,9 @@ impl RecordingView {
                 self.follow = true;
                 let sources = self.sources();
                 self.phase = Phase::Recording(Box::new(Live::new(Some(recorder), rx, self.config.live_engine.clone(), sources)));
+                if Config::load().live_translation {
+                    self.set_translation(true, cx);
+                }
                 self.poll_loop(cx);
             }
             // Recorder::start consumed the engine; it reloads next time.
@@ -728,12 +796,17 @@ impl RecordingView {
                     live.interim[source as usize] = None;
                     live.speech_secs += (end_secs - start_secs).max(0.);
                     live.heard();
+                    if let Some(t) = &live.translator {
+                        let who = speaker.as_deref().unwrap_or(source.speaker_label());
+                        t.push(live.lines.len(), &mostalgia_core::i18n::speaker(who), &text);
+                    }
                     live.lines.push(LiveLine {
                         source,
                         speaker,
                         start_secs,
                         end_secs,
                         text: text.into(),
+                        translation: None,
                     });
                     new_lines = true;
                 }
@@ -778,6 +851,25 @@ impl RecordingView {
                     }
                     live.stalled_secs = (secs > 0).then_some(secs);
                 }
+            }
+        }
+        let outcomes = live.translator.as_ref().map(|t| t.poll()).unwrap_or_default();
+        for outcome in outcomes {
+            match outcome {
+                Outcome::Done { id, text: Some(text) } => {
+                    if let Some(line) = live.lines.get_mut(id) {
+                        let text = SharedString::from(text);
+                        line.translation = Some(text.clone());
+                        live.translated.push((line.start_secs, text));
+                        new_lines = true;
+                    }
+                }
+                Outcome::Done { text: None, .. } => {}
+                Outcome::Failed(e) => {
+                    eprintln!("[mostalgia] live translation: {e}");
+                    live.translation_error = Some(trf("Übersetzung fehlgeschlagen: {}", &[&e]).into());
+                }
+                Outcome::Recovered => live.translation_error = None,
             }
         }
         // Meters: rise quickly but not instantly, fall slowly — smooth at 30 Hz.
@@ -1374,9 +1466,11 @@ impl RecordingView {
         let speaker_labels = self.config.speaker_labels;
         let follow = self.follow;
         let engine_label = self.engine_label.clone();
+        let translate_to = self.config.translation_target().to_uppercase();
         let Phase::Recording(live) = &self.phase else {
             unreachable!()
         };
+        let translating = live.translator.is_some();
         let spec = crate::themes::active(cx);
         let motion = spec.animations && !self.config.reduce_motion;
         let playful = motion && spec.playful;
@@ -1454,6 +1548,18 @@ impl RecordingView {
             .child(
                 h_flex()
                     .gap_2()
+                    .child({
+                        let b = Button::new("translate")
+                            .icon(IconName::Languages)
+                            .label(if translating { trf("Übersetzt → {}", &[&translate_to]) } else { tr("Übersetzen").to_string() })
+                            .tooltip(if translating {
+                                tr("Live-Übersetzung ausschalten")
+                            } else {
+                                tr("Fertige Zeilen live übersetzen — nur Text geht an die gewählte KI, nie Audio")
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| this.set_translation(!translating, cx)));
+                        if translating { b.primary() } else { b.ghost() }
+                    })
                     .child(
                         Button::new("mark")
                             .icon(IconName::Bookmark)
@@ -1501,7 +1607,21 @@ impl RecordingView {
                             .child(ui::hms(line.start_secs)),
                     )
                     .when(speaker_labels, |el| el.child(ui::speaker_chip(label, cx)))
-                    .child(ui::bidi_text(line.text.clone(), true).flex_1().min_w_0().text_size(ui::transcript_rems(1.)).line_height(ui::transcript_rems(1.5)));
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .child(ui::bidi_text(line.text.clone(), true).text_size(ui::transcript_rems(1.)).line_height(ui::transcript_rems(1.5)))
+                            .when_some(line.translation.clone(), |el, t| {
+                                el.child(
+                                    ui::bidi_text(t, true)
+                                        .italic()
+                                        .text_color(theme.muted_foreground)
+                                        .text_size(ui::transcript_rems(0.95))
+                                        .line_height(ui::transcript_rems(1.4)),
+                                )
+                            }),
+                    );
             rows.push(if motion { anim::arrive(row, ("line-in", ix), playful) } else { row.into_any_element() });
         }
         for b in marks {
@@ -1642,6 +1762,24 @@ impl RecordingView {
                         cx.notify();
                     })))
             }))
+            .when_some(live.translation_error.clone(), |el, e| {
+                el.child(
+                    h_flex()
+                        .px_6()
+                        .py_2()
+                        .gap_2()
+                        .bg(cx.theme().warning.opacity(0.15))
+                        .text_sm()
+                        .child(Icon::new(IconName::Languages).small().text_color(cx.theme().warning))
+                        .child(div().flex_1().min_w_0().child(e))
+                        .child(Button::new("dismiss-translation-error").xsmall().ghost().icon(IconName::X).on_click(cx.listener(|this, _, _, cx| {
+                            if let Phase::Recording(live) = &mut this.phase {
+                                live.translation_error = None;
+                            }
+                            cx.notify();
+                        }))),
+                )
+            })
             .when(mic_silent, |el| {
                 el.child(
                     h_flex()
