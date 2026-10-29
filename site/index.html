@@ -118,6 +118,100 @@
   </div>
 </section>
 
+<!-- ───────────────────────── LIVE (one meeting, start to finish) ───────────────────────── -->
+<section class="live" id="live" aria-labelledby="liveTitle">
+  <div class="wrap">
+    <p class="section-kicker">ライブ · Live</p>
+    <h2 class="section-title" id="liveTitle">One meeting, <em>start to finish</em>.</h2>
+    <p class="live-lede">A two-minute call, played back in twenty seconds. Words appear while people are still talking, Mori pins what matters, and when you press Stop the summary writes itself.</p>
+
+    <div class="sr-only" id="liveDesc">
+      <p>An animated mock-up of Mostalgia recording a short call called “Spring launch sync”. A timer runs and two level meters, microphone and call audio, bounce. Each transcript line first appears as grey provisional text, then turns into the final line with the speaker's name:</p>
+      <ol>
+        <li>02:07, Lena: Morning! Are we still on for the spring launch on the 14th?</li>
+        <li>02:09, Me: Yes, as long as the onboarding screens are ready.</li>
+        <li>02:12, Sam: They're close. I'll have them done by Thursday.</li>
+        <li>02:14, Me: Great. Then we keep the 14th and skip the extra beta week.</li>
+        <li>02:16, Lena: I'll draft the release notes by Friday.</li>
+        <li>02:19, Sam: One open thing: do we still need a new pricing page?</li>
+      </ol>
+      <p>Mori, the companion, listens and pins three notes: a decision (the launch stays on the 14th, at 02:14), an action item (Lena drafts the release notes by Friday) and an open question (do we still need a new pricing page?). Then the call is stopped and the summary appears: key points, the decision with a link to 02:14, and two action items, Sam finishing the onboarding screens by Thursday and Lena drafting the release notes by Friday.</p>
+    </div>
+
+    <div class="lv-scene" id="liveScene" aria-hidden="true">
+      <div class="lv-win">
+        <div class="lv-titlebar"><img src="assets/brand/icon.svg" alt="" width="16" height="16"> Mostalgia</div>
+        <div class="lv-app">
+          <div class="lv-nav">
+            <span class="lv-recpill"><svg viewBox="0 0 24 24" width="14" height="14"><circle cx="12" cy="12" r="3" fill="currentColor"/><path d="M7.5 7.5a6.4 6.4 0 0 0 0 9M16.5 7.5a6.4 6.4 0 0 1 0 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Recording</span>
+            <span class="lv-ask">✦ Ask</span>
+            <span class="lv-group">Today</span>
+            <span class="lv-item on"><b>Spring launch sync</b><small>10:00 · 2 min</small></span>
+            <span class="lv-item"><b>Design review: icons</b><small>09:15 · 24 min</small></span>
+            <span class="lv-group">Yesterday</span>
+            <span class="lv-item"><b>1:1 with Sam</b><small>16:30 · 30 min</small></span>
+          </div>
+          <div class="lv-main">
+            <div class="lv-bar">
+              <span class="lv-dot"></span>
+              <span class="lv-timer" id="lvTimer">02:21</span>
+              <span class="lv-state" id="lvState">Saved</span>
+              <span class="lv-meters">
+                <span class="lv-meter"><svg viewBox="0 0 24 24" width="12" height="12"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><b><i id="lvMic"></i></b></span>
+                <span class="lv-meter"><svg viewBox="0 0 24 24" width="12" height="12"><rect x="3" y="4" width="18" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 20h6M12 16v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><b><i id="lvCall"></i></b></span>
+              </span>
+              <span class="lv-btns"><span class="lv-btn mark">Mark</span><span class="lv-btn stop" id="lvStop"><i></i>Stop</span></span>
+            </div>
+            <div class="lv-tabs">
+              <button type="button" class="lv-tab" data-pane="tr" tabindex="-1">Transcript · 6</button>
+              <button type="button" class="lv-tab on" data-pane="sum" tabindex="-1">✦ Summary</button>
+            </div>
+            <div class="lv-panes">
+              <ol class="lv-pane lv-transcript">
+                <li class="lv-line" data-at="0.2" data-prov="Morning! Are we still on for the spring lunch on the fourteen"><span class="lv-ts">02:07</span><span class="lv-chip lena">Lena</span><span class="lv-text">Morning! Are we still on for the spring launch on the 14th?</span></li>
+                <li class="lv-line" data-at="2.6"><span class="lv-ts">02:09</span><span class="lv-chip me">Me</span><span class="lv-text">Yes, as long as the onboarding screens are ready.</span></li>
+                <li class="lv-line" data-at="5.0"><span class="lv-ts">02:12</span><span class="lv-chip sam">Sam</span><span class="lv-text">They're close. I'll have them done by Thursday.</span></li>
+                <li class="lv-line" data-at="7.4" data-prov="Great. Then we keep the fourteenth and skip the extra better week"><span class="lv-ts">02:14</span><span class="lv-chip me">Me</span><span class="lv-text">Great. Then we keep the 14th and skip the extra beta week.</span></li>
+                <li class="lv-line" data-at="9.8"><span class="lv-ts">02:16</span><span class="lv-chip lena">Lena</span><span class="lv-text">I'll draft the release notes by Friday.</span></li>
+                <li class="lv-line" data-at="12.2"><span class="lv-ts">02:19</span><span class="lv-chip sam">Sam</span><span class="lv-text">One open thing: do we still need a new pricing page?</span></li>
+              </ol>
+              <div class="lv-pane lv-summary">
+                <h3 class="lv-s">Spring launch sync: the launch stays on the 14th</h3>
+                <p class="lv-meta lv-s">Today, 10:00 · 2 min · 3 speakers</p>
+                <h4 class="lv-s">Key points</h4>
+                <ul>
+                  <li class="lv-s">The onboarding screens are almost done; Sam expects them by Thursday.</li>
+                  <li class="lv-s">Dropping the extra beta week keeps the launch date.</li>
+                </ul>
+                <h4 class="lv-s">Decisions</h4>
+                <ul>
+                  <li class="lv-s">The spring launch stays on the 14th. <span class="lv-tsc">▶ 02:14</span></li>
+                </ul>
+                <h4 class="lv-s">Action items</h4>
+                <ul class="lv-todo">
+                  <li class="lv-s">Finish the onboarding screens · <b>Owner</b> <mark>Sam</mark> · <b>Due</b> <mark class="due">Thursday</mark></li>
+                  <li class="lv-s">Draft the release notes · <b>Owner</b> <mark>Lena</mark> · <b>Due</b> <mark class="due">Friday</mark></li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="lv-cast">
+        <div class="lv-say"><b>Mori</b> <span id="lvSay">Done. The decision is at 02:14 if you want to hear it.</span></div>
+        <img class="lv-mori" id="lvMori" src="assets/cast/mori-idle.webp" alt="" width="300" height="480" loading="lazy">
+        <ul class="lv-notes">
+          <li class="lv-note decision" data-after="3"><span class="lv-nl">Decision <em>02:14</em></span>Launch stays on the 14th; no extra beta week.</li>
+          <li class="lv-note task" data-after="4"><span class="lv-nl">Action item <em>02:16</em></span>Lena: draft the release notes by Friday.</li>
+          <li class="lv-note question" data-after="5"><span class="lv-nl">Open question <em>02:19</em></span>Do we still need a new pricing page?</li>
+        </ul>
+      </div>
+    </div>
+    <p class="lv-foot"><button type="button" class="lv-replay" id="lvReplay" aria-label="Replay the live meeting animation" hidden>↻ Replay</button></p>
+  </div>
+</section>
+
 <!-- ───────────────────────── EPISODE 1 ───────────────────────── -->
 <section class="episode" id="ep1" data-char="mori">
   <header class="ep-card">

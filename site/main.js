@@ -239,6 +239,126 @@
     setInterval(() => { const r = ld.getBoundingClientRect(); if (r.top > 0 && r.bottom < innerHeight) run(); }, 6000);
   }
 
+  // ───────── live meeting: one call, start to finish ─────────
+  // The HTML holds the finished meeting (what you see without JS or with reduced
+  // motion); here it is rewound and replayed on a clock that only runs on screen.
+  const live = $('#liveScene');
+  if (live && !reduce) {
+    const timer = $('#lvTimer'), state = $('#lvState'), stopBtn = $('#lvStop');
+    const mic = $('#lvMic'), call = $('#lvCall');
+    const mori = $('#lvMori'), say = $('#lvSay'), replay = $('#lvReplay');
+    const lines = $$('.lv-line', live), notes = $$('.lv-note', live), sums = $$('.lv-s', live), tabs = $$('.lv-tab', live);
+    const panes = { tr: $('.lv-transcript', live), sum: $('.lv-summary', live) };
+    const finalSay = say.textContent;
+    const START = 127; // the clip joins the call at 02:07
+    const clock = (s) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+    const parts = lines.map((l) => {
+      const chip = $('.lv-chip', l), text = $('.lv-text', l);
+      return { chip, text, name: chip.textContent, final: text.textContent, me: chip.classList.contains('me') };
+    });
+    const showPane = (k) => {
+      tabs.forEach((b) => b.classList.toggle('on', b.dataset.pane === k));
+      for (const [n, el] of Object.entries(panes)) el.classList.toggle('off', n !== k);
+    };
+    const pose = (p, line) => {
+      const src = sprite('mori', p);
+      if (mori.getAttribute('src') !== src) { mori.src = src; mori.classList.remove('hop'); void mori.offsetWidth; mori.classList.add('hop'); }
+      if (line) type(say, line);
+    };
+
+    let events = [], next = 0, t = 0, last = 0, raf = 0;
+    let started = false, visible = false, recording = false, speaker = null, shown = '';
+
+    const reset = () => {
+      live.classList.add('lv-anim', 'lv-tabbed', 'lv-rec');
+      showPane('tr');
+      lines.forEach((l, i) => { l.classList.remove('on', 'prov', 'firm'); parts[i].text.textContent = parts[i].final; parts[i].chip.textContent = parts[i].name; });
+      [...notes, ...sums].forEach((el) => el.classList.remove('in'));
+      timer.textContent = shown = clock(START);
+      state.textContent = 'Recording';
+      mic.style.transform = call.style.transform = 'scaleX(0)';
+      mori.src = sprite('mori', 'listening');
+      clearInterval(typers.get(say));
+      say.textContent = 'Call started. I\'m listening.';
+      recording = true; speaker = null; t = 0; next = 0;
+
+      const ev = [];
+      const at = (time, fn) => ev.push({ time, fn });
+      const firm = [];
+      lines.forEach((l, i) => {
+        const p = parts[i], a = +l.dataset.at;
+        const until = i + 1 < lines.length ? +lines[i + 1].dataset.at : a + 2.4;
+        // provisional text arrives word by word (sometimes slightly wrong), then the clean line replaces it
+        const words = (l.dataset.prov || p.final.replace(/[.?!]$/, '')).split(' ');
+        const step = Math.min(0.17, (until - a - 0.8) / words.length);
+        at(a, () => { l.classList.add('on', 'prov'); p.chip.textContent = p.me ? 'Me' : 'Others'; speaker = p.me ? 'me' : 'call'; });
+        words.forEach((_, k) => at(a + k * step, () => { p.text.textContent = `${words.slice(0, k + 1).join(' ')} …`; }));
+        const f = firm[i] = a + words.length * step + 0.35;
+        at(f - 0.3, () => { speaker = null; });
+        at(f, () => { l.classList.replace('prov', 'firm'); p.text.textContent = p.final; p.chip.textContent = p.name; });
+        at(f + 0.9, () => l.classList.remove('firm'));
+      });
+      notes.forEach((n) => at(firm[+n.dataset.after] + 0.35, () => n.classList.add('in')));
+      at(firm[2] + 0.1, () => pose('thinking', 'Thursday… sounds like a deadline.'));
+      at(+lines[3].dataset.at, () => pose('listening'));
+      at(firm[3] + 0.1, () => pose('writing', 'That\'s a decision. Pinning it.'));
+      at(+lines[4].dataset.at, () => pose('listening'));
+      at(firm[4] + 0.1, () => pose('writing', 'A task for Lena, due Friday.'));
+      at(+lines[5].dataset.at + 0.4, () => pose('thinking'));
+      at(firm[5] + 0.1, () => pose('writing', 'And one open question.'));
+      const stop = firm[5] + 1.1;
+      at(stop - 0.3, () => stopBtn.classList.add('press'));
+      at(stop, () => {
+        stopBtn.classList.remove('press');
+        recording = false;
+        live.classList.remove('lv-rec');
+        mic.style.transform = call.style.transform = 'scaleX(0)';
+        state.textContent = 'Saving…';
+        pose('writing', 'Call\'s over. Writing the summary…');
+      });
+      at(stop + 0.7, () => { showPane('sum'); state.textContent = 'Saved'; });
+      sums.forEach((s, k) => at(stop + 0.9 + k * 0.3, () => s.classList.add('in')));
+      const end = stop + 1.3 + sums.length * 0.3;
+      at(end, () => pose('idle', finalSay));
+      at(end + 0.6, () => { replay.hidden = false; });
+      events = ev.sort((x, y) => x.time - y.time);
+    };
+
+    // meters: whoever is talking bounces, the other track idles near the floor
+    const level = (now, on, seed) => (on ? 0.5 : 0.04) + (on ? 0.45 : 0.06) * Math.abs(Math.sin(now / 83 + seed) * Math.sin(now / 191 + seed * 2));
+    const frame = (now) => {
+      raf = 0;
+      t += Math.min(0.1, (now - last) / 1000);
+      last = now;
+      while (next < events.length && events[next].time <= t) events[next++].fn();
+      if (recording) {
+        const c = clock(START + t);
+        if (c !== shown) timer.textContent = shown = c;
+        mic.style.transform = `scaleX(${level(now, speaker === 'me', 1)})`;
+        call.style.transform = `scaleX(${level(now, speaker === 'call', 4)})`;
+      }
+      if (visible && next < events.length) raf = requestAnimationFrame(frame);
+    };
+    const play = () => {
+      live.classList.remove('lv-paused');
+      if (!raf && next < events.length) { last = performance.now(); raf = requestAnimationFrame(frame); }
+    };
+    const pause = () => { cancelAnimationFrame(raf); raf = 0; live.classList.add('lv-paused'); };
+
+    reset();
+    ['listening', 'thinking', 'writing', 'idle'].forEach((p) => preload(sprite('mori', p)));
+    // start once ~40% of the scene (or of the screen, on tall phones) is in view; pause whenever it leaves
+    new IntersectionObserver(([e]) => {
+      const vh = e.rootBounds ? e.rootBounds.height : innerHeight;
+      const seen = e.intersectionRect.height / Math.min(e.boundingClientRect.height, vh);
+      visible = started ? e.isIntersecting : seen >= 0.4;
+      if (visible) { started = true; play(); } else pause();
+    }, { threshold: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1] }).observe(live);
+
+    tabs.forEach((b) => b.addEventListener('click', () => { if (next >= events.length) showPane(b.dataset.pane); }));
+    replay.addEventListener('click', () => { pause(); reset(); started = visible = true; play(); });
+  }
+
   // ───────── cast select ─────────
   const CAST = {
     mori: {
