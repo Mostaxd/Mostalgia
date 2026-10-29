@@ -16,7 +16,8 @@ CAP = 10
 
 HEAD = re.compile(r"^(error|warning)(\[[A-Za-z0-9]+\])?: (.*)$")
 LOCATION = re.compile(r"^\s*--> (.+?):(\d+):(\d+)$")
-TEST_OUT = re.compile(r"^---- (.+?) stdout ----$")
+TOOL_ERROR = re.compile(r"error C\d+|error MSB\d+|error LNK\d+|fatal error|: error|CMake Error|Could NOT find|ninja: build stopped")
+TEST_OUT =re.compile(r"^---- (.+?) stdout ----$")
 # Summary lines that carry nothing of their own.
 NOISE = re.compile(r"^(`.*` \(.*\) generated|`.*` generated|could not compile|aborting due to|build failed|\d+ warnings? emitted)")
 
@@ -58,6 +59,14 @@ def compiler_blocks(lines):
             while j < len(lines) and not HEAD.match(lines[j]):
                 j += 1
             body = [l for l in lines[i + 1 : j] if l.strip() and "cargo:rerun-if" not in l and not re.match(r"^\s*\w+ = (None|Some)", l)]
+            # The compiler's own errors (MSVC, MSBuild, CMake, gcc/clang)
+            # are buried in the middle: one annotation of them first.
+            errs = []
+            for l in body:
+                if TOOL_ERROR.search(l) and l.strip() not in errs:
+                    errs.append(l.strip())
+            if errs:
+                out.append((m.group(1), "compiler errors in " + m.group(3).split("for ")[-1], None, None, "\n".join(errs[:MAX_LINES])))
             block += body[-(MAX_LINES - 1) :]
             out.append((m.group(1), m.group(3), None, None, "\n".join(block)))
             i = j

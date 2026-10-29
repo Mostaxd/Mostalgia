@@ -10,6 +10,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$PWD
+# A short target dir keeps whisper.cpp's nested CMake build paths under
+# Windows' 260-character limit (CI sets CARGO_TARGET_DIR=C:/t).
+TARGET="${CARGO_TARGET_DIR:-$ROOT/target}"
 OUT="$ROOT/target/Mostalgia"
 ZIP="dist/Mostalgia-windows-x86_64.zip"
 mkdir -p dist
@@ -24,22 +27,25 @@ fi
 # In CI, compiler errors also become annotations.
 run=()
 [[ -n "${GITHUB_ACTIONS:-}" ]] && run=(bash scripts/ci-cargo.sh)
+variant=cpu
+[[ ${#features[@]} -gt 0 ]] && variant=vulkan
 if ! "${run[@]}" cargo build --release "${features[@]}" -p mostalgia-app -p mostalgia; then
   [[ ${#features[@]} -gt 0 ]] || exit 1
   # A zip without GPU support beats no zip.
   echo "::warning::The Vulkan build failed; packaging the CPU build"
+  variant=cpu
   "${run[@]}" cargo build --release -p mostalgia-app -p mostalgia
 fi
 
 rm -rf "$OUT"
 mkdir -p "$OUT"
-cp target/release/mostalgia-app.exe target/release/mostalgia.exe "$OUT/"
+cp "$TARGET/release/mostalgia-app.exe" "$TARGET/release/mostalgia.exe" "$OUT/"
 
 # The sherpa-onnx DLLs: sherpa-rs copies them next to the binaries, but
 # only when its build script runs; a build restored from a cache has them
 # only in sherpa-rs's download cache.
 found=0
-for dir in "$ROOT/target/release" "${LOCALAPPDATA:-$HOME/AppData/Local}/sherpa-rs"; do
+for dir in "$TARGET/release" "${LOCALAPPDATA:-$HOME/AppData/Local}/sherpa-rs"; do
   [[ -d "$dir" ]] || continue
   while IFS= read -r dll; do
     cp -n "$dll" "$OUT/"
@@ -56,6 +62,8 @@ for dll in vcruntime140.dll vcruntime140_1.dll msvcp140.dll; do
   [[ -f "$sys/$dll" ]] && cp "$sys/$dll" "$OUT/"
 done
 
+echo "$variant" > "$OUT/build-variant.txt"
+echo "::notice::Windows zip: $variant build"
 cp LICENSE-MIT LICENSE-APACHE NOTICE "$OUT/" 2>/dev/null || true
 
 rm -f "$ZIP"
