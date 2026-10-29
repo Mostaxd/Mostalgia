@@ -1326,6 +1326,9 @@ impl RecordingView {
             )
             .child(
                 div()
+                    .w_full()
+                    .max_w(px(860.))
+                    .mx_auto()
                     .px_6()
                     .pt_3()
                     .text_xs()
@@ -1333,25 +1336,26 @@ impl RecordingView {
                     .child(tr("Live-Transkript – wird durch das fertige ersetzt, sobald es gespeichert ist.")),
             )
             .child(
-                v_flex()
-                    .id("finalizing-lines")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .px_6()
-                    .py_2()
-                    .gap_1()
-                    .text_sm()
-                    .text_color(theme.muted_foreground)
-                    .children(lines.iter().map(|l| {
-                        let who = l.speaker.as_deref().unwrap_or(l.source.speaker_label());
-                        h_flex()
-                            .gap_3()
-                            .items_start()
-                            .child(div().flex_none().w(px(52.)).text_xs().font_family(theme.mono_font_family.clone()).child(ui::hms(l.start_secs)))
-                            .when(speaker_labels, |el| el.child(div().flex_none().text_xs().font_medium().child(ui::speaker_display(who))))
-                            .child(div().flex_1().min_w_0().child(l.text.clone()))
-                    })),
+                div().id("finalizing-lines").flex_1().min_h_0().overflow_y_scroll().child(
+                    v_flex()
+                        .w_full()
+                        .max_w(px(860.))
+                        .mx_auto()
+                        .px_6()
+                        .py_2()
+                        .gap_1()
+                        .text_sm()
+                        .text_color(theme.muted_foreground)
+                        .children(lines.iter().map(|l| {
+                            let who = l.speaker.as_deref().unwrap_or(l.source.speaker_label());
+                            h_flex()
+                                .gap_3()
+                                .items_start()
+                                .child(div().flex_none().w(px(52.)).text_xs().font_family(theme.mono_font_family.clone()).child(ui::hms(l.start_secs)))
+                                .when(speaker_labels, |el| el.child(div().flex_none().text_xs().font_medium().child(ui::speaker_display(who))))
+                                .child(div().flex_1().min_w_0().child(l.text.clone()))
+                        })),
+                ),
             )
     }
 
@@ -1650,14 +1654,17 @@ impl RecordingView {
                         |el, scene| el.child(scene),
                     )
                     .child(
+                    // Each row stays a direct child (scroll_to_top_of_item),
+                    // in a centered column.
                     v_flex()
                         .id("live-transcript")
                         .size_full()
                         .px_6()
                         .py_4()
+                        .items_center()
                         .track_scroll(&self.scroll)
                         .overflow_y_scroll()
-                        .children(rows)
+                        .children(rows.into_iter().map(|r| div().w_full().max_w(px(860.)).child(r)))
                         .when(empty, |el| {
                             el.child(
                                 v_flex()

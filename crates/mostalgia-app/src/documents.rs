@@ -992,15 +992,18 @@ impl DocumentsView {
             .child(header)
             .child(
                 div().flex_1().min_h_0().child(
+                    // Each block stays a direct child (scroll_to_top_of_item),
+                    // in a centered column.
                     v_flex()
                         .id("doc-reader")
                         .size_full()
                         .track_scroll(&self.reader_scroll)
                         .overflow_y_scroll()
+                        .items_center()
                         .px_4()
                         .py_3()
                         .gap_1()
-                        .children(blocks),
+                        .children(blocks.into_iter().map(|b| div().w_full().max_w(px(860.)).child(b))),
                 ),
             )
             .into_any_element()

@@ -415,7 +415,9 @@ impl Render for TextImportView {
             );
         div().id("text-import").size_full().overflow_y_scroll().child(
             v_flex()
+                .w_full()
                 .max_w(px(820.))
+                .mx_auto()
                 .px_8()
                 .py_6()
                 .gap_4()
