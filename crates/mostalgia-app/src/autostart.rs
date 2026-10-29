@@ -201,6 +201,11 @@ fn send_notification(summary: &str, body: &str, action: Option<(String, crossbea
 fn send_notification(summary: &str, body: &str, action: Option<(String, crossbeam_channel::Sender<String>)>) -> anyhow::Result<()> {
     let mut n = notify_rust::Notification::new();
     n.appname("Mostalgia").summary(summary).body(body);
+    // Shown as "Mostalgia" with its icon (see `win_identity`).
+    #[cfg(windows)]
+    if let Some(id) = crate::win_identity::toast_app_id() {
+        n.app_id(id);
+    }
     #[cfg(windows)]
     if action.is_some() {
         n.action("start", tr("Aufnahme starten"));
