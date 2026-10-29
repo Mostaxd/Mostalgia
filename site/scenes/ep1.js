@@ -1,12 +1,32 @@
 // Episode 1 · Press record. The HTML holds the finished scene (what you see
-// without JS or with reduced motion); here it is rewound and replayed on a
-// clock that only runs while the scene is on screen.
+// without JS or with reduced motion); here it is rewound and its beats are
+// handed to the shared pacing clock (pacing.js), which plays them chapter by
+// chapter with a caption, only while the scene is on screen.
 (() => {
   const site = window.MostalgiaSite;
   const ep = document.getElementById('ep1');
   const scene = ep && ep.querySelector('#e1Scene');
-  if (!site || !scene || site.reduce) return;
+  if (!site || !scene || !site.timeline) return;
   const { $, $$, sprite, type, preload } = site;
+
+  // chapters in scene seconds; focus = what stays lit while the rest dims
+  const CHAPTERS = [
+    { id: 'auto', label: 'Auto-start', start: 0,
+      caption: 'Your call app grabs the mic, so Mostalgia starts recording by itself.',
+      focus: ['.e1-panel', '.e1-call', '.e1-toast', '.e1-side', '.e1-bar'] },
+    { id: 'tracks', label: 'Two tracks', start: 3.6,
+      caption: 'Your voice goes on the Me track, everyone else on Others. Each lights up when that side talks.',
+      focus: ['.e1-call', '.e1-tracks'] },
+    { id: 'nudge', label: 'Mic nudge', start: 6.7, holds: [7.8],
+      caption: 'You keep talking but your mic picks up nothing, so Mostalgia asks: muted by accident?',
+      focus: ['.e1-call', '.e1-tracks'] },
+    { id: 'crash', label: 'Crash-safe', start: 9.1, holds: [11.6],
+      caption: '14 minutes in, the power cuts out. On restart the tracks are repaired: only seconds are lost.',
+      focus: ['.e1-panel', '.e1-call', '.e1-bar', '.e1-tracks', '.e1-status', '.e1-stamp'] },
+    { id: 'import', label: 'Import', start: 14.3,
+      caption: 'Drop in a recording you already have, and it becomes a meeting like any other.',
+      focus: ['.e1-side'] },
+  ];
 
   const timer = $('#e1Timer'), state = $('#e1State'), pill = $('#e1Pill'), callStat = $('#e1CallStat');
   const toast = $('.e1-toast', scene), toastMsg = $('#e1ToastMsg'), recBtn = $('#e1RecBtn');
@@ -21,7 +41,6 @@
   const on = (...c) => scene.classList.add(...c);
   const off = (...c) => scene.classList.remove(...c);
 
-  ep.classList.add('e1-js');
 
   const pose = (p, line) => {
     const src = sprite('mori', p);
@@ -32,14 +51,14 @@
   // companion (the corner guide on phones) say the same line
   const beat = (i) => {
     const step = points[i];
-    points.forEach((s) => s.classList.toggle('on', s === step));
     if (ep._activate) ep._activate(step);
     pose(step.dataset.pose, step.dataset.say);
   };
 
-  let events = [], next = 0, t = 0, last = 0, raf = 0, waveT = 0;
-  let started = false, visible = false;
-  // recording: null when the recorder is not running; otherwise the timer reads base + (t - from)
+  // amb: real seconds while playing (keeps ticking through the holds, so the
+  // recording timer and the waveforms never freeze)
+  let amb = 0, waveT = 0;
+  // recording: null when the recorder is not running; otherwise the timer reads base + (amb - from)
   let rec = null, talker = null, quiet = false, shown = '', tickAt = -1;
   const levels = { me: [], others: [] };
 
@@ -53,7 +72,7 @@
   };
 
   const reset = () => {
-    off(...STATES, 'e1-paused');
+    off(...STATES);
     on('e1-anim');
     toast.classList.remove('done');
     recBtn.classList.remove('press');
@@ -65,10 +84,9 @@
     impState.textContent = 'Importing…';
     impBar.style.width = '0%';
     disk.classList.remove('tick');
-    points.forEach((s) => s.classList.remove('on'));
     setWave('me', 0.05); setWave('others', 0.05);
     talk(null);
-    rec = null; quiet = false; tickAt = -1; t = 0; next = 0; waveT = 0;
+    rec = null; quiet = false; tickAt = -1; waveT = 0;
     mori.src = sprite('mori', 'idle');
     say.textContent = 'Quiet desk. Waiting for a call.';
 
@@ -81,14 +99,14 @@
     at(1.5, () => { on('s-toast'); beat(0); });
     at(1.7, () => on('s-auto'));
     at(2.9, () => recBtn.classList.add('press'));
-    at(3.2, () => {
+    at(3.2, (late) => {
       recBtn.classList.remove('press');
       toast.classList.add('done');
       toastMsg.textContent = 'Recording started. It stops when the call ends.';
       on('s-app', 's-rec');
       pill.textContent = 'Recording';
       state.textContent = 'Recording';
-      rec = { base: 0, from: 3.2 };
+      rec = { base: late, from: amb };
     });
     at(4.5, () => off('s-toast'));
     // two tracks: whoever talks lights up their own waveform
@@ -102,7 +120,7 @@
     at(6.7, () => { quiet = true; on('s-quiet'); talk('you'); });
     at(7.2, () => { on('s-nudge'); beat(2); });
     at(8.5, () => { off('s-nudge', 's-quiet'); quiet = false; });
-    at(9.1, () => { talk(null); on('s-later'); rec = { base: 870.2, from: 9.1 }; });
+    at(9.1, (late) => { talk(null); on('s-later'); rec = { base: 870.2 + late, from: amb }; });
     at(9.25, () => talk('lena'));
     // power cut
     at(10.1, () => { off('s-later'); on('s-flicker'); talk(null); beat(3); });
@@ -131,25 +149,20 @@
     at(14.3, () => { on('s-drag'); beat(4); });
     at(15.4, () => { on('s-drop', 's-import'); });
     at(16.4, () => { impState.textContent = 'Imported · 42 min'; });
-    at(16.8, () => { off('s-drag'); points.forEach((s) => s.classList.remove('on')); pose('idle', finalSay); });
-    at(17.3, () => { replay.hidden = false; });
-    events = ev.sort((x, y) => x.time - y.time);
+    at(16.8, () => { off('s-drag'); pose('idle', finalSay); });
+    return ev;
   };
 
   // waveforms scroll right to left; the live track bounces, the other idles near the floor
   const sample = (k) => {
     if (k === 'me' && quiet) return 0.03;
     const live = k === 'me' ? talker === 'you' : talker === 'lena' || talker === 'sam';
-    return live ? 0.3 + 0.68 * Math.random() * Math.abs(Math.sin(t * 9 + (k === 'me' ? 1 : 3))) : 0.04 + 0.06 * Math.random();
+    return live ? 0.3 + 0.68 * Math.random() * Math.abs(Math.sin(amb * 9 + (k === 'me' ? 1 : 3))) : 0.04 + 0.06 * Math.random();
   };
-  const frame = (now) => {
-    raf = 0;
-    const dt = Math.min(0.1, (now - last) / 1000);
-    t += dt;
-    last = now;
-    while (next < events.length && events[next].time <= t) events[next++].fn();
+  const tick = (t, dt) => {
+    amb += dt;
     if (rec) {
-      const s = rec.base + (t - rec.from);
+      const s = rec.base + (amb - rec.from);
       const c = clock(s);
       if (c !== shown) timer.textContent = shown = c;
       // synced to disk every 2 seconds
@@ -167,24 +180,19 @@
         }
       }
     }
-    if (t >= 15.4 && t < 16.6) impBar.style.width = `${(Math.min(1, (t - 15.4) / 1.0) * 100).toFixed(1)}%`;
-    if (visible && next < events.length) raf = requestAnimationFrame(frame);
+    const w = t < 15.4 ? '0%' : `${(Math.min(1, (t - 15.4) / 1.0) * 100).toFixed(1)}%`;
+    if (impBar.style.width !== w) impBar.style.width = w;
   };
-  const play = () => {
-    scene.classList.remove('e1-paused');
-    if (!raf && next < events.length) { last = performance.now(); raf = requestAnimationFrame(frame); }
-  };
-  const pause = () => { cancelAnimationFrame(raf); raf = 0; scene.classList.add('e1-paused'); };
 
-  reset();
-  ['listening', 'talking', 'thinking', 'error', 'writing'].forEach((p) => preload(sprite('mori', p)));
-  // start once ~40% of the scene (or of the screen, on tall phones) is in view; pause whenever it leaves
-  new IntersectionObserver(([e]) => {
-    const vh = e.rootBounds ? e.rootBounds.height : innerHeight;
-    const seen = e.intersectionRect.height / Math.min(e.boundingClientRect.height, vh);
-    visible = started ? e.isIntersecting : seen >= 0.4;
-    if (visible) { started = true; play(); } else pause();
-  }, { threshold: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1] }).observe(scene);
-
-  replay.addEventListener('click', () => { pause(); reset(); started = visible = true; play(); });
+  if (!site.reduce) ['listening', 'talking', 'thinking', 'error', 'writing'].forEach((p) => preload(sprite('mori', p)));
+  site.timeline(scene, CHAPTERS, {
+    bar: $('.e1-points', ep),
+    ctlBefore: $('.e1-stagebox', ep),
+    parts: '.e1-panel, .e1-call, .e1-toast, .e1-side, .e1-bar, .e1-tracks, .e1-status, .e1-stamp',
+    dim: 'brightness(.5) saturate(.55)',
+    replay,
+    end: 17.3,
+    reset,
+    tick,
+  });
 })();

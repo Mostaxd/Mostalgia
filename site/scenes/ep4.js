@@ -3,12 +3,33 @@
 // the recap brews, gets copied into the team chat and exported, and the
 // decision log fills a timeline where a later decision supersedes an earlier one.
 // The HTML holds the finished scene (what you see without JS or with reduced
-// motion); here it is rewound and replayed on a clock that only runs on screen.
+// motion); here it is rewound and its beats are handed to the shared pacing
+// clock (pacing.js), which plays them chapter by chapter with a caption, only
+// while the scene is on screen.
 (() => {
   const S = window.MostalgiaSite;
   const scene = document.getElementById('e4Scene');
   if (!S || !scene) return;
   const { reduce, $, $$, sprite, type, preload } = S;
+
+  // chapters in scene seconds; focus = what stays lit while the rest dims
+  const CHAPTERS = [
+    { id: 'ai', label: 'Pick your AI', start: 0, holds: [2.35],
+      caption: 'Mostalgia checks every AI connection, then you pick one to write summaries and one to answer questions.',
+      focus: ['.e4-ai'] },
+    { id: 'recap', label: 'Recap & copy', start: 5.8,
+      caption: 'The recap brews: decisions, owners, deadlines. One click pastes it into your team chat.',
+      focus: ['.e4-recap .e4-brew', '.e4-card', '.e4-acts', '.e4-chat'] },
+    { id: 'export', label: 'Export', start: 9.95,
+      caption: 'Or export the whole meeting as Markdown, text, SRT subtitles or a Word file.',
+      focus: ['.e4-exports'] },
+    { id: 'log', label: 'Decision log', start: 10.9,
+      caption: 'Every decision lands in one log, week by week, linked to the meeting and moment it was made.',
+      focus: ['.e4-log'] },
+    { id: 'supersede', label: 'Supersede', start: 13.4,
+      caption: 'A later decision overrides an earlier one. The old one stays in the log, marked superseded.',
+      focus: ['.e4-log'] },
+  ];
 
   // the supersede arc is drawn in real pixels so its stroke stays even at any width
   const arc = $('.e4-arc', scene);
@@ -22,8 +43,6 @@
   };
   drawArc();
   new ResizeObserver(drawArc).observe(arc);
-
-  if (reduce) return;
 
   const box = $('.e4-stagebox', scene);
   const say = $('#e4Say'), kaito = $('#e4Kaito'), replay = $('#e4Replay');
@@ -62,7 +81,8 @@
 
   // Web Animations (the flying recap) pause with the clock
   const anims = new Set();
-  const fly = () => {
+  const fly = (late) => {
+    if (late > 0.3) return; // a chapter jump skips the flight; the pasted message is already there
     const o = box.getBoundingClientRect(), a = card.getBoundingClientRect(), b = paste.getBoundingClientRect();
     const g = card.cloneNode(true);
     g.removeAttribute('id');
@@ -78,9 +98,6 @@
     anims.add(an);
     an.onfinish = () => { anims.delete(an); g.remove(); };
   };
-
-  let events = [], next = 0, t = 0, last = 0, raf = 0;
-  let started = false, visible = false;
 
   const reset = () => {
     anims.forEach((an) => an.cancel());
@@ -101,7 +118,6 @@
     copyTxt.textContent = copyLabel;
     kaito.src = sprite('kaito', 'idle');
     type(say, 'Your kitchen, your beans. Who\'s awake today?');
-    t = 0; next = 0;
 
     const ev = [];
     const at = (time, fn) => ev.push({ time, fn });
@@ -125,7 +141,7 @@
     at(7.5, () => { brewTxt.textContent = 'Recap ready'; });
     at(7.7, () => cursor.classList.add('in'));
     at(8.3, () => copy.classList.add('press'));
-    at(8.45, () => { copy.classList.remove('press'); copyTxt.textContent = 'Copied ✓'; pose('talking', 'One click, and it pours straight into the team chat.'); fly(); });
+    at(8.45, (late) => { copy.classList.remove('press'); copyTxt.textContent = 'Copied ✓'; pose('talking', 'One click, and it pours straight into the team chat.'); fly(late); });
     at(8.9, () => cursor.classList.remove('in'));
     at(9.25, () => mine.classList.add('in'));
     at(9.8, () => react.classList.add('in'));
@@ -142,38 +158,19 @@
       pose('talking', 'The 21st beats the 14th. The old one stays, marked superseded.');
     });
     at(16.6, () => pose('idle', finalSay));
-    at(17.2, () => { replay.hidden = false; });
-    events = ev.sort((x, y) => x.time - y.time);
+    return ev;
   };
 
-  const frame = (now) => {
-    raf = 0;
-    t += Math.min(0.1, (now - last) / 1000);
-    last = now;
-    while (next < events.length && events[next].time <= t) events[next++].fn();
-    if (visible && next < events.length) raf = requestAnimationFrame(frame);
-  };
-  const play = () => {
-    scene.classList.remove('e4-paused');
-    anims.forEach((an) => an.play());
-    if (!raf && next < events.length) { last = performance.now(); raf = requestAnimationFrame(frame); }
-  };
-  const pause = () => {
-    cancelAnimationFrame(raf);
-    raf = 0;
-    scene.classList.add('e4-paused');
-    anims.forEach((an) => an.pause());
-  };
-
-  reset();
-  ['thinking', 'error', 'talking', 'writing'].forEach((p) => preload(sprite('kaito', p)));
-  // start once ~40% of the scene (or of the screen, on tall phones) is in view; pause whenever it leaves
-  new IntersectionObserver(([e]) => {
-    const vh = e.rootBounds ? e.rootBounds.height : innerHeight;
-    const seen = e.intersectionRect.height / Math.min(e.boundingClientRect.height, vh);
-    visible = started ? e.isIntersecting : seen >= 0.4;
-    if (visible) { started = true; play(); } else pause();
-  }, { threshold: [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1] }).observe(box);
-
-  replay.addEventListener('click', () => { pause(); reset(); started = visible = true; play(); });
+  if (!reduce) ['thinking', 'error', 'talking', 'writing'].forEach((p) => preload(sprite('kaito', p)));
+  if (!S.timeline) return;
+  S.timeline(scene, CHAPTERS, {
+    bar: $('.e4-points', scene.closest('section')),
+    ctlBefore: box,
+    watch: box,
+    parts: '.e4-ai, .e4-share, .e4-recap > *, .e4-chat, .e4-log',
+    replay,
+    end: 17.2,
+    reset,
+    sticky: true,
+  });
 })();

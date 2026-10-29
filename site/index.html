@@ -14,6 +14,9 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&family=Zen+Maru+Gothic:wght@500;700;900&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="scenes/pacing.css">
+<!-- shared chapter/caption pacing for the scenes; deferred, so it runs after main.js and before the scenes -->
+<script src="scenes/pacing.js" defer></script>
 <noscript><style>.reveal, .ep-card .ep-text { opacity: 1; transform: none; } .ep-card .ep-no { opacity: 1; transform: skewX(-8deg); }</style></noscript>
 </head>
 <body>
@@ -325,13 +328,13 @@
       <button type="button" class="e1-replay" id="e1Replay" aria-label="Replay the recording animation" hidden><span aria-hidden="true">↻</span> Replay</button>
     </div>
 
-    <ul class="e1-points" aria-label="Recording in short">
-      <li class="step" data-pose="talking" data-say="Call starts, I start. Call ends, I stop. That's the whole deal."><b>Auto-start</b> when your call app grabs the mic</li>
-      <li class="step" data-pose="listening" data-say="Your mic and the call, on separate tracks. So I always know who's talking."><b>Two tracks:</b> your mic is <i>Me</i>, the call is <i>Others</i></li>
-      <li class="step" data-pose="thinking" data-say="Your mic's gone very quiet. Muted by accident?"><b>A nudge</b> when your mic goes quiet</li>
-      <li class="step" data-pose="error" data-say="Power cut?! Okay, okay… at most two seconds lost. I'll recover the rest at launch."><b>Crash-safe:</b> lose seconds, not the meeting</li>
-      <li class="step" data-pose="writing" data-say="Old recordings and chat exports? Hand them over. I'll treat them like any meeting."><b>Import</b> the recordings you already have</li>
-    </ul>
+    <ol class="e1-points pace-bar" aria-label="Recording, chapter by chapter">
+      <li class="step" data-pose="talking" data-say="Call starts, I start. Call ends, I stop. That's the whole deal."><b>Auto-start</b> <span class="pace-sub">when your call app grabs the mic</span></li>
+      <li class="step" data-pose="listening" data-say="Your mic and the call, on separate tracks. So I always know who's talking."><b>Two tracks</b> <span class="pace-sub">your mic is <i>Me</i>, the call is <i>Others</i></span></li>
+      <li class="step" data-pose="thinking" data-say="Your mic's gone very quiet. Muted by accident?"><b>Mic nudge</b> <span class="pace-sub">when your mic goes quiet</span></li>
+      <li class="step" data-pose="error" data-say="Power cut?! Okay, okay… at most two seconds lost. I'll recover the rest at launch."><b>Crash-safe</b> <span class="pace-sub">lose seconds, not the meeting</span></li>
+      <li class="step" data-pose="writing" data-say="Old recordings and chat exports? Hand them over. I'll treat them like any meeting."><b>Import</b> <span class="pace-sub">the recordings you already have</span></li>
+    </ol>
 
     <details class="e1-more">
       <summary>All details</summary>
@@ -793,12 +796,13 @@
       <p class="e4-foot"><button type="button" class="e4-replay" id="e4Replay" aria-label="Replay the summaries animation" hidden>↻ Replay</button></p>
     </div>
 
-    <ul class="e4-points">
-      <li><b>Bring your own AI</b>: one for summaries, one for Ask.</li>
-      <li><b>Summaries</b> with decisions, owners and deadlines.</li>
-      <li><b>Copy recap</b>, or export Markdown, text, SRT, Word.</li>
-      <li><b>Decision log</b> across meetings, superseded ones marked.</li>
-    </ul>
+    <ol class="e4-points pace-bar" aria-label="Summaries, chapter by chapter">
+      <li><b>Pick your AI</b> <span class="pace-sub">one for summaries, one for Ask</span></li>
+      <li><b>Recap &amp; copy</b> <span class="pace-sub">decisions, owners, deadlines, into your chat</span></li>
+      <li><b>Export</b> <span class="pace-sub">Markdown, text, SRT or Word</span></li>
+      <li><b>Decision log</b> <span class="pace-sub">every decision, across meetings</span></li>
+      <li><b>Supersede</b> <span class="pace-sub">replaced decisions stay, marked</span></li>
+    </ol>
 
     <details class="e4-more">
       <summary>All details <span>summaries, AI connections, recap and export, decision log</span></summary>
