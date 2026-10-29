@@ -450,57 +450,140 @@
       <h2>Ask your meetings. <span>They remember everything.</span></h2>
     </div>
   </header>
+  <link rel="stylesheet" href="scenes/ep5.css">
   <div class="ep-body">
+    <!-- the shared companion hooks main.js expects; this episode's Tsumugi lives in the scene below -->
     <aside class="stage" aria-hidden="true">
       <div class="bubble"><span class="who">Tsumugi</span><p class="say"></p></div>
       <div class="actor"><img alt="" width="300" height="480"></div>
       <div class="shadow"></div>
     </aside>
-    <div class="steps">
-      <article class="step" data-pose="talking" data-say="“What did Anna promise last week?” Let me pick up that thread… here, with the exact moment.">
-        <div class="step-text">
-          <h3>Answers with sources you can play</h3>
-          <p>Ask in plain words. Answers come with <b>clickable sources</b> that open the meeting at that line and play the audio.</p>
-          <div class="ask-demo" aria-hidden="true">
-            <div class="q">What did Anna promise last week?</div>
-            <div class="a">A new forecast by Friday <span class="src">1</span>, once she has the numbers from sales <span class="src">2</span>.</div>
+
+    <div class="e5">
+      <p class="sr-only" id="e5Desc">An interactive mock-up of Mostalgia's Ask view, used while a meeting called “Weekly check-in” is still recording. Pick one of three suggested questions and watch it typed in, searched across 42 meetings by keywords and by meaning in about 25 milliseconds on your own computer, and answered with sources. Each source button opens the transcript of that meeting at the exact line.</p>
+      <div class="e5-scene e5-dr-open" id="e5Scene" aria-describedby="e5Desc">
+        <div class="e5-win">
+          <div class="e5-titlebar">
+            <img src="assets/brand/icon.svg" alt="" width="16" height="16"> Mostalgia
+            <span class="e5-rec" aria-hidden="true"><i></i>REC <b class="e5-clock">05:41</b></span>
+          </div>
+          <div class="e5-app">
+            <div class="e5-nav" aria-hidden="true">
+              <span class="e5-recpill"><svg viewBox="0 0 24 24" width="14" height="14"><circle cx="12" cy="12" r="3" fill="currentColor"/><path d="M7.5 7.5a6.4 6.4 0 0 0 0 9M16.5 7.5a6.4 6.4 0 0 1 0 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Recording</span>
+              <span class="e5-navask"><svg viewBox="0 0 24 24" width="14" height="14"><path d="M10 3l1.8 5.2L17 10l-5.2 1.8L10 17l-1.8-5.2L3 10l5.2-1.8zM18 14l.9 2.1L21 17l-2.1.9L18 20l-.9-2.1L15 17l2.1-.9z" fill="currentColor"/></svg> Ask</span>
+              <span class="e5-navsearch"><svg viewBox="0 0 24 24" width="12" height="12"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M15.5 15.5L21 21" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg> Search transcripts</span>
+              <span class="e5-group">Today</span>
+              <span class="e5-item live"><b>Weekly check-in</b><small><i></i> Recording · <span class="e5-clock">05:41</span></small></span>
+              <span class="e5-item" data-m="spring"><b>Spring launch sync</b><small>10:00 · 2 min</small></span>
+              <span class="e5-group">Yesterday</span>
+              <span class="e5-item" data-m="sam"><b>1:1 with Sam</b><small>16:30 · 30 min</small></span>
+              <span class="e5-group">This month</span>
+              <span class="e5-item"><b>Design review: icons</b><small>Oct 21 · 24 min</small></span>
+              <span class="e5-more-m">+ 38 more</span>
+            </div>
+            <div class="e5-main">
+              <div class="e5-head">
+                <b>Ask</b><span class="e5-model">Local model · on this computer</span>
+                <span class="e5-scope" aria-hidden="true"><span>This meeting</span><span class="on">All meetings</span></span>
+              </div>
+              <div class="e5-body">
+                <div class="e5-chat" id="e5Chat">
+                  <p class="e5-you">What did we decide about the launch date?</p>
+                  <div class="e5-find done">
+                    <p class="e5-find-head"><span class="e5-find-txt">Found 3 passages in 2 meetings</span> <span class="e5-ms">~25 ms · all local</span></p>
+                  </div>
+                  <div class="e5-ans">
+                    <p>The spring launch stays on the 14th, and you skip the extra beta week to keep it <button type="button" class="e5-cite" data-m="spring" data-t="02:14">Spring launch sync · 02:14</button>. Sam floated that trade in your 1:1 the day before <button type="button" class="e5-cite" data-m="sam" data-t="12:11">1:1 with Sam · 12:11</button>. The one risk: the onboarding screens, due Thursday <button type="button" class="e5-cite" data-m="spring" data-t="02:12">Spring launch sync · 02:12</button>.</p>
+                  </div>
+                </div>
+                <aside class="e5-drawer open" id="e5Drawer" aria-label="Transcript">
+                  <div class="e5-dr-in">
+                    <p class="e5-dr-head"><b class="e5-dr-title">Spring launch sync</b><small class="e5-dr-when">Today, 10:00</small><button type="button" class="e5-dr-x" aria-label="Close the transcript">×</button></p>
+                    <ol class="e5-lines">
+                      <li><span class="e5-ts">02:07</span><span class="e5-chip lena">Lena</span><span>Morning! Are we still on for the spring launch on the 14th?</span></li>
+                      <li><span class="e5-ts">02:09</span><span class="e5-chip me">Me</span><span>Yes, as long as the onboarding screens are ready.</span></li>
+                      <li><span class="e5-ts">02:12</span><span class="e5-chip sam">Sam</span><span>They're close. I'll have them done by Thursday.</span></li>
+                      <li class="hit"><span class="e5-ts">02:14</span><span class="e5-chip me">Me</span><span>Great. Then we keep the 14th and skip the extra beta week.</span></li>
+                      <li><span class="e5-ts">02:16</span><span class="e5-chip lena">Lena</span><span>I'll draft the release notes by Friday.</span></li>
+                    </ol>
+                    <p class="e5-player" aria-hidden="true"><span class="e5-play"></span><span class="e5-wave"></span><span class="e5-pt">02:14</span></p>
+                  </div>
+                </aside>
+              </div>
+              <div class="e5-foot">
+                <div class="e5-try" role="group" aria-label="Suggested questions">
+                  <button type="button" class="e5-q" data-q="0" aria-pressed="true"><span class="e5-q-long">What did we decide about the launch date?</span></button>
+                  <button type="button" class="e5-q" data-q="1" aria-pressed="false"><span class="e5-q-long">Who owns the release notes?</span></button>
+                  <button type="button" class="e5-q" data-q="2" aria-pressed="false"><span class="e5-q-long">Did anyone mention the budget?</span></button>
+                </div>
+                <p class="e5-input" aria-hidden="true"><span class="e5-field">Ask about your meetings …</span><span class="e5-send"><svg viewBox="0 0 24 24" width="13" height="13"><path d="M12 4v15M6 13l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg> Ask</span></p>
+              </div>
+            </div>
           </div>
         </div>
-        <figure class="shot"><img src="assets/shots/ask.webp" alt="Ask view with answers and source chips" loading="lazy" width="1240" height="820"></figure>
-      </article>
-      <article class="step" data-pose="thinking" data-say="Keywords and meaning, woven together. All on your machine, in about 25 ms.">
-        <div class="step-text">
-          <h3>Hybrid search, all local</h3>
-          <p>BM25 keywords plus multilingual e5 embeddings, fused with reciprocal rank fusion, in about <b>25 ms</b> over your whole library. Cloud models only see the few passages they look up. Local models work too: one without tool calling simply gets the search results up front.</p>
-        </div>
-      </article>
-      <article class="step" data-pose="idle" data-say="If nobody said it, I'll tell you so. No confident inventions.">
-        <div class="step-text">
-          <h3>Honest when nobody said it</h3>
-          <blockquote class="honest">Nobody said that, at least not while Mostalgia was listening.</blockquote>
-        </div>
-      </article>
-      <article class="step" data-pose="listening" data-say="Mid-meeting and lost the thread? Ask me about the live meeting, this one, or all of them.">
-        <div class="step-text">
-          <h3>Ask live, mid-meeting</h3>
-          <p>Click your companion and ask about the <b>live meeting</b> (“What did we decide so far?”), the meeting that's open, or <b>all meetings</b>. Answers stream in with numbered sources that jump to the moment; every recording keeps its own chat.</p>
-        </div>
-        <figure class="shot"><img src="assets/shots/mori-chat.webp" alt="Chat with the companion during a meeting" loading="lazy" width="1240" height="820"></figure>
-      </article>
-      <article class="step" data-pose="talking" data-say="Put on the spot? Here's your answer, and the thread it came from. Proof included.">
-        <div class="step-text">
-          <h3>Stuck? A suggested answer, with proof</h3>
-          <p>When someone asks <b>you</b> a question mid-call, your companion quietly checks your <b>past meetings</b> and <b>documents</b> and slides in a suggested answer, with the sources it's based on, so you can answer with confidence. If nothing backs an answer up, it stays silent instead of guessing.</p>
-          <div class="suggest-demo" aria-hidden="true">
-            <p class="sd-head">💡 Suggested answer <span>00:18</span></p>
-            <p class="sd-q">“Didn't we already agree on a date for the review?”</p>
-            <p class="sd-a">Yes, Tuesday. It was decided in last week's release sync <span class="src">1</span>, and the onboarding plan lists it too <span class="src">2</span>.</p>
-            <p class="sd-src">Sources · <b>Release sync 14:32</b> · <b>Onboarding Guide §2</b></p>
+
+        <div class="e5-cast">
+          <div class="e5-say" aria-hidden="true"><b>Tsumugi</b> <span class="e5-say-txt">Here's the thread, and the exact moment it was said.</span></div>
+          <img class="e5-tsumugi" src="assets/cast/tsumugi-talking.webp" alt="" width="300" height="480" loading="lazy">
+          <div class="e5-suggest">
+            <p class="e5-sg-head"><span aria-hidden="true">💡</span> Suggested answer <small>05:58</small></p>
+            <p class="e5-sg-q">Lena asks you: “So we're definitely skipping the beta week?”</p>
+            <p class="e5-sg-a">Yes. You decided it in the spring launch sync. <button type="button" class="e5-cite" data-m="spring" data-t="02:14">Spring launch sync · 02:14</button></p>
           </div>
         </div>
-      </article>
+        <span class="e5-pointer" aria-hidden="true"><svg viewBox="0 0 24 24" width="26" height="26"><path d="M5 3l14 8.5-6.2 1.4 3.6 6.6-2.6 1.4-3.6-6.6L5.6 18z" fill="#fff" stroke="#2B1730" stroke-width="1.6" stroke-linejoin="round"/></svg></span>
+      </div>
+      <p class="sr-only" id="e5Status" aria-live="polite"></p>
+      <p class="e5-replay-row"><button type="button" class="e5-replay" id="e5Replay" aria-label="Replay the Ask demo" hidden>↻ Replay</button></p>
+
+      <ul class="e5-points">
+        <li class="step" data-pose="talking" data-say="“What did Anna promise last week?” Let me pick up that thread… here, with the exact moment."><b>Sources you can play</b> <span>every answer cites the exact line</span></li>
+        <li class="step" data-pose="thinking" data-say="Keywords and meaning, woven together. All on your machine, in about 25 ms."><b>Hybrid search, ~25 ms</b> <span>keywords plus meaning, all local</span></li>
+        <li class="step" data-pose="idle" data-say="If nobody said it, I'll tell you so. No confident inventions."><b>Honest</b> <span>if nobody said it, it says so</span></li>
+        <li class="step" data-pose="listening" data-say="Mid-meeting and lost the thread? Ask me about the live meeting, this one, or all of them."><b>Ask live</b> <span>mid-meeting, this one or all</span></li>
+        <li class="step" data-pose="talking" data-say="Put on the spot? Here's your answer, and the thread it came from. Proof included."><b>Stuck?</b> <span>a suggested answer, with proof</span></li>
+      </ul>
+
+      <details class="e5-details">
+        <summary>All details</summary>
+        <div class="e5-detail-grid">
+          <div>
+            <h3>Answers with sources you can play</h3>
+            <p>Ask in plain words. Answers come with <b>clickable sources</b> that open the meeting at that line and play the audio.</p>
+            <div class="ask-demo" aria-hidden="true">
+              <div class="q">What did Anna promise last week?</div>
+              <div class="a">A new forecast by Friday <span class="src">1</span>, once she has the numbers from sales <span class="src">2</span>.</div>
+            </div>
+          </div>
+          <div>
+            <h3>Hybrid search, all local</h3>
+            <p>BM25 keywords plus multilingual e5 embeddings, fused with reciprocal rank fusion, in about <b>25 ms</b> over your whole library. Cloud models only see the few passages they look up. Local models work too: one without tool calling simply gets the search results up front.</p>
+          </div>
+          <div>
+            <h3>Honest when nobody said it</h3>
+            <blockquote class="honest">Nobody said that, at least not while Mostalgia was listening.</blockquote>
+          </div>
+          <div>
+            <h3>Ask live, mid-meeting</h3>
+            <p>Click your companion and ask about the <b>live meeting</b> (“What did we decide so far?”), the meeting that's open, or <b>all meetings</b>. Answers stream in with numbered sources that jump to the moment; every recording keeps its own chat.</p>
+          </div>
+          <div class="e5-wide">
+            <h3>Stuck? A suggested answer, with proof</h3>
+            <p>When someone asks <b>you</b> a question mid-call, your companion quietly checks your <b>past meetings</b> and <b>documents</b> and slides in a suggested answer, with the sources it's based on, so you can answer with confidence. If nothing backs an answer up, it stays silent instead of guessing.</p>
+            <div class="suggest-demo" aria-hidden="true">
+              <p class="sd-head">💡 Suggested answer <span>00:18</span></p>
+              <p class="sd-q">“Didn't we already agree on a date for the review?”</p>
+              <p class="sd-a">Yes, Tuesday. It was decided in last week's release sync <span class="src">1</span>, and the onboarding plan lists it too <span class="src">2</span>.</p>
+              <p class="sd-src">Sources · <b>Release sync 14:32</b> · <b>Onboarding Guide §2</b></p>
+            </div>
+          </div>
+          <figure class="shot"><img src="assets/shots/ask.webp" alt="Ask view with answers and source chips" loading="lazy" width="1240" height="820"></figure>
+          <figure class="shot"><img src="assets/shots/mori-chat.webp" alt="Chat with the companion during a meeting" loading="lazy" width="1240" height="820"></figure>
+        </div>
+      </details>
     </div>
   </div>
+  <script src="scenes/ep5.js" defer></script>
 </section>
 
 <!-- ───────────────────────── EPISODE 6 ───────────────────────── -->
