@@ -80,7 +80,7 @@ fn metadata_date(path: &Path) -> Option<DateTime<Local>> {
         found
     })();
     from_tags.or_else(|| {
-        let out = Command::new("ffprobe")
+        let out = tool("ffprobe")
             .args(["-v", "quiet", "-show_entries", "format_tags=creation_time", "-of", "default=nw=1:nk=1"])
             .arg(path)
             .output()
@@ -316,19 +316,32 @@ fn convert_native(src: &Path, dst: &Path, progress: &dyn Fn(Option<f32>)) -> Res
     Ok(written as f64 / SAMPLE_RATE as f64)
 }
 
+/// ffmpeg / ffprobe, without a console window flashing up on Windows.
+fn tool(name: &str) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(name);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 fn ffmpeg_available() -> bool {
-    Command::new("ffmpeg").arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success())
+    tool("ffmpeg").arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success())
 }
 
 /// ffmpeg decodes, mixes down and resamples; we stream its raw output.
 fn convert_ffmpeg(src: &Path, dst: &Path, progress: &dyn Fn(Option<f32>)) -> Result<f64> {
-    let total = Command::new("ffprobe")
+    let total = tool("ffprobe")
         .args(["-v", "quiet", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1"])
         .arg(src)
         .output()
         .ok()
         .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<f64>().ok());
-    let mut child = Command::new("ffmpeg")
+    let mut child = tool("ffmpeg")
         .args(["-v", "error", "-nostdin", "-i"])
         .arg(src)
         .args(["-vn", "-ac", "1", "-ar", &SAMPLE_RATE.to_string(), "-f", "s16le", "-"])
