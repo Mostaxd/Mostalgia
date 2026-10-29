@@ -176,8 +176,11 @@ double-click.) That's it: no Rust, no packages, no scripts.
   (Ollama for a local model, or a cloud provider with your own key).
 - **The CLI** is inside the AppImage too:
   `./Mostalgia-x86_64.AppImage connections add ollama`, `… list`, `… ask "…"`.
-- **Start/stop shortcut:** add a custom shortcut in your desktop's keyboard
-  settings that runs `/path/to/Mostalgia-x86_64.AppImage toggle`.
+- **Start/stop shortcut:** on GNOME, *Settings → System* sets up
+  Super + Shift + R; elsewhere, add a custom shortcut in your desktop's
+  keyboard settings that runs `/path/to/Mostalgia-x86_64.AppImage toggle`.
+- **Mori on the desktop** works from the AppImage too (on Wayland through
+  XWayland, like a source build).
 - **Updates:** [Gear Lever](https://flathub.org/apps/it.mijorus.gearlever)
   or AppImageUpdate pick up new releases automatically.
 
