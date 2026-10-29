@@ -19,6 +19,9 @@ APP="$ROOT/dist/Mostalgia.app"
 DMG="$ROOT/dist/Mostalgia-macOS-$ARCH.dmg"
 IDENTITY=${MACOS_SIGN_IDENTITY:--}
 
+# The oldest macOS the app runs on (LSMinimumSystemVersion in Info.plist),
+# for Rust and the C/C++ of whisper.cpp alike.
+export MACOSX_DEPLOYMENT_TARGET=13.0
 cargo build --release --features metal -p mostalgia-app -p mostalgia
 
 rm -rf "$APP" "$DMG"
