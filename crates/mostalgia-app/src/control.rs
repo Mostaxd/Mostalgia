@@ -380,11 +380,51 @@ fn pump_messages() {
     }
 }
 
-/// No tray icon here yet (macOS: `native` needs building on the main thread).
-#[cfg(not(any(target_os = "linux", windows)))]
+/// macOS: the menu bar icon. AppKit wants it built and used on the main
+/// thread (where the app runs), so a run-loop timer there passes its
+/// clicks on instead of a thread of its own.
+#[cfg(target_os = "macos")]
+pub struct TrayHandle {
+    native: std::rc::Rc<std::cell::RefCell<native::Native>>,
+    timer: objc2::rc::Retained<objc2_foundation::NSTimer>,
+}
+
+#[cfg(target_os = "macos")]
+impl TrayHandle {
+    pub fn spawn(tray: Tray) -> anyhow::Result<Self> {
+        anyhow::ensure!(objc2::MainThreadMarker::new().is_some(), "the menu bar icon needs the main thread");
+        let native = std::rc::Rc::new(std::cell::RefCell::new(native::Native::build(tray.recording, tray.mic_on)?));
+        let polled = native.clone();
+        let tx = tray.tx;
+        let block = block2::RcBlock::new(move |_timer: std::ptr::NonNull<objc2_foundation::NSTimer>| {
+            let Ok(native) = polled.try_borrow() else { return };
+            for cmd in native.commands() {
+                let _ = tx.send(cmd);
+            }
+        });
+        let timer = unsafe { objc2_foundation::NSTimer::scheduledTimerWithTimeInterval_repeats_block(0.1, true, &block) };
+        Ok(Self { native, timer })
+    }
+
+    pub fn set_state(&self, recording: bool, mic_on: bool) {
+        if let Ok(mut native) = self.native.try_borrow_mut() {
+            native.set_state(recording, mic_on);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for TrayHandle {
+    fn drop(&mut self) {
+        self.timer.invalidate();
+    }
+}
+
+/// No tray icon here yet.
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 pub struct TrayHandle(std::convert::Infallible);
 
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 impl TrayHandle {
     pub fn spawn(_tray: Tray) -> anyhow::Result<Self> {
         anyhow::bail!("no tray icon on this system yet")

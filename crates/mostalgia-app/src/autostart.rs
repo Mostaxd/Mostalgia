@@ -194,10 +194,9 @@ fn send_notification(summary: &str, body: &str, action: Option<(String, crossbea
     Ok(())
 }
 
-/// A toast (Windows) or notification-center entry (macOS) through
-/// notify-rust. On Windows the "Aufnahme starten" button works like on
-/// Linux; on macOS it's a plain notification for now.
-#[cfg(not(target_os = "linux"))]
+/// A toast (Windows) through notify-rust, with the "Aufnahme starten"
+/// button working like on Linux.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn send_notification(summary: &str, body: &str, action: Option<(String, crossbeam_channel::Sender<String>)>) -> anyhow::Result<()> {
     let mut n = notify_rust::Notification::new();
     n.appname("Mostalgia").summary(summary).body(body);
@@ -217,5 +216,30 @@ fn send_notification(summary: &str, body: &str, action: Option<(String, crossbea
     }
     #[cfg(not(windows))]
     let _ = (handle, action);
+    Ok(())
+}
+
+/// A Notification Center entry (macOS). With `action`, it has an "Aufnahme
+/// starten" button like on Linux; this thread waits for the answer.
+#[cfg(target_os = "macos")]
+fn send_notification(summary: &str, body: &str, action: Option<(String, crossbeam_channel::Sender<String>)>) -> anyhow::Result<()> {
+    use mac_notification_sys::{MainButton, Notification, NotificationResponse};
+    static APP: std::sync::Once = std::sync::Once::new();
+    APP.call_once(|| {
+        // Inside Mostalgia.app the notifications are Mostalgia's; a bare
+        // binary (a source build) keeps the library's default sender.
+        if std::env::current_exe().is_ok_and(|p| p.to_string_lossy().contains(".app/Contents/MacOS/")) {
+            let _ = mac_notification_sys::set_application("io.github.mostaxd.Mostalgia");
+        }
+    });
+    let mut n = Notification::new();
+    n.title(summary).message(body);
+    if action.is_some() {
+        n.main_button(MainButton::SingleAction(tr("Aufnahme starten"))).close_button(tr("Ignorieren")).wait_for_click(true);
+    }
+    let response = n.send().map_err(|e| anyhow::anyhow!("{e}"))?;
+    if let (Some((app, tx)), NotificationResponse::ActionButton(_)) = (action, response) {
+        let _ = tx.send(app);
+    }
     Ok(())
 }
