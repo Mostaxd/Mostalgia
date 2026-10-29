@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Builds dist/Mostalgia-x86_64.AppImage: the app and the `mostalgia` CLI
 # (Vulkan build), the sherpa-onnx libraries and the other shared libraries
-# a desktop doesn't reliably have, bundled with linuxdeploy. Models are not
-# included; the app downloads them on first launch.
+# a desktop doesn't reliably have, bundled with linuxdeploy. The Vulkan
+# loader stays the system's, so it finds the system's GPU drivers. Models
+# are not included; the app downloads them on first launch.
 #
 #   ./scripts/build-appimage.sh            # needs the packages from the README
 #
@@ -47,6 +48,7 @@ linuxdeploy --appdir "$APPDIR" \
   --desktop-file packaging/io.github.mostaxd.Mostalgia.desktop \
   --icon-file assets/brand/icons/hicolor/256x256/apps/io.github.mostaxd.Mostalgia.png \
   --custom-apprun packaging/appimage/AppRun \
+  --exclude-library 'libvulkan.so*' \
   --output appimage
 
 # The .zsync goes wherever the tool was run; keep it with the AppImage.
