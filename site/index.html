@@ -398,46 +398,166 @@
       <h2>The highlights, <span>freshly brewed.</span></h2>
     </div>
   </header>
+  <link rel="stylesheet" href="scenes/ep4.css">
   <div class="ep-body">
+    <!-- main.js drives the companion from .stage/.step; this scene draws its own Kaito, so the stage stays hidden -->
     <aside class="stage" aria-hidden="true">
       <div class="bubble"><span class="who">Kaito</span><p class="say"></p></div>
       <div class="actor"><img alt="" width="300" height="480"></div>
       <div class="shadow"></div>
     </aside>
-    <div class="steps">
-      <article class="step" data-pose="thinking" data-say="Let it steep a moment… Decisions, owners, deadlines. Served.">
-        <div class="step-text">
+
+    <div class="e4-scene step" id="e4Scene" data-pose="talking" data-say="Let it steep a moment… Then one click pours the recap into your team chat.">
+      <div class="sr-only" id="e4Desc">
+        <p>An animated mock-up of what happens after the summary is written, narrated by Kaito.</p>
+        <p>First, the AI connections list checks four connections one by one: Local model (a local badge) is connected; Cloud provider A (cloud) is connected; Cloud provider B (cloud) is not set up; Your own endpoint (a custom URL) is failing because the connection is refused. The “Summaries” picker flips through them, skips the failing and the unconfigured ones, and lands on Local model with a medium thinking level, while the “Ask” picker lands on Cloud provider A.</p>
+        <p>Then a little coffee cup fills while the recap brews. The recap reads: Spring launch sync, 2 minutes; the launch stays on the 14th; Sam finishes the onboarding screens by Thursday; Lena drafts the release notes by Friday. “Copy recap” is clicked and the recap lands as a pasted message in a team chat channel called launch-team, where it gets two coffee reactions. Export buttons for Markdown, Text, SRT and Word appear.</p>
+        <p>Last, the decision log fills a timeline across four weeks: Feb 9, “Launch stays on the 14th” (Spring launch sync, 02:14); Feb 16, “Beta week dropped” (QA check-in, 05:32); Feb 23, “Pricing page waits for v2” (Pricing chat, 11:08); Mar 2, “Launch moves to the 21st” (Go / no-go, 03:47), which supersedes the decision from Feb 9, so that one is struck through and stamped “Superseded”.</p>
+      </div>
+
+      <div class="e4-stagebox" aria-hidden="true">
+        <div class="e4-board">
+
+          <div class="e4-panel e4-ai">
+            <p class="e4-bar"><span class="e4-bar-ic">✦</span> AI connections</p>
+            <div class="e4-pickers">
+              <div class="e4-pick" data-role="sum"><span class="e4-pick-l">Summaries</span><span class="e4-pick-v"><i class="e4-dot ok"></i><b>Local model</b></span><span class="e4-think">Thinking · medium</span></div>
+              <div class="e4-pick" data-role="ask"><span class="e4-pick-l">Ask</span><span class="e4-pick-v"><i class="e4-dot ok"></i><b>Cloud provider A</b></span></div>
+            </div>
+            <ul class="e4-conns">
+              <li class="e4-conn" data-state="ok" data-pill="sum">
+                <svg class="e4-ic" viewBox="0 0 24 24" width="16" height="16"><rect x="6" y="6" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                <b class="e4-name">Local model</b><span class="e4-badge local">Local</span>
+                <span class="e4-st"><i class="e4-dot"></i><em>Connected ✓</em></span>
+              </li>
+              <li class="e4-conn" data-state="ok" data-pill="ask">
+                <svg class="e4-ic" viewBox="0 0 24 24" width="16" height="16"><path d="M7 18h10.5a4 4 0 0 0 .4-8A6 6 0 0 0 6.3 9.5 4.3 4.3 0 0 0 7 18z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+                <b class="e4-name">Cloud provider A</b><span class="e4-badge cloud">Cloud</span>
+                <span class="e4-st"><i class="e4-dot"></i><em>Connected ✓</em></span>
+              </li>
+              <li class="e4-conn" data-state="off">
+                <svg class="e4-ic" viewBox="0 0 24 24" width="16" height="16"><path d="M7 18h10.5a4 4 0 0 0 .4-8A6 6 0 0 0 6.3 9.5 4.3 4.3 0 0 0 7 18z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+                <b class="e4-name">Cloud provider B</b><span class="e4-badge cloud">Cloud</span>
+                <span class="e4-st"><i class="e4-dot"></i><em>Not set up</em></span>
+              </li>
+              <li class="e4-conn" data-state="bad">
+                <svg class="e4-ic" viewBox="0 0 24 24" width="16" height="16"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                <b class="e4-name">Your own endpoint</b><span class="e4-badge url">URL</span>
+                <span class="e4-st"><i class="e4-dot"></i><em>Failing · connection refused</em></span>
+              </li>
+            </ul>
+          </div>
+
+          <div class="e4-panel e4-share">
+            <p class="e4-bar"><span class="e4-bar-ic">☕</span> Recap <span class="e4-bar-r">Spring launch sync</span></p>
+            <div class="e4-share-in">
+              <div class="e4-recap">
+                <div class="e4-brew">
+                  <svg class="e4-cup" viewBox="0 0 40 40" width="34" height="34">
+                    <g class="e4-steam" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 12c-2.4-2.2 2.4-3.8 0-6.5"/><path d="M20 12c-2.4-2.2 2.4-3.8 0-6.5"/><path d="M26 12c-2.4-2.2 2.4-3.8 0-6.5"/></g>
+                    <clipPath id="e4CupIn"><path d="M9 16h22l-2.4 15.2a3 3 0 0 1-3 2.6H14.4a3 3 0 0 1-3-2.6z"/></clipPath>
+                    <rect class="e4-coffee" clip-path="url(#e4CupIn)" x="8" y="18" width="24" height="17" fill="#8A4F2C"/>
+                    <path d="M9 16h22l-2.4 15.2a3 3 0 0 1-3 2.6H14.4a3 3 0 0 1-3-2.6z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/>
+                    <path d="M30.6 19h2.2a3.4 3.4 0 0 1 0 6.8h-3.3" fill="none" stroke="currentColor" stroke-width="2.4"/>
+                  </svg>
+                  <span class="e4-brewtxt" id="e4Brew">Recap ready</span>
+                </div>
+                <div class="e4-card" id="e4Card">
+                  <p class="e4-rh e4-r"><b>Spring launch sync</b> · 2 min</p>
+                  <p class="e4-r">• Launch stays on the 14th</p>
+                  <p class="e4-r">☐ Sam: onboarding screens, Thu</p>
+                  <p class="e4-r">☐ Lena: release notes, Fri</p>
+                </div>
+                <div class="e4-acts">
+                  <span class="e4-copy" id="e4Copy"><span class="e4-copy-t">⧉ Copy recap</span>
+                    <svg class="e4-cursor" viewBox="0 0 24 24" width="22" height="22"><path d="M5 3l14 8-6.2 1.6L10 19z" fill="#fff" stroke="#2B1730" stroke-width="2" stroke-linejoin="round"/></svg>
+                  </span>
+                  <span class="e4-len"><b>Short</b> · Full</span>
+                </div>
+                <ul class="e4-exports">
+                  <li><span>.md</span>Markdown</li>
+                  <li><span>.txt</span>Text</li>
+                  <li><span>.srt</span>SRT</li>
+                  <li><span>.docx</span>Word</li>
+                </ul>
+              </div>
+
+              <div class="e4-chat">
+                <p class="e4-chat-bar"><b>#</b> launch-team <small>team chat</small></p>
+                <ol class="e4-msgs">
+                  <li class="e4-msg"><span class="e4-av lena">L</span><div><p class="e4-who"><b>Lena</b> <small>10:04</small></p><p>Did we land the date?</p></div></li>
+                  <li class="e4-msg e4-mine" id="e4Mine"><span class="e4-av me">M</span><div><p class="e4-who"><b>Me</b> <small>10:05</small></p>
+                    <div class="e4-paste" id="e4Paste">
+                      <p class="e4-rh"><b>Spring launch sync</b> · 2 min</p>
+                      <p>• Launch stays on the 14th</p>
+                      <p>☐ Sam: onboarding screens, Thu</p>
+                      <p>☐ Lena: release notes, Fri</p>
+                    </div>
+                    <span class="e4-react">☕ 2</span></div></li>
+                </ol>
+              </div>
+            </div>
+          </div>
+
+          <div class="e4-panel e4-log">
+            <p class="e4-bar"><span class="e4-bar-ic">⚖</span> Decision log <span class="e4-bar-r"><span class="e4-filter">All meetings ▾</span><span class="e4-filter">Anyone ▾</span></span></p>
+            <div class="e4-track">
+              <svg class="e4-arc" viewBox="0 0 400 40" preserveAspectRatio="none"><path class="e4-line" d="M350 38C350 6 50 6 50 34" pathLength="1"/><path class="e4-head" d="M44 27L50 35L56 27"/></svg>
+              <ol class="e4-weeks">
+                <li class="e4-wk"><article class="e4-dec old"><b class="e4-dt">Launch stays on the 14th</b><span class="e4-meta"><span class="e4-mtg">Spring launch sync</span><span class="e4-tsc">▶ 02:14</span></span><span class="e4-stamp">Superseded</span></article><span class="e4-date">Feb 9</span></li>
+                <li class="e4-wk"><article class="e4-dec"><b class="e4-dt">Beta week dropped</b><span class="e4-meta"><span class="e4-mtg">QA check-in</span><span class="e4-tsc">▶ 05:32</span></span></article><span class="e4-date">Feb 16</span></li>
+                <li class="e4-wk"><article class="e4-dec"><b class="e4-dt">Pricing page waits for v2</b><span class="e4-meta"><span class="e4-mtg">Pricing chat</span><span class="e4-tsc">▶ 11:08</span></span></article><span class="e4-date">Feb 23</span></li>
+                <li class="e4-wk"><article class="e4-dec new"><b class="e4-dt">Launch moves to the 21st</b><span class="e4-meta"><span class="e4-mtg">Go / no-go</span><span class="e4-tsc">▶ 03:47</span></span><span class="e4-sup">↩ supersedes Feb 9</span></article><span class="e4-date">Mar 2</span></li>
+              </ol>
+            </div>
+          </div>
+        </div>
+
+        <div class="e4-cast">
+          <div class="e4-say"><b>Kaito</b> <span id="e4Say">Decisions, owners, deadlines. Freshly brewed, and served.</span></div>
+          <img class="e4-kaito" id="e4Kaito" src="assets/cast/kaito-idle.webp" alt="" width="300" height="480" loading="lazy">
+        </div>
+      </div>
+      <p class="e4-foot"><button type="button" class="e4-replay" id="e4Replay" aria-label="Replay the summaries animation" hidden>↻ Replay</button></p>
+    </div>
+
+    <ul class="e4-points">
+      <li><b>Bring your own AI</b>: one for summaries, one for Ask.</li>
+      <li><b>Summaries</b> with decisions, owners and deadlines.</li>
+      <li><b>Copy recap</b>, or export Markdown, text, SRT, Word.</li>
+      <li><b>Decision log</b> across meetings, superseded ones marked.</li>
+    </ul>
+
+    <details class="e4-more">
+      <summary>All details <span>summaries, AI connections, recap and export, decision log</span></summary>
+      <div class="e4-more-in">
+        <article class="e4-item">
           <h3>Summaries that know who promised what</h3>
           <p>A title, a short overview, key points, <b>decisions</b>, <b>action items with owners and deadlines</b>, and open questions, in the meeting's own language, whatever language the UI is in.</p>
-        </div>
-        <figure class="shot"><img src="assets/shots/summary.webp" alt="Summary with decisions and action items" loading="lazy" width="1240" height="820"></figure>
-      </article>
-      <article class="step" data-pose="idle" data-say="Your kitchen, your tea. Pick any AI you like, local or cloud.">
-        <div class="step-text">
+          <figure class="e4-shot"><img src="assets/shots/summary.webp" alt="Summary with decisions and action items" loading="lazy" width="1240" height="820"></figure>
+        </article>
+        <article class="e4-item">
           <h3>Bring your own AI</h3>
           <p>Connect as many providers as you like and choose separately which one writes summaries and which one answers questions. Each connection shows a <b>local</b> or <b>cloud</b> badge and whether it's connected, not set up, or failing, and why. Pick the model and, where supported, the <b>thinking level</b>; responses stream.</p>
           <ul class="chips"><li>Ollama</li><li>LM Studio</li><li>vLLM</li><li>LiteLLM</li><li>any OpenAI-compatible URL</li><li>Claude</li><li>OpenAI</li><li>DeepSeek</li><li>OpenRouter</li><li>Groq</li><li>Together</li></ul>
-        </div>
-        <figure class="shot"><img src="assets/shots/settings-ai.webp" alt="AI connections and processing modes in settings" loading="lazy" width="1400" height="1040"></figure>
-      </article>
-      <article class="step" data-pose="talking" data-say="One click, and the recap is ready to pour into Teams or an email.">
-        <div class="step-text">
+          <figure class="e4-shot"><img src="assets/shots/settings-ai.webp" alt="AI connections and processing modes in settings" loading="lazy" width="1400" height="1040"></figure>
+        </article>
+        <article class="e4-item">
           <h3>Copy recap and export</h3>
           <p><b>Copy recap</b> puts a short, clean summary on your clipboard (key points, decisions, action items with owners and due dates), short or full, as text or Markdown. Or export the whole meeting as <b>Markdown, text, SRT or Word</b>.</p>
           <pre class="recap" aria-label="An example recap">Next quarter's budget · 13 min
 • Marketing spend frozen until end of June
 ☐ Anna: new forecast, due Friday
 ☐ Me: send sales numbers this afternoon</pre>
-        </div>
-      </article>
-      <article class="step" data-pose="writing" data-say="Every decision, every meeting, newest first. I keep the ledger.">
-        <div class="step-text">
+        </article>
+        <article class="e4-item">
           <h3>Decision log</h3>
           <p>An optional <b>Decisions</b> page lists every decision across all your meetings, newest first, each tied to the line where it was said and who said it. Search and filter by meeting, person and date, edit entries, or mark one as <b>superseded</b> by a later decision.</p>
-        </div>
-      </article>
-    </div>
+        </article>
+      </div>
+    </details>
   </div>
+  <script src="scenes/ep4.js" defer></script>
 </section>
 
 <!-- ───────────────────────── EPISODE 5 ───────────────────────── -->
