@@ -194,7 +194,28 @@ fn send_notification(summary: &str, body: &str, action: Option<(String, crossbea
     Ok(())
 }
 
+/// A toast (Windows) or notification-center entry (macOS) through
+/// notify-rust. On Windows the "Aufnahme starten" button works like on
+/// Linux; on macOS it's a plain notification for now.
 #[cfg(not(target_os = "linux"))]
-fn send_notification(_summary: &str, _body: &str, _action: Option<(String, crossbeam_channel::Sender<String>)>) -> anyhow::Result<()> {
-    anyhow::bail!("desktop notifications are not available on this system yet")
+fn send_notification(summary: &str, body: &str, action: Option<(String, crossbeam_channel::Sender<String>)>) -> anyhow::Result<()> {
+    let mut n = notify_rust::Notification::new();
+    n.appname("Mostalgia").summary(summary).body(body);
+    #[cfg(windows)]
+    if action.is_some() {
+        n.action("start", tr("Aufnahme starten"));
+    }
+    let handle = n.show()?;
+    #[cfg(windows)]
+    if let Some((app, tx)) = action {
+        // Blocks this notification's thread until it's clicked or gone.
+        handle.wait_for_action(|key| {
+            if key == "start" {
+                let _ = tx.send(app);
+            }
+        });
+    }
+    #[cfg(not(windows))]
+    let _ = (handle, action);
+    Ok(())
 }
