@@ -1,7 +1,12 @@
 //! Startup check for an NVIDIA card that Whisper can't use. A kernel update
 //! that arrives without its NVIDIA module (or a driver install that still
 //! needs a reboot) leaves Vulkan with only the integrated GPU, and
-//! transcription crawls without saying why. Linux only.
+//! transcription crawls without saying why.
+//!
+//! On Windows (Vulkan builds) the same banner covers what goes wrong
+//! there: no Vulkan runtime in the system, an NVIDIA driver too old for
+//! the Vulkan Whisper needs, or a driver whose Vulkan part doesn't list
+//! the card. Windows has no command to fix these; the text says what to do.
 
 use std::path::Path;
 use std::process::Command;
@@ -26,7 +31,17 @@ pub enum Cause {
     /// The NVIDIA driver runs, but Vulkan doesn't list the card (its
     /// Vulkan driver is missing).
     VulkanMissing,
+    /// Windows: no Vulkan runtime (`vulkan-1.dll`) in the system: the
+    /// graphics driver was installed without it.
+    VulkanRuntimeMissing,
+    /// Windows: the NVIDIA driver ("456.71") is older than
+    /// [`MIN_NVIDIA_DRIVER`].
+    DriverTooOld { version: String },
 }
+
+/// The oldest NVIDIA driver (Windows numbering) whose Vulkan has what
+/// Whisper's Vulkan backend uses.
+pub const MIN_NVIDIA_DRIVER: (u32, u32) = (470, 0);
 
 /// A command run as root (with pkexec, or shown with sudo).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,6 +103,22 @@ struct System {
 /// thread. `MOSTALGIA_GPU_CHECK=force` treats the backend as if it saw no
 /// discrete GPU, to see the banner on a working machine.
 pub fn check() -> Option<GpuProblem> {
+    #[cfg(windows)]
+    {
+        if !cfg!(feature = "vulkan") {
+            return None;
+        }
+        let system = windows_system();
+        if system.nvidia.is_empty() {
+            return None;
+        }
+        let forced = std::env::var("MOSTALGIA_GPU_CHECK").is_ok_and(|v| v == "force");
+        if !forced && crate::transcribe::discrete_gpu().is_some() {
+            return None;
+        }
+        return diagnose_windows(&system);
+    }
+    #[allow(unreachable_code)]
     if !cfg!(all(target_os = "linux", any(feature = "vulkan", feature = "cuda"))) {
         return None;
     }
@@ -188,6 +219,69 @@ fn read_system() -> System {
     s
 }
 
+/// An NVIDIA card as Windows reports it.
+#[derive(Debug, Clone)]
+struct NvidiaCard {
+    #[allow(dead_code)]
+    name: String,
+    /// Driver version in NVIDIA's numbering, (560, 94).
+    driver: Option<(u32, u32)>,
+}
+
+#[derive(Debug, Default)]
+struct WinSystem {
+    nvidia: Vec<NvidiaCard>,
+    /// `vulkan-1.dll` is in System32 (installed by the graphics driver).
+    vulkan_runtime: bool,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn diagnose_windows(s: &WinSystem) -> Option<GpuProblem> {
+    let card = s.nvidia.first()?;
+    let cause = if !s.vulkan_runtime {
+        Cause::VulkanRuntimeMissing
+    } else if let Some(v) = card.driver.filter(|v| *v < MIN_NVIDIA_DRIVER) {
+        Cause::DriverTooOld { version: format!("{}.{:02}", v.0, v.1) }
+    } else {
+        Cause::VulkanMissing
+    };
+    Some(GpuProblem { cause, fix: None })
+}
+
+/// NVIDIA's driver version from the Windows one DXGI reports
+/// (32.0.15.6094 → 560.94: the last five digits).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn nvidia_version(umd: u64) -> (u32, u32) {
+    let (c, d) = (((umd >> 16) & 0xffff) as u32, (umd & 0xffff) as u32);
+    let n = (c % 10) * 10000 + d;
+    (n / 100, n % 100)
+}
+
+#[cfg(windows)]
+fn windows_system() -> WinSystem {
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIDevice, IDXGIFactory1};
+    use windows::core::Interface;
+
+    let system32 = std::env::var_os("SystemRoot").map(std::path::PathBuf::from).unwrap_or_else(|| "C:\\Windows".into()).join("System32");
+    let mut s = WinSystem { vulkan_runtime: system32.join("vulkan-1.dll").exists(), ..Default::default() };
+    // SAFETY: plain DXGI queries; the interfaces are released on drop.
+    unsafe {
+        let Ok(factory) = CreateDXGIFactory1::<IDXGIFactory1>() else { return s };
+        let mut i = 0;
+        while let Ok(adapter) = factory.EnumAdapters1(i) {
+            i += 1;
+            let Ok(desc) = adapter.GetDesc1() else { continue };
+            if desc.VendorId != 0x10de {
+                continue;
+            }
+            let name = String::from_utf16_lossy(&desc.Description).trim_end_matches('\0').to_string();
+            let driver = adapter.CheckInterfaceSupport(&IDXGIDevice::IID).ok().map(|v| nvidia_version(v as u64));
+            s.nvidia.push(NvidiaCard { name, driver });
+        }
+    }
+    s
+}
+
 /// Package names from dpkg's status file that are installed (or unpacked).
 fn installed_packages(status: &str) -> Vec<String> {
     status
@@ -245,6 +339,27 @@ mod tests {
         let mut s = system("");
         s.debian_like = false;
         assert_eq!(diagnose(&s).unwrap().fix, None);
+    }
+
+    #[test]
+    fn windows_driver_states() {
+        let card = |driver| NvidiaCard { name: "NVIDIA GeForce RTX 3060".into(), driver };
+        let s = |driver, vulkan_runtime| WinSystem { nvidia: vec![card(driver)], vulkan_runtime };
+        assert_eq!(diagnose_windows(&s(Some((560, 94)), false)).unwrap().cause, Cause::VulkanRuntimeMissing);
+        assert_eq!(diagnose_windows(&s(Some((456, 71)), true)).unwrap().cause, Cause::DriverTooOld { version: "456.71".into() });
+        assert_eq!(diagnose_windows(&s(Some((560, 94)), true)).unwrap().cause, Cause::VulkanMissing);
+        assert_eq!(diagnose_windows(&s(None, true)).unwrap().cause, Cause::VulkanMissing);
+        assert_eq!(diagnose_windows(&WinSystem::default()), None);
+        assert!(diagnose_windows(&s(None, false)).unwrap().fix.is_none());
+    }
+
+    #[test]
+    fn nvidia_numbering() {
+        // 32.0.15.6094
+        let umd = (32u64 << 48) | (15 << 16) | 6094;
+        assert_eq!(nvidia_version(umd), (560, 94));
+        // 27.21.14.5671 → 456.71
+        assert_eq!(nvidia_version((27u64 << 48) | (21 << 32) | (14 << 16) | 5671), (456, 71));
     }
 
     #[test]
