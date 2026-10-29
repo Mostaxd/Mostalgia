@@ -917,82 +917,187 @@
       <h2>Meet the cast. <span>Pick who takes your notes.</span></h2>
     </div>
   </header>
+  <link rel="stylesheet" href="scenes/ep7.css">
 
   <div class="wrap">
-    <div class="select" id="castSelect">
-      <div class="roster" role="tablist" aria-label="Companions">
-        <button role="tab" data-c="mori" aria-selected="true"><img src="assets/cast/mori-idle.webp" alt="" loading="lazy"><span>Mori</span></button>
-        <button role="tab" data-c="tsumugi" aria-selected="false"><img src="assets/cast/tsumugi-idle.webp" alt="" loading="lazy"><span>Tsumugi</span></button>
-        <button role="tab" data-c="hoshi" aria-selected="false"><img src="assets/cast/hoshi-idle.webp" alt="" loading="lazy"><span>Hoshi</span></button>
-        <button role="tab" data-c="kaito" aria-selected="false"><img src="assets/cast/kaito-idle.webp" alt="" loading="lazy"><span>Kaito</span></button>
-        <button role="tab" data-c="jin" aria-selected="false"><img src="assets/cast/jin-idle.webp" alt="" loading="lazy"><span>Jin</span></button>
-      </div>
+    <div class="cs" id="castScene">
+      <div class="cs-stage">
+        <div class="cs-hero" aria-hidden="true">
+          <span class="cs-lines"></span>
+          <span class="cs-kana" id="csKana">モリ</span>
+          <span class="cs-floor"></span>
+          <img class="cs-big" id="csBig" src="assets/cast/mori-idle.webp" alt="" width="300" height="480">
+          <div class="cs-plate" id="csPlate"><b>Mori</b><small>The note-taker</small></div>
+        </div>
 
-      <div class="profile" role="tabpanel" aria-live="polite">
-        <div class="profile-art">
-          <span class="profile-kana" id="pKana">モリ</span>
-          <img id="pImg" src="assets/cast/mori-idle.webp" alt="Mori" width="300" height="480">
-          <div class="poses" role="group" aria-label="Poses">
-            <button data-p="idle" class="on">Idle</button>
-            <button data-p="listening">Listening</button>
-            <button data-p="writing">Writing</button>
-            <button data-p="thinking">Thinking</button>
-            <button data-p="talking">Talking</button>
-            <button data-p="sleeping">Sleeping</button>
-            <button data-p="error">Worried</button>
+        <div class="cs-say" id="csSay" aria-hidden="true"><b id="csWho">Mori</b> <span id="csLine">Hi, I'm Mori. I'll write it down so you don't have to.</span></div>
+
+        <div class="cs-profiles">
+          <article class="cs-prof" id="cs-p-mori" role="tabpanel" aria-labelledby="cs-t-mori">
+            <h3 class="cs-name">Mori <span lang="ja">モリ</span> <small>The note-taker</small></h3>
+            <p class="cs-pers">Warm, calm, a little witty and concise.</p>
+            <p class="cs-how">Takes notes on her notepad</p>
+            <p class="cs-bio">Mori writes along whenever someone speaks, pins up what she noticed, and remembers what was said. Her name comes from memory.</p>
+            <p class="cs-quote">“Hi, I'm Mori. I'll write it down so you don't have to.”</p>
+          </article>
+          <article class="cs-prof" id="cs-p-tsumugi" role="tabpanel" aria-labelledby="cs-t-tsumugi">
+            <h3 class="cs-name">Tsumugi <span lang="ja">ツムギ</span> <small>The weaver</small></h3>
+            <p class="cs-pers">Patient, gentle and unhurried, even when the meeting isn't.</p>
+            <p class="cs-how">Weaves the notes into her scarf</p>
+            <p class="cs-bio">Tsumugi spins what people say into thread and weaves each note into her long scarf, picking up threads and tying off loose ends.</p>
+            <p class="cs-quote">“I'm Tsumugi. Let's take this slowly, one thread at a time.”</p>
+          </article>
+          <article class="cs-prof" id="cs-p-hoshi" role="tabpanel" aria-labelledby="cs-t-hoshi">
+            <h3 class="cs-name">Hoshi <span lang="ja">ホシ</span> <small>The astronomer</small></h3>
+            <p class="cs-pers">Curious, calm and precise, glad to notice how things connect.</p>
+            <p class="cs-how">Charts the notes as constellations</p>
+            <p class="cs-bio">Hoshi sits with her telescope and star chart and maps every note as a star, so you can see how the points line up.</p>
+            <p class="cs-quote">“Hoshi. I chart what's said, so you can see how it connects.”</p>
+          </article>
+          <article class="cs-prof" id="cs-p-kaito" role="tabpanel" aria-labelledby="cs-t-kaito">
+            <h3 class="cs-name">Kaito <span lang="ja">カイト</span> <small>The tea host</small></h3>
+            <p class="cs-pers">Calm, polite and gently hospitable, attentive to what you need.</p>
+            <p class="cs-how">Serves each note like a cup of tea</p>
+            <p class="cs-bio">Kaito arrives with a tray and teapot and serves each note like a freshly poured cup, lined up on the shelf.</p>
+            <p class="cs-quote">“Welcome, I'm Kaito. May I serve today's notes?”</p>
+          </article>
+          <article class="cs-prof" id="cs-p-jin" role="tabpanel" aria-labelledby="cs-t-jin">
+            <h3 class="cs-name">Jin <span lang="ja">ジン</span> <small>The wandering swordsman</small></h3>
+            <p class="cs-pers">Stoic, terse and direct.</p>
+            <p class="cs-how">Cuts each note onto a paper strip</p>
+            <p class="cs-bio">Jin cuts straight to the point, never rude, and slices each note cleanly onto a paper strip.</p>
+            <p class="cs-quote">“Jin. I cut to the point.”</p>
+          </article>
+        </div>
+
+        <div class="cs-roster" role="tablist" aria-label="Companions">
+          <button type="button" class="cs-tile" role="tab" id="cs-t-mori" data-c="mori" aria-selected="true" aria-controls="cs-p-mori"><img src="assets/cast/mori-idle.webp" alt="" width="300" height="480" loading="lazy"><span>Mori</span></button>
+          <button type="button" class="cs-tile" role="tab" id="cs-t-tsumugi" data-c="tsumugi" aria-selected="false" aria-controls="cs-p-tsumugi"><img src="assets/cast/tsumugi-idle.webp" alt="" width="300" height="480" loading="lazy"><span>Tsumugi</span></button>
+          <button type="button" class="cs-tile" role="tab" id="cs-t-hoshi" data-c="hoshi" aria-selected="false" aria-controls="cs-p-hoshi"><img src="assets/cast/hoshi-idle.webp" alt="" width="300" height="480" loading="lazy"><span>Hoshi</span></button>
+          <button type="button" class="cs-tile" role="tab" id="cs-t-kaito" data-c="kaito" aria-selected="false" aria-controls="cs-p-kaito"><img src="assets/cast/kaito-idle.webp" alt="" width="300" height="480" loading="lazy"><span>Kaito</span></button>
+          <button type="button" class="cs-tile" role="tab" id="cs-t-jin" data-c="jin" aria-selected="false" aria-controls="cs-p-jin"><img src="assets/cast/jin-idle.webp" alt="" width="300" height="480" loading="lazy"><span>Jin</span></button>
+        </div>
+
+        <!-- what the companion does: six tiny scenes on one mini screen (decorative; the text is below) -->
+        <div class="cs-screen" id="csScreen" aria-hidden="true">
+          <p class="cs-stitle"><i></i><i></i><i></i> <b id="csCapWho">Mori</b> · <span id="csCap">Live notes</span></p>
+          <div class="cs-vigs">
+          <div class="cs-v cs-v-notes on" data-f="notes">
+            <div class="cs-vbar"><i class="cs-rec"></i> 12:04 <span class="cs-ring"></span><em>next notes ~90 s</em></div>
+            <ol class="cs-tr"><li><b class="a"></b><i></i></li><li><b class="b"></b><i></i></li><li><b class="a"></b><i></i></li></ol>
+            <ul class="cs-pins">
+              <li class="d"><u>Decision</u>Launch stays on the 14th</li>
+              <li class="t"><u>Action · Lena</u>Release notes by Fri</li>
+              <li class="q"><u>Open question</u>New pricing page?</li>
+            </ul>
+            <div class="cs-as"><img class="cs-prop" src="assets/cast/hoshi-notes.webp" alt="" width="360" height="240" loading="lazy"><span class="cs-pad"></span><em>as: notepad</em></div>
+            <img class="cs-mini" src="assets/cast/mori-writing.webp" alt="" width="300" height="480" loading="lazy">
+          </div>
+
+          <div class="cs-v cs-v-desk" data-f="desk">
+            <div class="cs-menubar"><i></i><i></i><i></i><span>Thu 10:04</span></div>
+            <div class="cs-call"><span class="cs-wt"><i></i> Weekly call</span><div class="cs-faces"><i></i><i></i><i></i><i></i></div></div>
+            <div class="cs-app"><span class="cs-wt"><i></i> Mostalgia</span><b></b><b></b><b></b></div>
+            <img class="cs-mini" src="assets/cast/mori-listening.webp" alt="" width="300" height="480" loading="lazy">
+            <span class="cs-cursor"></span>
+            <div class="cs-slim"><i class="cs-rec"></i><b>12:04</b><span class="pause"></span><span class="mic"></span></div>
+          </div>
+
+          <div class="cs-v cs-v-regen" data-f="regen">
+            <div class="cs-card">
+              <p class="cs-ct">Notes <span class="cs-tag">Focus: deadlines</span> <span class="cs-tag alt">Modern detailed</span></p>
+              <div class="cs-lines-wrap"><div class="cs-old"><i></i><i></i><i></i><i></i></div><div class="cs-new"><i></i><i></i><i></i><i></i></div></div>
+              <p class="cs-acts"><span class="cs-btn go">↻ Regenerate</span><span class="cs-btn ghost">Undo</span><span class="cs-btn ghost">Earlier · 2</span></p>
+            </div>
+            <img class="cs-mini" src="assets/cast/mori-writing.webp" alt="" width="300" height="480" loading="lazy">
+          </div>
+
+          <div class="cs-v cs-v-honest" data-f="honest">
+            <p class="cs-ask"><b>✦ Ask</b> What did we decide about pricing?</p>
+            <div class="cs-reply local"><span class="cs-badge" id="csBadge">Local model</span><span id="csStatus">Answering on this computer.</span></div>
+            <img class="cs-mini" src="assets/cast/mori-talking.webp" alt="" width="300" height="480" loading="lazy">
+          </div>
+
+          <div class="cs-v cs-v-calm" data-f="calm">
+            <div class="cs-vbar"><i class="cs-rec"></i> <span class="cs-st">Paused</span> <span class="cs-pausebtn">❚❚</span></div>
+            <ol class="cs-tr"><li><b class="a"></b><i></i></li><li><b class="b"></b><i></i></li><li><b class="a"></b><i></i></li><li><b class="b"></b><i></i></li></ol>
+            <div class="cs-side"><span class="cs-pose" id="csPose">dozing</span><img class="cs-mini" src="assets/cast/mori-sleeping.webp" alt="" width="300" height="480" loading="lazy"><span class="cs-z"><i>z</i><i>z</i><i>Z</i></span></div>
+          </div>
+
+          <div class="cs-v cs-v-off" data-f="off">
+            <div class="cs-set">
+              <ul class="cs-snav"><li>General</li><li>Transcription</li><li>AI</li><li class="on">Companion</li></ul>
+              <div class="cs-smain">
+                <p class="cs-st1">Companion <small>off by default</small></p>
+                <p class="cs-row"><span>Show companion</span><span class="cs-switch"><i></i></span></p>
+                <p class="cs-row r2"><span>Placement</span><span class="cs-seg"><i>App window</i><i class="on">Desktop</i></span></p>
+                <p class="cs-row r3"><span>Size</span><span class="cs-slider"><i></i></span></p>
+                <p class="cs-row r4"><span>Notes every</span><span class="cs-sel">90 s ▾</span></p>
+              </div>
+            </div>
+            <img class="cs-mini" src="assets/cast/mori-idle.webp" alt="" width="300" height="480" loading="lazy">
+          </div>
           </div>
         </div>
-        <div class="profile-info">
-          <p class="p-role" id="pRole">The note-taker</p>
-          <h3 id="pName">Mori</h3>
-          <p class="p-tag" id="pTag">Takes notes on her notepad</p>
-          <p class="p-bio" id="pBio"></p>
-          <div class="p-notes" id="pNotesWrap">
-            <p class="mini">How notes appear</p>
-            <img id="pNotes" src="assets/shots/mori-points.webp" alt="" loading="lazy">
+
+        <div class="cs-feats" role="group" aria-label="Play one of the companion's jobs">
+          <button type="button" class="cs-chip" data-f="notes" aria-pressed="true"><span aria-hidden="true">📌</span> Live notes</button>
+          <button type="button" class="cs-chip" data-f="desk" aria-pressed="false"><span aria-hidden="true">🪟</span> Desktop</button>
+          <button type="button" class="cs-chip" data-f="regen" aria-pressed="false"><span aria-hidden="true">🔁</span> Regenerate</button>
+          <button type="button" class="cs-chip" data-f="honest" aria-pressed="false"><span aria-hidden="true">💬</span> Honest</button>
+          <button type="button" class="cs-chip" data-f="calm" aria-pressed="false"><span aria-hidden="true">😴</span> Calm</button>
+          <button type="button" class="cs-chip" data-f="off" aria-pressed="false"><span aria-hidden="true">🎛️</span> Optional</button>
+        </div>
+
+        <button type="button" class="cs-replay" id="csReplay" aria-label="Replay the cast select animation" hidden><span aria-hidden="true">↻</span> Replay</button>
+      </div>
+    </div>
+
+    <ul class="cs-points">
+      <li><span aria-hidden="true">📌</span> Pins decisions, owners and open questions as you talk.</li>
+      <li><span aria-hidden="true">🪟</span> Floats over your call app, or tucks into a slim bar.</li>
+      <li><span aria-hidden="true">🔁</span> Rewrite the notes later with a new focus. Undo anytime.</li>
+      <li><span aria-hidden="true">💬</span> Always says which model answers, and when one fails.</li>
+      <li><span aria-hidden="true">🎛️</span> Off by default. Calm, small, never on top of the transcript.</li>
+    </ul>
+
+    <details class="cs-more">
+      <summary>All details</summary>
+      <div class="cs-more-body">
+        <div class="cs-cards">
+          <div class="cs-cf">
+            <h3><span aria-hidden="true">📌</span> Live notes</h3>
+            <p>Every 90 seconds or so (or as it happens) your companion pins up decisions, action items with owners, open questions, numbers and key points. Pick <i>Default</i> or <i>Modern detailed</i>, add a focus hint, pin what matters. Everything is saved in the meeting's Notes tab.</p>
+          </div>
+          <div class="cs-cf">
+            <h3><span aria-hidden="true">🪟</span> On your desktop</h3>
+            <p>Drag them out of the window and they float above everything, your call app included, anywhere across your monitors. Hide them into a slim bar with record, pause and mic controls.</p>
+          </div>
+          <div class="cs-cf">
+            <h3><span aria-hidden="true">🔁</span> Regenerate after the meeting</h3>
+            <p>Not happy with the notes? Regenerate them with a new focus or style, undo, or restore earlier ones.</p>
+          </div>
+          <div class="cs-cf">
+            <h3><span aria-hidden="true">💬</span> Honest about what they do</h3>
+            <p>The bubble shows whether a local or cloud model is answering. No model set up? They say so. A provider fails? You get a worried face and the reason, never a pretend answer.</p>
+          </div>
+          <div class="cs-cf">
+            <h3><span aria-hidden="true">😴</span> Alive, but calm</h3>
+            <p>They idle, listen, write, think, talk, doze off when you pause, and look worried when something breaks. Small next to the transcript, never on top of it.</p>
+          </div>
+          <div class="cs-cf">
+            <h3><span aria-hidden="true">🎛️</span> Entirely optional</h3>
+            <p>Off by default. Switch on in Settings → Companion, choose placement (app window or desktop), size and how often notes are taken.</p>
           </div>
         </div>
+        <div class="cs-duo">
+          <figure class="shot"><img src="assets/shots/mori-points.webp" alt="Mori pinning live notes next to the transcript" loading="lazy" width="1240" height="820"><figcaption>Live notes, pinned beside the transcript</figcaption></figure>
+          <figure class="shot tall"><img src="assets/shots/mori-desktop.webp" alt="Mori on the desktop with live notes" loading="lazy" width="628" height="860"><figcaption>On the desktop, always on top</figcaption></figure>
+        </div>
       </div>
-    </div>
-
-    <div class="cast-features">
-      <div class="cf reveal">
-        <span class="cf-ico">📌</span>
-        <h3>Live notes</h3>
-        <p>Every 90 seconds or so (or as it happens) your companion pins up decisions, action items with owners, open questions, numbers and key points. Pick <i>Default</i> or <i>Modern detailed</i>, add a focus hint, pin what matters. Everything is saved in the meeting's Notes tab.</p>
-      </div>
-      <div class="cf reveal">
-        <span class="cf-ico">🪟</span>
-        <h3>On your desktop</h3>
-        <p>Drag them out of the window and they float above everything, your call app included, anywhere across your monitors. Hide them into a slim bar with record, pause and mic controls.</p>
-      </div>
-      <div class="cf reveal">
-        <span class="cf-ico">🔁</span>
-        <h3>Regenerate after the meeting</h3>
-        <p>Not happy with the notes? Regenerate them with a new focus or style, undo, or restore earlier ones.</p>
-      </div>
-      <div class="cf reveal">
-        <span class="cf-ico">💬</span>
-        <h3>Honest about what they do</h3>
-        <p>The bubble shows whether a local or cloud model is answering. No model set up? They say so. A provider fails? You get a worried face and the reason, never a pretend answer.</p>
-      </div>
-      <div class="cf reveal">
-        <span class="cf-ico">😴</span>
-        <h3>Alive, but calm</h3>
-        <p>They idle, listen, write, think, talk, doze off when you pause, and look worried when something breaks. Small next to the transcript, never on top of it.</p>
-      </div>
-      <div class="cf reveal">
-        <span class="cf-ico">🎛️</span>
-        <h3>Entirely optional</h3>
-        <p>Off by default. Switch on in Settings → Companion, choose placement (app window or desktop), size and how often notes are taken.</p>
-      </div>
-    </div>
-
-    <div class="duo reveal">
-      <figure class="shot"><img src="assets/shots/mori-points.webp" alt="Mori pinning live notes next to the transcript" loading="lazy" width="1240" height="820"><figcaption>Live notes, pinned beside the transcript</figcaption></figure>
-      <figure class="shot tall"><img src="assets/shots/mori-desktop.webp" alt="Mori on the desktop with live notes" loading="lazy" width="628" height="860"><figcaption>On the desktop, always on top</figcaption></figure>
-    </div>
+    </details>
   </div>
+  <script src="scenes/ep7.js" defer></script>
 </section>
 
 <!-- ───────────────────────── EPISODE 8: PRIVACY ───────────────────────── -->
