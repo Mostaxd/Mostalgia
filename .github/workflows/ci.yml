@@ -85,3 +85,25 @@ jobs:
       # CMake and LLVM (for whisper.cpp and its bindings) come with the runner.
       - run: cargo build --workspace --all-targets
       - run: cargo test --workspace
+
+  macos:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
+    # Apple Silicon; whisper.cpp runs on Metal.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: sherpa
+          cache-directories: ~/Library/Caches/sherpa-rs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Compiler errors and failing tests also become annotations, readable
+      # through the check-runs API without the log.
+      - name: Build
+        shell: bash
+        run: scripts/ci-annotate.sh cargo build --workspace --all-targets --features mostalgia-core/metal --message-format=short
+      - name: Test
+        shell: bash
+        run: scripts/ci-annotate.sh cargo test --workspace --features mostalgia-core/metal --message-format=short

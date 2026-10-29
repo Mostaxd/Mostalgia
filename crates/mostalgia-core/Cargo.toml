@@ -47,6 +47,8 @@ libpulse-simple-binding = "2.29.0"
 [features]
 default = ["diarization"]
 vulkan = ["whisper-rs/vulkan"]
+# Apple GPUs (macOS).
+metal = ["whisper-rs/metal"]
 cuda = ["whisper-rs/cuda"]
 openblas = ["whisper-rs/openblas"]
 # Speaker diarization (sherpa-onnx; its shared libraries are copied next to the binary).

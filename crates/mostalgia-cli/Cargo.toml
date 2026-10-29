@@ -20,5 +20,6 @@ rpassword = "7.5.4"
 [features]
 default = []
 vulkan = ["mostalgia-core/vulkan"]
+metal = ["mostalgia-core/metal"]
 cuda = ["mostalgia-core/cuda"]
 openblas = ["mostalgia-core/openblas"]

@@ -37,6 +37,7 @@ x11rb = { version = "0.13.2", features = ["shape", "randr"] }
 [features]
 default = []
 vulkan = ["mostalgia-core/vulkan"]
+metal = ["mostalgia-core/metal"]
 cuda = ["mostalgia-core/cuda"]
 # Offscreen rendering for `cargo run --example screenshots --features screenshots`.
 screenshots = ["dep:gpui-pre", "gpui-pre/test-support", "dep:gpui_platform", "gpui_platform/test-support"]
