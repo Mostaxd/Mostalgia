@@ -45,6 +45,7 @@ jobs:
           echo "VULKAN_SDK=$HOME/$VK/x86_64" >> "$GITHUB_ENV"
           echo "$HOME/$VK/x86_64/bin" >> "$GITHUB_PATH"
           echo "LD_LIBRARY_PATH=$HOME/$VK/x86_64/lib" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=-L native=$HOME/$VK/x86_64/lib" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         with:
           key: appimage
