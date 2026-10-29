@@ -347,6 +347,7 @@
 
 <!-- ───────────────────────── EPISODE 3 ───────────────────────── -->
 <section class="episode" id="ep3" data-char="jin">
+  <link rel="stylesheet" href="scenes/ep3.css">
   <header class="ep-card">
     <div class="burst" aria-hidden="true"></div>
     <span class="ep-no" aria-hidden="true">03</span>
@@ -356,36 +357,139 @@
     </div>
   </header>
   <div class="ep-body">
+    <!-- main.js drives this stage and the mobile guide from the .step bullets; the scene below has its own Jin -->
     <aside class="stage" aria-hidden="true">
       <div class="bubble"><span class="who">Jin</span><p class="say"></p></div>
       <div class="actor"><img alt="" width="300" height="480"></div>
       <div class="shadow"></div>
     </aside>
-    <div class="steps">
-      <article class="step" data-pose="listening" data-say="You. Them. Two tracks. No guessing.">
-        <div class="step-text">
-          <h3><i>Me</i> and <i>Others</i>, for free</h3>
-          <p>Because your mic and the call are recorded separately, every line is already split into what <b>you</b> said and what <b>the others</b> said. No model needed.</p>
+    <div class="e3-main">
+      <div class="sr-only" id="e3Desc">
+        <p>An animated mock-up of Mostalgia telling speakers apart in a short meeting called “Onboarding test review”. The audio view shows two tracks: your microphone (Me) and the call (Others). While “Finding speakers…” runs, the grey Others waveform splits into three coloured lanes: Speaker 1, Speaker 2 and Speaker 3. The transcript lines change their “Others” chips to the matching speaker:</p>
+        <ol>
+          <li>00:02, Speaker 1: Okay, let's walk through the new onboarding flow.</li>
+          <li>00:06, Speaker 2: I tested it with five people on Monday.</li>
+          <li>00:11, Me: How far did they get without help?</li>
+          <li>00:14, Speaker 2: Four finished. One got stuck on the invite step.</li>
+          <li>00:19, Speaker 3: I can simplify that screen this week.</li>
+          <li>00:23, Speaker 2: Then I'll run the test again next week.</li>
+        </ol>
+        <p>The line at 00:19 was first given to Speaker 2; a right-click and “Change speaker” moves it to Speaker 3. Then a click on the Speaker 2 chip opens “Rename Speaker 2 to”, “Lena” is typed and saved, and every Speaker 2 line becomes Lena at once. A note confirms: Lena's voice is remembered and will be recognized in future meetings; only a voice print is kept, no audio. Then, at the next meeting on Thursday, a new line, “Quick update: the invite step is fixed.”, is labelled Lena automatically, marked as recognized. Jin, the companion, comments on each step.</p>
+      </div>
+
+      <div class="e3-scene" id="e3Scene" aria-hidden="true">
+        <div class="e3-win">
+          <div class="e3-titlebar"><img src="assets/brand/icon.svg" alt="" width="16" height="16"> Mostalgia</div>
+          <div class="e3-app">
+            <div class="e3-nav">
+              <span class="e3-recpill"><svg viewBox="0 0 24 24" width="14" height="14"><circle cx="12" cy="12" r="3" fill="currentColor"/><path d="M7.5 7.5a6.4 6.4 0 0 0 0 9M16.5 7.5a6.4 6.4 0 0 1 0 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Recording</span>
+              <span class="e3-ask">✦ Ask</span>
+              <span class="e3-group">This week</span>
+              <span class="e3-item on"><b>Onboarding test review</b><small>Tue 14:00 · &lt; 1 min</small></span>
+              <span class="e3-item"><b>Pricing page check-in</b><small>Mon 11:30 · 18 min</small></span>
+              <span class="e3-group">Last week</span>
+              <span class="e3-item"><b>Weekly planning</b><small>Thu 09:00 · 42 min</small></span>
+            </div>
+            <div class="e3-pane">
+              <h3 class="e3-title">Onboarding test review <svg viewBox="0 0 24 24" width="13" height="13"><path d="M4 20h4L19 9l-4-4L4 16v4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></h3>
+              <p class="e3-meta"><span>Tuesday, 14:00</span><span>&lt; 1 min</span><span id="e3Count">4 speakers</span></p>
+              <div class="e3-tabs"><span>✦ Summary</span><span class="on">Transcript · 6</span><span>Audio</span></div>
+
+              <div class="e3-lanes">
+                <div class="e3-lane me"><span class="e3-chip me">Me</span><span class="e3-track"><svg class="e3-wave" viewBox="0 0 600 30" preserveAspectRatio="none"><path class="e3-base" d="M0 15H600"/><path d="M240 8.8h2.6v12.5h-2.6zM245 3.6h2.6v22.9h-2.6zM250 6.9h2.6v16.3h-2.6zM255 10.4h2.6v9.3h-2.6zM260 2.7h2.6v24.5h-2.6zM265 4.5h2.6v21.0h-2.6zM270 9.7h2.6v10.6h-2.6zM275 10.1h2.6v9.8h-2.6zM280 11.3h2.6v7.5h-2.6zM285 12.0h2.6v5.9h-2.6z"/></svg></span></div>
+                <div class="e3-lane s1"><span class="e3-chip s1">Speaker 1</span><span class="e3-track"><svg class="e3-wave" viewBox="0 0 600 30" preserveAspectRatio="none"><path class="e3-base" d="M0 15H600"/><path d="M35 11.6h2.6v6.7h-2.6zM40 10.8h2.6v8.3h-2.6zM45 12.5h2.6v5.1h-2.6zM50 10.3h2.6v9.3h-2.6zM55 9.4h2.6v11.1h-2.6zM60 5.4h2.6v19.2h-2.6zM65 2.7h2.6v24.6h-2.6zM70 7.8h2.6v14.5h-2.6zM75 5.8h2.6v18.4h-2.6zM80 2.4h2.6v25.2h-2.6zM85 6.1h2.6v17.8h-2.6zM90 10.6h2.6v8.9h-2.6zM95 8.5h2.6v13.0h-2.6zM100 10.9h2.6v8.3h-2.6zM105 11.0h2.6v8.0h-2.6zM110 9.3h2.6v11.4h-2.6zM115 10.9h2.6v8.1h-2.6z"/></svg><i class="e3-beam"></i></span></div>
+                <div class="e3-lane s2"><span class="e3-chip s2">Lena</span><span class="e3-track"><svg class="e3-wave" viewBox="0 0 600 30" preserveAspectRatio="none"><path class="e3-base" d="M0 15H600"/><path d="M130 9.1h2.6v11.8h-2.6zM135 8.1h2.6v13.8h-2.6zM140 11.3h2.6v7.4h-2.6zM145 7.5h2.6v14.9h-2.6zM150 6.6h2.6v16.7h-2.6zM155 10.0h2.6v10.0h-2.6zM160 9.5h2.6v10.9h-2.6zM165 9.7h2.6v10.6h-2.6zM170 9.2h2.6v11.6h-2.6zM175 6.6h2.6v16.8h-2.6zM180 3.3h2.6v23.3h-2.6zM185 7.6h2.6v14.9h-2.6zM190 7.8h2.6v14.3h-2.6zM195 4.0h2.6v22.0h-2.6zM200 5.8h2.6v18.4h-2.6zM205 9.5h2.6v10.9h-2.6zM210 8.1h2.6v13.9h-2.6zM215 11.5h2.6v6.9h-2.6zM300 13.0h2.6v4.0h-2.6zM305 11.3h2.6v7.3h-2.6zM310 6.1h2.6v17.8h-2.6zM315 4.1h2.6v21.7h-2.6zM320 9.2h2.6v11.7h-2.6zM325 4.9h2.6v20.2h-2.6zM330 6.5h2.6v17.0h-2.6zM335 8.8h2.6v12.4h-2.6zM340 8.2h2.6v13.7h-2.6zM345 9.9h2.6v10.2h-2.6zM350 7.7h2.6v14.6h-2.6zM355 10.9h2.6v8.2h-2.6zM360 5.5h2.6v19.0h-2.6zM365 5.8h2.6v18.5h-2.6zM370 10.3h2.6v9.4h-2.6zM375 6.2h2.6v17.6h-2.6zM380 7.9h2.6v14.1h-2.6zM385 11.9h2.6v6.2h-2.6zM495 10.6h2.6v8.7h-2.6zM500 7.6h2.6v14.8h-2.6zM505 11.2h2.6v7.6h-2.6zM510 5.4h2.6v19.3h-2.6zM515 8.3h2.6v13.3h-2.6zM520 11.5h2.6v7.0h-2.6zM525 8.1h2.6v13.8h-2.6zM530 10.5h2.6v8.9h-2.6zM535 9.1h2.6v11.8h-2.6zM540 7.6h2.6v14.9h-2.6zM545 4.1h2.6v21.8h-2.6zM550 6.4h2.6v17.2h-2.6zM555 9.0h2.6v12.1h-2.6zM560 2.8h2.6v24.5h-2.6zM565 7.4h2.6v15.1h-2.6zM570 12.1h2.6v5.8h-2.6zM575 10.8h2.6v8.4h-2.6zM580 12.4h2.6v5.3h-2.6z"/><path class="e3-seg5" d="M410 11.3h2.6v7.5h-2.6zM415 8.6h2.6v12.8h-2.6zM420 10.4h2.6v9.3h-2.6zM425 4.3h2.6v21.3h-2.6zM430 2.6h2.6v24.8h-2.6zM435 6.7h2.6v16.5h-2.6zM440 7.2h2.6v15.7h-2.6zM445 3.6h2.6v22.8h-2.6zM450 6.1h2.6v17.8h-2.6zM455 9.0h2.6v11.9h-2.6zM460 8.4h2.6v13.3h-2.6zM465 11.9h2.6v6.3h-2.6zM470 11.6h2.6v6.7h-2.6zM475 10.7h2.6v8.6h-2.6z"/></svg></span></div>
+                <div class="e3-lane s3"><span class="e3-chip s3">Speaker 3</span><span class="e3-track"><svg class="e3-wave" viewBox="0 0 600 30" preserveAspectRatio="none"><path class="e3-base" d="M0 15H600"/><path class="e3-seg5" d="M410 11.3h2.6v7.5h-2.6zM415 8.6h2.6v12.8h-2.6zM420 10.4h2.6v9.3h-2.6zM425 4.3h2.6v21.3h-2.6zM430 2.6h2.6v24.8h-2.6zM435 6.7h2.6v16.5h-2.6zM440 7.2h2.6v15.7h-2.6zM445 3.6h2.6v22.8h-2.6zM450 6.1h2.6v17.8h-2.6zM455 9.0h2.6v11.9h-2.6zM460 8.4h2.6v13.3h-2.6zM465 11.9h2.6v6.3h-2.6zM470 11.6h2.6v6.7h-2.6zM475 10.7h2.6v8.6h-2.6z"/></svg></span></div>
+                <div class="e3-axis"><span>00:00</span><span>00:07</span><span>00:14</span><span>00:21</span><span>00:28</span></div>
+              </div>
+
+              <div class="e3-slot" id="e3Slot" data-s="saved">
+                <p class="e3-scan"><i></i> Finding speakers … <b><u></u></b></p>
+                <p class="e3-hint">Click a speaker to rename them. Only single lines? Right-click a line.</p>
+                <div class="e3-rename">
+                  <span>Rename “Speaker 2” to</span>
+                  <span class="e3-input" id="e3Input">Lena</span>
+                  <span class="e3-b primary" id="e3Save">Save</span><span class="e3-b">Cancel</span>
+                  <small>The voice is remembered and recognized by this name from now on.</small>
+                </div>
+                <p class="e3-notice"><svg viewBox="0 0 24 24" width="14" height="14"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg> Voice of Lena remembered. Recognized in future meetings.</p>
+              </div>
+
+              <ol class="e3-lines">
+                <li class="e3-line" data-spk="s1"><span class="e3-ts">00:02</span><span class="e3-chip s1">Speaker 1</span><span class="e3-text">Okay, let's walk through the new onboarding flow.</span></li>
+                <li class="e3-line" data-spk="s2"><span class="e3-ts">00:06</span><span class="e3-chip s2">Lena</span><span class="e3-text">I tested it with five people on Monday.</span></li>
+                <li class="e3-line" data-spk="me"><span class="e3-ts">00:11</span><span class="e3-chip me">Me</span><span class="e3-text">How far did they get without help?</span></li>
+                <li class="e3-line" data-spk="s2"><span class="e3-ts">00:14</span><span class="e3-chip s2">Lena</span><span class="e3-text">Four finished. One got stuck on the invite step.</span></li>
+                <li class="e3-line" data-spk="s3" data-first="s2"><span class="e3-ts">00:19</span><span class="e3-chip s3">Speaker 3</span><span class="e3-text">I can simplify that screen this week.</span></li>
+                <li class="e3-line" data-spk="s2"><span class="e3-ts">00:23</span><span class="e3-chip s2">Lena</span><span class="e3-text">Then I'll run the test again next week.</span></li>
+              </ol>
+            </div>
+          </div>
+          <div class="e3-menu" id="e3Menu">
+            <span class="e3-mlabel">Change speaker</span>
+            <span class="e3-mi"><svg viewBox="0 0 24 24" width="13" height="13"><circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 21a8 8 0 0 1 16 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Speaker 1</span>
+            <span class="e3-mi" id="e3MenuPick"><svg viewBox="0 0 24 24" width="13" height="13"><circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 21a8 8 0 0 1 16 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Speaker 3</span>
+            <span class="e3-mi"><svg viewBox="0 0 24 24" width="13" height="13"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> New name …</span>
+            <span class="e3-msep"></span>
+            <span class="e3-mi">Select (to split)</span>
+          </div>
+          <span class="e3-cursor" id="e3Cursor"><svg viewBox="0 0 20 24" width="20" height="24"><path d="M2 2v17l4.6-4.2 3 6.8 3-1.3-3-6.6H16z" fill="#fff" stroke="#2B1730" stroke-width="1.8" stroke-linejoin="round"/></svg></span>
         </div>
-        <figure class="shot"><img src="assets/shots/audio.webp" alt="Audio tab with a waveform per track" loading="lazy" width="1240" height="820"></figure>
-      </article>
-      <article class="step" data-pose="thinking" data-say="Three voices on the other side. I split them. Cleanly.">
-        <div class="step-text">
-          <h3>Speaker diarization</h3>
-          <p>Optional <b>offline diarization</b> (sherpa-onnx with pyannote segmentation and WeSpeaker embeddings) splits the other side into Speaker 1, Speaker 2 and so on.</p>
-        </div>
-      </article>
-      <article class="step" data-pose="talking" data-say="“Speaker 2” is Felix? Noted. Next meeting, he's Felix from the start.">
-        <div class="step-text">
-          <h3>Rename once, known forever</h3>
-          <p>Rename a speaker and every line follows. The voice is remembered: <i>Speaker 2</i> → <i>Felix</i> today is labelled <i>Felix</i> automatically in the next meeting. Only a voice print is kept, never audio, and you can manage or forget known voices in Settings → Speakers.</p>
-          <div class="rename-demo" aria-hidden="true">
-            <span class="chip-a">Speaker 2</span><span class="arrow">→</span><span class="chip-b">Felix</span>
+
+        <div class="e3-cast">
+          <div class="e3-say"><b>Jin</b> <span id="e3Say">Named once. On Thursday she was Lena from the first word.</span></div>
+          <div class="e3-jinrow">
+            <img class="e3-jin" id="e3Jin" src="assets/cast/jin-talking.webp" alt="" width="300" height="480" loading="lazy">
+            <div class="e3-print" id="e3Print">
+              <svg class="e3-glyph" viewBox="0 0 64 64" width="56" height="56">
+                <circle class="g0" cx="32" cy="32" r="5"/>
+                <path class="g1" d="M32 20a12 12 0 1 1-12 12" pathLength="100" stroke-dasharray="30 6 42 22"/>
+                <path class="g2" d="M32 13a19 19 0 1 0 19 19" pathLength="100" stroke-dasharray="18 5 50 7 20"/>
+                <path class="g3" d="M32 6a26 26 0 1 1-26 26" pathLength="100" stroke-dasharray="40 6 14 5 24 11"/>
+              </svg>
+              <span class="e3-pl"><b>Lena's voice remembered</b><small>Voice print only, no audio</small></span>
+            </div>
+          </div>
+          <div class="e3-next" id="e3Next">
+            <span class="e3-cap">Next meeting · Thursday</span>
+            <div class="e3-nbar"><i></i> Onboarding sync <span id="e3NTimer">00:04</span></div>
+            <p class="e3-nline"><span class="e3-ts">00:04</span><span class="e3-chip s2" id="e3NChip">Lena</span><span class="e3-text" id="e3NText">Quick update: the invite step is fixed.</span></p>
+            <span class="e3-recog" id="e3Recog">✦ Recognized by voice</span>
           </div>
         </div>
-      </article>
+      </div>
+
+      <ul class="e3-points">
+        <li class="step" data-pose="listening" data-say="You. Them. Two tracks. No guessing."><b>Me</b>&nbsp;and&nbsp;<b>Others</b>, from two tracks</li>
+        <li class="step" data-pose="thinking" data-say="Three voices on the other side. I split them. Cleanly.">Offline diarization splits the call</li>
+        <li class="step" data-pose="writing" data-say="Speaker 2 is Lena? Noted. Every line follows.">Rename once, every line follows</li>
+        <li class="step" data-pose="talking" data-say="“Speaker 2” is Felix? Noted. Next meeting, he's Felix from the start.">Recognized next meeting, no audio kept</li>
+      </ul>
+
+      <div class="e3-foot">
+        <details class="e3-more">
+          <summary>All details</summary>
+          <div class="e3-more-body">
+            <div>
+              <h3><i>Me</i> and <i>Others</i>, for free</h3>
+              <p>Because your mic and the call are recorded separately, every line is already split into what <b>you</b> said and what <b>the others</b> said. No model needed.</p>
+              <figure class="e3-shot"><img src="assets/shots/audio.webp" alt="Audio tab with a waveform per track" loading="lazy" width="1240" height="820"></figure>
+            </div>
+            <div>
+              <h3>Speaker diarization</h3>
+              <p>Optional <b>offline diarization</b> (sherpa-onnx with pyannote segmentation and WeSpeaker embeddings) splits the other side into Speaker 1, Speaker 2 and so on.</p>
+            </div>
+            <div>
+              <h3>Rename once, known forever</h3>
+              <p>Rename a speaker and every line follows. The voice is remembered: <i>Speaker 2</i> → <i>Felix</i> today is labelled <i>Felix</i> automatically in the next meeting. Only a voice print is kept, never audio, and you can manage or forget known voices in Settings → Speakers.</p>
+            </div>
+          </div>
+        </details>
+        <button type="button" class="e3-replay" id="e3Replay" aria-label="Replay the speakers animation" hidden><span aria-hidden="true">↻</span> Replay</button>
+      </div>
     </div>
   </div>
+  <script src="scenes/ep3.js" defer></script>
 </section>
 
 <!-- ───────────────────────── EPISODE 4 ───────────────────────── -->
