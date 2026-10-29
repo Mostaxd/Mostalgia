@@ -113,6 +113,9 @@ jobs:
       - run: bash scripts/build-windows.sh
         env:
           CARGO_TARGET_DIR: C:/t
+      # The app's updater checks the download against this.
+      - name: Checksum
+        run: cd dist && sha256sum Mostalgia-windows-x86_64.zip > Mostalgia-windows-x86_64.zip.sha256 && cat *.sha256
       - name: Smoke test
         run: |
           rm -rf smoke && mkdir smoke && cd smoke

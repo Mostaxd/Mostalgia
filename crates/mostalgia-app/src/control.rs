@@ -80,13 +80,30 @@ pub fn listen(tx: Sender<Command>) -> std::io::Result<()> {
 #[cfg(not(unix))]
 pub fn listen(tx: Sender<Command>) -> std::io::Result<()> {
     use mostalgia_core::control_channel;
-    control_channel::serve(&control_channel::endpoint_file(), move |line| match Command::parse(line) {
+    let handler = move |line: &str| match Command::parse(line) {
         Some(cmd) => {
             let _ = tx.send(cmd);
             true
         }
         None => false,
-    })
+    };
+    let file = control_channel::endpoint_file();
+    match control_channel::serve(&file, handler.clone()) {
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            // Right after an update's restart the old app is still
+            // quitting: take over once it's gone.
+            std::thread::spawn(move || {
+                for _ in 0..20 {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    if control_channel::serve(&file, handler.clone()).is_ok() {
+                        return;
+                    }
+                }
+            });
+            Err(e)
+        }
+        r => r,
+    }
 }
 
 pub fn cleanup() {
