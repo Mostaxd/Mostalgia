@@ -67,8 +67,11 @@ jobs:
           key: sherpa
           cache-directories: ~/.cache/sherpa-rs
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo build --workspace --all-targets
-      - run: cargo test --workspace
+      # Errors and failed tests also become annotations (see the script).
+      - run: scripts/ci-cargo.sh cargo build --workspace --all-targets
+        shell: bash
+      - run: scripts/ci-cargo.sh cargo test --workspace --no-fail-fast
+        shell: bash
 
   windows:
     needs: changes
@@ -83,8 +86,11 @@ jobs:
           cache-directories: ~/AppData/Local/sherpa-rs
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # CMake and LLVM (for whisper.cpp and its bindings) come with the runner.
-      - run: cargo build --workspace --all-targets
-      - run: cargo test --workspace
+      # Errors and failed tests also become annotations (see the script).
+      - run: scripts/ci-cargo.sh cargo build --workspace --all-targets
+        shell: bash
+      - run: scripts/ci-cargo.sh cargo test --workspace --no-fail-fast
+        shell: bash
 
   macos:
     needs: changes
@@ -99,11 +105,8 @@ jobs:
           key: sherpa
           cache-directories: ~/Library/Caches/sherpa-rs
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # Compiler errors and failing tests also become annotations, readable
-      # through the check-runs API without the log.
-      - name: Build
+      # Errors and failed tests also become annotations (see the script).
+      - run: scripts/ci-cargo.sh cargo build --workspace --all-targets --features mostalgia-core/metal
         shell: bash
-        run: scripts/ci-annotate.sh cargo build --workspace --all-targets --features mostalgia-core/metal --message-format=short
-      - name: Test
+      - run: scripts/ci-cargo.sh cargo test --workspace --no-fail-fast --features mostalgia-core/metal
         shell: bash
-        run: scripts/ci-annotate.sh cargo test --workspace --features mostalgia-core/metal --message-format=short
