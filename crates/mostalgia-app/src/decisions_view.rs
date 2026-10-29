@@ -448,22 +448,23 @@ impl Render for DecisionsView {
             .when_some(self.notice.clone(), |el, n| el.child(div().mx_8().mt_3().text_sm().text_color(theme.success).child(n)))
             .when_some(self.error.clone(), |el, e| el.child(div().mx_8().mt_3().p_2().rounded(theme.radius).bg(theme.danger.opacity(0.1)).text_color(theme.danger).text_sm().child(e)))
             .child(
-                v_flex()
-                    .id("decisions-list")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .px_8()
-                    .py_4()
-                    .gap_2()
-                    .when(entries.is_empty() && self.building.is_none(), |el| {
-                        el.child(div().py_16().text_center().text_color(theme.muted_foreground).child(if all.is_empty() {
-                            tr("Noch keine Entscheidungen. Sie kommen aus den Zusammenfassungen – neue Besprechungen landen automatisch hier.")
-                        } else {
-                            tr("Keine Entscheidung passt zu diesen Filtern.")
-                        }))
-                    })
-                    .children(entries.iter().enumerate().map(|(ix, e)| self.render_entry(ix, e, cx))),
+                div().id("decisions-list").flex_1().min_h_0().overflow_y_scroll().child(
+                    v_flex()
+                        .w_full()
+                        .max_w(px(860.))
+                        .mx_auto()
+                        .px_8()
+                        .py_4()
+                        .gap_2()
+                        .when(entries.is_empty() && self.building.is_none(), |el| {
+                            el.child(div().py_16().text_center().text_color(theme.muted_foreground).child(if all.is_empty() {
+                                tr("Noch keine Entscheidungen. Sie kommen aus den Zusammenfassungen – neue Besprechungen landen automatisch hier.")
+                            } else {
+                                tr("Keine Entscheidung passt zu diesen Filtern.")
+                            }))
+                        })
+                        .children(entries.iter().enumerate().map(|(ix, e)| self.render_entry(ix, e, cx))),
+                ),
             )
     }
 }
