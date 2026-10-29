@@ -18,6 +18,7 @@ pub const EN: &[(&str, &str)] = &[
     ("Aufnahme läuft", "Recording"),
     ("Fragen", "Ask"),
     ("Frag deine Besprechungen (Strg+K)", "Ask your meetings (Ctrl+K)"),
+    ("Frag deine Besprechungen (⌘K)", "Ask your meetings (⌘K)"),
     ("Transkripte durchsuchen", "Search transcripts"),
     ("HEUTE", "TODAY"),
     ("GESTERN", "YESTERDAY"),

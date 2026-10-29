@@ -2138,7 +2138,7 @@ impl MostalgiaApp {
                             .when(matches!(self.screen, Screen::Ask(_)), |b| b.selected(true))
                             .icon(IconName::Sparkles)
                             .label(tr("Fragen"))
-                            .tooltip(tr("Frag deine Besprechungen (Strg+K)"))
+                            .tooltip(if cfg!(target_os = "macos") { tr("Frag deine Besprechungen (⌘K)") } else { tr("Frag deine Besprechungen (Strg+K)") })
                             .on_click(cx.listener(|this, _, window, cx| this.open_ask(window, cx))),
                     )
                     .child(

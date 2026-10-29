@@ -922,7 +922,11 @@ impl SettingsView {
             .child(div().font_semibold().child(tr("Textgröße")))
             .child(row(
                 tr("Textgröße der App"),
-                Some(tr("Gilt überall, auch für die Begleiterin. Tastenkürzel: Strg + = größer, Strg + − kleiner, Strg + 0 zurücksetzen.")),
+                Some(if cfg!(target_os = "macos") {
+                    tr("Gilt überall, auch für die Begleiterin. Tastenkürzel: ⌘ + = größer, ⌘ + − kleiner, ⌘ + 0 zurücksetzen.")
+                } else {
+                    tr("Gilt überall, auch für die Begleiterin. Tastenkürzel: Strg + = größer, Strg + − kleiner, Strg + 0 zurücksetzen.")
+                }),
                 h_flex().flex_wrap().gap_1().children(presets).into_any_element(),
             ))
             .child(row(tr("Feiner einstellen"), None, self.scale_stepper("ui-scale", false, scale, UI_SCALE_STEPS, cx)))
