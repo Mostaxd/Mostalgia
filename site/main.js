@@ -130,6 +130,160 @@
     typers.set(el, t);
   };
 
+  // ───────── prologue: the manga strip plays like a little animated comic ─────────
+  const manga = $('#prologue .manga');
+  const ts = manga && $('.ts', manga);
+  if (ts) {
+    // a tiny "playing the clip" glyph next to the timestamp
+    const glyph = document.createElement('span');
+    glyph.className = 'ts-play';
+    glyph.setAttribute('aria-hidden', 'true');
+    glyph.innerHTML = '<i></i>'.repeat(4);
+    ts.append(glyph);
+  }
+  if (manga && !reduce) {
+    const panels = $$('.panel', manga);
+    const [kaito, mori] = [$('.p2 img', manga), $('.p3 img', manga)];
+    ['kaito-idle', 'kaito-thinking', 'mori-idle', 'mori-talking'].forEach((s) => { new Image().src = `assets/cast/${s}.webp`; });
+
+    // screen readers get each bubble's words whole; the visible copy is split into letters to type out
+    $$('.speech, .thought', manga).forEach((b) => {
+      const sr = document.createElement('span');
+      sr.className = 'sr-only';
+      sr.textContent = b.textContent;
+      const shown = document.createElement('span');
+      shown.setAttribute('aria-hidden', 'true');
+      shown.append(...b.childNodes);
+      const split = (node) => [...node.childNodes].forEach((n) => {
+        if (n.nodeType !== 3) return split(n);
+        n.replaceWith(...[...n.data].map((ch) => Object.assign(document.createElement('span'), { className: 'tw-c', textContent: ch })));
+      });
+      split(shown);
+      b.append(sr, shown);
+      b._chars = $$('.tw-c', shown);
+    });
+
+    // キラッ gets a burst of sparkles
+    const kira = $('.p3 .sfx', manga);
+    [['-12%', '-40%', '34px', '0s'], ['90%', '-50%', '40px', '.08s'], ['102%', '40%', '24px', '.2s'], ['34%', '84%', '22px', '.14s'], ['-20%', '50%', '26px', '.26s', 'var(--amber-l)'], ['58%', '-56%', '22px', '.32s', 'var(--amber-l)']]
+      .forEach(([x, y, s, d, c]) => {
+        const sp = document.createElement('i');
+        sp.className = 'spark';
+        sp.style.cssText = `--x:${x};--y:${y};--s:${s};--d:${d}${c ? `;--c:${c}` : ''}`;
+        kira.append(sp);
+      });
+
+    let timers = [];
+    const at = (ms, fn) => timers.push(setTimeout(fn, ms));
+    const on = (el, c = 'on') => el.classList.add(c);
+    const typeOut = (b, t0, speed) => {
+      const cs = b._chars;
+      cs.forEach((c, i) => at(t0 + i * speed, () => {
+        cs[i - 1]?.classList.remove('cur');
+        c.classList.add('t', 'cur');
+        const chip = c.closest('.ts');
+        if (chip) on(chip);
+      }));
+      const end = t0 + cs.length * speed;
+      at(end + 400, () => cs.at(-1).classList.remove('cur'));
+      return end;
+    };
+
+    // a panel is inked first (the frame strokes on over blank paper), then the paper wipes away
+    const SHAPES = [[0, 0, 1, 0, .94, 1, 0, 1], [.06, 0, 1, 0, .94, 1, 0, 1], [.06, 0, 1, 0, 1, 1, 0, 1]];
+    const narrow = matchMedia('(max-width: 820px)');
+    const ink = (panel, i) => {
+      const w = panel.offsetWidth, h = panel.offsetHeight;
+      const pts = (narrow.matches ? [0, 0, 1, 0, 1, 1, 0, 1] : SHAPES[i]).map((v, k) => (v * (k % 2 ? h : w)).toFixed(1)).join(' ');
+      panel.insertAdjacentHTML('beforeend', `<span class="ink" aria-hidden="true"><svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polygon points="${pts}" pathLength="1"/></svg></span>`);
+      void panel.offsetWidth;
+      on(panel, 'go');
+      at(600, () => on(panel, 'filled'));
+      at(1000, () => $('.ink', panel)?.remove());
+    };
+
+    // each scene returns how long it runs (ms)
+    const scenes = [
+      (p) => { // Tuesday: the decision, and everyone agrees
+        const [said, agreed] = $$('.speech', p);
+        const crowd = $('.crowd', p);
+        ink(p, 0);
+        at(620, () => on(crowd));
+        at(950, () => on(said));
+        const end = typeOut(said, 1150, 24);
+        at(end + 450, () => { on(agreed); on(crowd, 'nod'); });
+        return typeOut(agreed, end + 600, 45) + 700;
+      },
+      (p) => { // Friday: Kaito can't remember which it was
+        const th = $('.thought', p);
+        ink(p, 1);
+        at(650, () => on(kaito));
+        at(1050, () => on(th, 'puff1'));
+        at(1250, () => on(th, 'puff2'));
+        at(1450, () => { on(th); kaito.src = sprite('kaito', 'thinking'); });
+        const end = typeOut(th, 1650, 30);
+        at(end + 150, () => on($('.sfx', p)));
+        return end + 1100;
+      },
+      (p) => { // With Mostalgia: Mori has the exact words and the moment they were said
+        const say = $('.speech', p);
+        ink(p, 2);
+        at(650, () => on(mori));
+        at(1100, () => { on(say); mori.src = sprite('mori', 'talking'); });
+        const end = typeOut(say, 1300, 24);
+        at(end + 150, () => { on(ts, 'glint'); on(ts, 'playing'); });
+        at(end + 450, () => on(kira));
+        at(end + 2600, () => ts.classList.remove('playing'));
+        return end + 1300;
+      },
+    ];
+
+    const replay = document.createElement('button');
+    replay.type = 'button';
+    replay.className = 'comic-replay';
+    replay.hidden = true;
+    replay.setAttribute('aria-label', 'Replay the prologue comic');
+    replay.innerHTML = '<span aria-hidden="true">↻</span> Replay';
+    panels[2].append(replay);
+
+    // scenes play in order, each once its panel is ~40% on screen (on phones they stack, so this waits for scrolling)
+    const visible = new Set();
+    let next = 0, busy = false;
+    const advance = () => {
+      if (busy || next >= scenes.length || !visible.has(panels[next])) return;
+      busy = true;
+      const i = next++;
+      at(scenes[i](panels[i]), () => {
+        busy = false;
+        if (next >= scenes.length) replay.hidden = false;
+        advance();
+      });
+    };
+    const reset = () => {
+      timers.forEach(clearTimeout);
+      timers = [];
+      $$('.ink', manga).forEach((e) => e.remove());
+      const cls = ['go', 'filled', 'on', 'nod', 'puff1', 'puff2', 'glint', 'playing', 't', 'cur'];
+      $$(cls.map((c) => `.${c}`).join(), manga).forEach((el) => el.classList.remove(...cls));
+      kaito.src = sprite('kaito', 'idle');
+      mori.src = sprite('mori', 'idle');
+      next = 0;
+      busy = false;
+    };
+    manga.classList.add('comic');
+    reset();
+    const watch = new IntersectionObserver((entries) => {
+      for (const e of entries) visible[e.isIntersecting ? 'add' : 'delete'](e.target);
+      advance();
+    }, { threshold: 0.4 });
+    panels.forEach((p) => watch.observe(p));
+    replay.addEventListener('click', () => {
+      reset();
+      if (!visible.has(panels[0])) panels[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+      advance();
+    });
+  }
+
   // ───────── episodes: the companion changes pose step by step ─────────
   const mini = $('#miniGuide');
   const miniImg = $('img', mini);
