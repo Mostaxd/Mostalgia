@@ -265,6 +265,9 @@ enum Command {
         /// Output file [default: <date>-<title>.<ext> in the current directory]
         #[arg(long, short)]
         output: Option<PathBuf>,
+        /// Export only the companion's notes or only the summary
+        #[arg(long, value_parser = ["notes", "summary"])]
+        only: Option<String>,
     },
     /// Delete a meeting: transcript, summary, search index and its audio files
     Delete {
@@ -561,7 +564,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Command::Notes { id, focus, style } => regenerate_notes(id, focus, style),
-        Command::Export { id, format, output } => export(id, format.as_deref(), output),
+        Command::Export { id, format, output, only } => export(id, format.as_deref(), output, only.as_deref()),
         Command::Delete { id, keep_audio } => {
             anyhow::ensure!(open_store()?.delete_meeting(id, !keep_audio)?, "{}", trf("Keine Besprechung #{}", &[&id]));
             if keep_audio {
@@ -1089,8 +1092,9 @@ fn search(query: &str, limit: usize) -> Result<()> {
     Ok(())
 }
 
-fn export(id: i64, format: Option<&str>, output: Option<PathBuf>) -> Result<()> {
-    use mostalgia_core::export::{self, Format};
+fn export(id: i64, format: Option<&str>, output: Option<PathBuf>, only: Option<&str>) -> Result<()> {
+    use mostalgia_core::export::{self, Format, Parts};
+    let parts = only.map_or(Parts::ALL, Parts::parse);
     let m = open_store()?.get(id)?.with_context(|| trf("Keine Besprechung #{}", &[&id]))?;
     let format = match format {
         Some(f) => Format::from_extension(f).with_context(|| trf("Unbekanntes Format {} (md, txt, srt, docx)", &[&format!("{f:?}")]))?,
@@ -1100,8 +1104,8 @@ fn export(id: i64, format: Option<&str>, output: Option<PathBuf>) -> Result<()> 
             .and_then(Format::from_extension)
             .unwrap_or(Format::Markdown),
     };
-    let path = output.unwrap_or_else(|| PathBuf::from(export::suggested_name(&m, format)));
-    export::write(&m, format, &path)?;
+    let path = output.unwrap_or_else(|| PathBuf::from(export::suggested_name_of(&m, parts, format)));
+    export::write_parts(&m, parts, format, &path)?;
     println!("{}", trf("Besprechung #{} exportiert nach {}", &[&id, &path.display()]));
     Ok(())
 }

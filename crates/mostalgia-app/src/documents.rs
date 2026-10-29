@@ -14,6 +14,7 @@ use std::time::Duration;
 use crossbeam_channel::{Receiver, Sender};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::text::TextView;
@@ -104,6 +105,7 @@ pub struct DocumentsView {
     /// Scroll the reader to the highlighted location at the next render.
     scroll_to_highlight: bool,
     reader_scroll: ScrollHandle,
+    list_scroll: ScrollHandle,
     search: Entity<InputState>,
     query: String,
     hits: Vec<DocHit>,
@@ -143,6 +145,7 @@ impl DocumentsView {
             highlight: None,
             scroll_to_highlight: false,
             reader_scroll: ScrollHandle::new(),
+            list_scroll: ScrollHandle::new(),
             search,
             query: String::new(),
             hits: Vec::new(),
@@ -160,7 +163,7 @@ impl DocumentsView {
         this
     }
 
-    fn reload(&mut self, cx: &mut Context<Self>) {
+    pub fn reload(&mut self, cx: &mut Context<Self>) {
         match docs::list().and_then(|d| Ok((d, docs::collections()?))) {
             Ok((list, collections)) => (self.docs, self.collections) = (list, collections),
             Err(e) => self.errors.push(format!("{e:#}")),
@@ -991,17 +994,25 @@ impl DocumentsView {
             .size_full()
             .child(header)
             .child(
-                div().flex_1().min_h_0().child(
-                    v_flex()
-                        .id("doc-reader")
-                        .size_full()
-                        .track_scroll(&self.reader_scroll)
-                        .overflow_y_scroll()
-                        .px_4()
-                        .py_3()
-                        .gap_1()
-                        .children(blocks),
-                ),
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .child(
+                        // Each block stays a direct child (scroll_to_top_of_item),
+                        // in a centered column.
+                        v_flex()
+                            .id("doc-reader")
+                            .size_full()
+                            .track_scroll(&self.reader_scroll)
+                            .overflow_y_scroll()
+                            .items_center()
+                            .px_4()
+                            .py_3()
+                            .gap_1()
+                            .children(blocks.into_iter().map(|b| div().w_full().max_w(px(860.)).child(b))),
+                    )
+                    .vertical_scrollbar(&self.reader_scroll),
             )
             .into_any_element()
     }
@@ -1054,7 +1065,14 @@ impl Render for DocumentsView {
                                         .on_click(cx.listener(|this, _, window, cx| this.begin_name_edit(None, None, window, cx))),
                                 ),
                         )
-                        .child(div().flex_1().min_h_0().child(v_flex().id("doc-list").size_full().px_2().pb_2().overflow_y_scroll().child(list))),
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_h_0()
+                                .relative()
+                                .child(v_flex().id("doc-list").size_full().px_2().pb_2().track_scroll(&self.list_scroll).overflow_y_scroll().child(list))
+                                .vertical_scrollbar(&self.list_scroll),
+                        ),
                 )
                 .child(div().flex_1().min_w_0().h_full().child(reader))
                 .into_any_element()

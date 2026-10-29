@@ -8,6 +8,7 @@ use std::time::Duration;
 use crossbeam_channel::Receiver;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, StyledExt, h_flex, v_flex};
@@ -732,14 +733,19 @@ impl Render for AskView {
                     }),
             )
             .child(
-                div().flex_1().min_h_0().child(
-                    div()
-                        .id("ask-body")
-                        .size_full()
-                        .track_scroll(&self.scroll)
-                        .overflow_y_scroll()
-                        .child(v_flex().max_w(px(860.)).px_8().py_6().gap_5().children(body)),
-                ),
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .child(
+                        div()
+                            .id("ask-body")
+                            .size_full()
+                            .track_scroll(&self.scroll)
+                            .overflow_y_scroll()
+                            .child(v_flex().w_full().max_w(px(860.)).mx_auto().px_8().py_6().gap_5().children(body)),
+                    )
+                    .vertical_scrollbar(&self.scroll),
             )
             .child(
                 v_flex()
@@ -748,10 +754,13 @@ impl Render for AskView {
                     .gap_1()
                     .border_t_1()
                     .border_color(theme.border)
+                    // Lined up with the conversation's text (860 less its padding).
                     .child(
                         h_flex()
+                            .w_full()
+                            .max_w(px(860. - 64.))
+                            .mx_auto()
                             .gap_2()
-                            .max_w(px(860.))
                             .child(self.scope_button(cx))
                             .child(Input::new(&self.input).flex_1())
                             .child(
@@ -767,7 +776,7 @@ impl Render for AskView {
                                     })),
                             ),
                     )
-                    .when_some(ask_problem, |el, problem| el.child(div().text_xs().text_color(theme.warning).child(problem))),
+                    .when_some(ask_problem, |el, problem| el.child(div().w_full().max_w(px(860. - 64.)).mx_auto().text_xs().text_color(theme.warning).child(problem))),
             )
     }
 }

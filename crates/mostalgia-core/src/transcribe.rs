@@ -365,6 +365,12 @@ fn full_params<'b>(language: Option<&str>, threads: i32, keep_context: bool) -> 
     params
 }
 
+/// The discrete GPU Whisper would run on, if the GPU backend sees one.
+pub fn discrete_gpu() -> Option<String> {
+    quiet_native_logs();
+    pick_gpu_device().1
+}
+
 /// whisper.cpp's `gpu_device` indexes the GPU and integrated-GPU devices in
 /// registration order, and Vulkan often lists the iGPU first on hybrid
 /// laptops. Prefer the first discrete GPU; fall back to device 0.

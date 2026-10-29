@@ -85,6 +85,7 @@ model running on your own machine. You always see which one is doing the work.
 - **20 themes** from warm *Mostalgia* to *Blockworld* pixels, *Synthwave*, *Terminal* and a high-contrast mode; little animated scenes (respecting “reduce motion”).
 - English UI (German available, switched live); right-to-left text in transcripts renders properly.
 - Settings grouped into categories with search; right-click a meeting to rename, export (Markdown, text, SRT, Word) or delete it — completely, including its search index.
+- Export a whole meeting, only its notes or only its summary (Markdown, text, Word), or **save the summary and notes into Documents** — into a collection of your choice — so Ask finds and cites them next to your files.
 
 </td></tr>
 </table>
@@ -307,7 +308,7 @@ mostalgia start [--source mic|system|both] [--speakers] [--diarize] [--denoise] 
                 [--engine local|<connection>/<model>] [--final-engine …]
 mostalgia list | show <id> | search <words> | ask "<question>"
 mostalgia summarize <id> [--provider <connection>] [--summary-model …] [--effort low…max]
-mostalgia export <id> --format md|txt|srt|docx [-o file]
+mostalgia export <id> --format md|txt|srt|docx [-o file] [--only notes|summary]
 mostalgia delete <id> [--keep-audio]
 mostalgia import <session-folder> | transcribe <file.wav> | reindex [--all]
 mostalgia retranscribe <id> --engine local|<connection>/<model>

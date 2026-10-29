@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, StyledExt, h_flex, switch::Switch, v_flex};
@@ -3063,6 +3064,11 @@ impl Render for SettingsView {
                         .child(choice("dia-more", "Mehr Sprecher", dt < 0.45, cx, |c| c.diarize_threshold = 0.4))
                         .into_any_element(),
                 ))
+                .child(row(
+                    tr("Bekannte Stimmen mit Namen erkennen"),
+                    Some(tr("Aus: Sprecher bleiben „Sprecher 1“, „Sprecher 2“, … — Namen vergibst du selbst im Transkript.")),
+                    switch("set-recognize-voices", self.config.recognize_voices, cx, |c, v| c.recognize_voices = v),
+                ))
             })
             .child(div().text_xs().text_color(theme.muted_foreground).child(tr(
                 "Namen vergeben: im Transkript auf einen Sprecher-Chip klicken — alle Zeilen werden umbenannt.",
@@ -3077,7 +3083,7 @@ impl Render for SettingsView {
         cards.push(Card {
             category: Category::Sprecher,
             title: "Sprecher",
-            keywords: "sprecher ich andere label diarisierung trennen mehrere personen umbenennen speaker speakers me others diarization separate people rename",
+            keywords: "sprecher ich andere label diarisierung trennen mehrere personen umbenennen namen erkennen raten speaker speakers me others diarization separate people rename names recognise recognize guess",
             wide: false,
             element: speakers.into_any_element(),
         });
@@ -3269,7 +3275,7 @@ impl Render for SettingsView {
                     .text_color(theme.muted_foreground)
                     .children(mostalgia_core::export::Format::ALL.map(|f| h_flex().gap_2().child(Icon::new(IconName::FileText).xsmall()).child(tr(f.label())))),
             )
-            .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Im Terminal: mostalgia export <id> --format md|txt|srt|docx")));
+            .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Im Terminal: mostalgia export <id> --format md|txt|srt|docx [--only notes|summary]")));
         cards.push(Card {
             category: Category::Speicher,
             title: "Export",
@@ -3347,6 +3353,14 @@ impl Render for SettingsView {
             .child(status_row(self.config.vad_model_path().exists(), "Silero VAD".into()))
             .child(status_row(diarize_ok, tr("Sprechertrennung (sherpa-onnx)").into()))
             .child(status_row(mostalgia_core::ask::embed::available(), tr("Suche für „Fragen“ (e5-small)").into()))
+            // Only the AppImage updates itself; a source build has git.
+            .when(mostalgia_core::self_update::running_appimage().is_some(), |el| {
+                el.child(row(
+                    tr("Nach Updates suchen"),
+                    Some(tr("Beim Start fragt Mostalgia bei GitHub nach einer neuen Version und bietet sie an. Geladen wird erst nach einem Klick.")),
+                    switch("set-check-updates", self.config.check_updates, cx, |c, v| c.check_updates = v),
+                ))
+            })
             .when(!missing_models.is_empty(), |el| {
                 el.child(
                     Button::new("download-models")
@@ -3367,7 +3381,7 @@ impl Render for SettingsView {
         cards.push(Card {
             category: Category::System,
             title: "Info",
-            keywords: "info version modell whisper gpu vad sherpa status model about",
+            keywords: "info version modell whisper gpu vad sherpa status model about update updates aktualisieren appimage",
             wide: false,
             element: info.into_any_element(),
         });
@@ -3451,23 +3465,31 @@ impl Render for SettingsView {
             .key_context("Settings")
             .child(nav)
             .child(
-                div().flex_1().min_w_0().h_full().child(
-                    div()
-                        .id("settings")
-                        .size_full()
-                        .track_scroll(&self.scroll)
-                        .overflow_y_scroll()
-                        .child(
-                            v_flex()
-                                .max_w(px(1180.))
-                                .px_8()
-                                .py_6()
-                                .gap_5()
-                                .child(header)
-                                .child(grid)
-                                .when(empty, |el| el.child(div().text_color(theme.muted_foreground).child(tr("Keine passende Einstellung gefunden.")))),
-                        ),
-                ),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .relative()
+                    .child(
+                        div()
+                            .id("settings")
+                            .size_full()
+                            .track_scroll(&self.scroll)
+                            .overflow_y_scroll()
+                            .child(
+                                v_flex()
+                                    .w_full()
+                                    .max_w(px(1180.))
+                                    .mx_auto()
+                                    .px_8()
+                                    .py_6()
+                                    .gap_5()
+                                    .child(header)
+                                    .child(grid)
+                                    .when(empty, |el| el.child(div().text_color(theme.muted_foreground).child(tr("Keine passende Einstellung gefunden.")))),
+                            ),
+                    )
+                    .vertical_scrollbar(&self.scroll),
             )
     }
 }

@@ -4,6 +4,7 @@
 use std::time::Duration;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::text::TextView;
@@ -28,10 +29,17 @@ use crate::ui;
 /// Bars per waveform row.
 const WAVE_BUCKETS: usize = 320;
 
-/// Export the open meeting in a format (by file extension).
+/// Export parts of the open meeting (`export::Parts` id: "all", "notes",
+/// "summary") in a format (by file extension).
 #[derive(Clone, PartialEq, Debug, Deserialize, JsonSchema, Action)]
 #[action(namespace = mostalgia, no_json)]
-pub struct ExportAs(pub String);
+pub struct ExportAs(pub String, pub String);
+
+/// Save the open meeting's summary and notes into the documents drive, into
+/// a collection: its id, 0 for none, or -1 for a new "Meetings" collection.
+#[derive(Clone, PartialEq, Debug, Deserialize, JsonSchema, Action)]
+#[action(namespace = mostalgia, no_json)]
+pub struct SaveToDocuments(pub i64);
 
 /// Copy the open meeting's recap: 0 short text, 1 short Markdown, 2 full
 /// text, 3 full Markdown.
@@ -45,6 +53,8 @@ pub enum MeetingEvent {
     Deleted,
     /// Asks the app to delete this meeting (after its confirmation dialog).
     RequestDelete(i64),
+    /// The summary went into the documents drive; its view should refresh.
+    DocumentsChanged,
 }
 
 impl EventEmitter<MeetingEvent> for MeetingView {}
@@ -138,6 +148,8 @@ pub struct MeetingView {
     /// Notes to write once the summary is done (after a text import):
     /// focus and style.
     pending_notes: Option<(String, companion::NoteStyle)>,
+    /// Saving the summary into the documents drive.
+    saving_to_documents: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -179,6 +191,7 @@ impl MeetingView {
             versions_open: false,
             keep_title: false,
             pending_notes: None,
+            saving_to_documents: false,
             _subscriptions: Vec::new(),
         };
         this.reload(cx);
@@ -1072,7 +1085,7 @@ impl MeetingView {
     /// After a rename: remembers the named person's voice for later
     /// meetings (in the background; computing a voice print takes a moment).
     fn learn_voice(&mut self, previous: String, name: String, cx: &mut Context<Self>) {
-        if !mostalgia_core::diarize::available() || previous == name {
+        if !mostalgia_core::diarize::available() || previous == name || !Config::load().recognize_voices {
             return;
         }
         let id = self.id;
@@ -1119,7 +1132,7 @@ impl MeetingView {
         self.reload(cx);
         cx.emit(MeetingEvent::Changed);
         let has_audio = self.meeting.as_ref().is_some_and(|m| m.tracks().iter().any(|(s, _)| *s == Source::System));
-        if !has_audio || !mostalgia_core::diarize::available() {
+        if !has_audio || !mostalgia_core::diarize::available() || !Config::load().recognize_voices {
             return;
         }
         let id = self.id;
@@ -1200,10 +1213,11 @@ impl MeetingView {
     }
 
     fn export(&mut self, action: &ExportAs, _: &mut Window, cx: &mut Context<Self>) {
-        use mostalgia_core::export::{self, Format};
-        let (Some(m), Some(format)) = (&self.meeting, Format::from_extension(&action.0)) else { return };
+        use mostalgia_core::export::{self, Format, Parts};
+        let (Some(m), Some(format)) = (&self.meeting, Format::from_extension(&action.1)) else { return };
+        let parts = Parts::parse(&action.0);
         let dir = dirs_documents();
-        let suggested = export::suggested_name(m, format);
+        let suggested = export::suggested_name_of(m, parts, format);
         let picked = cx.prompt_for_new_path(&dir, Some(&suggested));
         let id = self.id;
         cx.spawn(async move |this, cx| {
@@ -1221,13 +1235,59 @@ impl MeetingView {
             };
             let result = Store::open(&paths::database()).and_then(|s| {
                 let m = s.get(id)?.ok_or_else(|| anyhow::anyhow!(tr("Besprechung nicht gefunden")))?;
-                export::write(&m, format, &path)
+                export::write_parts(&m, parts, format, &path)
             });
             this.update(cx, |this, cx| {
                 match result {
                     Ok(()) => this.notice = Some(trf("Exportiert: {}", &[&path.display()]).into()),
                     Err(e) => this.error = Some(format!("{e:#}").into()),
                 }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Puts the summary and notes into the documents drive (into a
+    /// collection), so answers can find and cite them next to the files
+    /// there. Saving again replaces the earlier copy.
+    fn save_to_documents(&mut self, action: &SaveToDocuments, _: &mut Window, cx: &mut Context<Self>) {
+        use mostalgia_core::{docs, export};
+        if self.saving_to_documents {
+            return;
+        }
+        let (id, collection) = (self.id, action.0);
+        self.saving_to_documents = true;
+        self.notice = None;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    let m = Store::open(&paths::database())?.get(id)?.ok_or_else(|| anyhow::anyhow!(tr("Besprechung nicht gefunden")))?;
+                    let parts = export::Parts::SUMMARY_NOTES;
+                    let name = export::suggested_name_of(&m, parts, export::Format::Markdown);
+                    let (doc, _) = docs::put_markdown(&m.title, &name, &export::markdown_parts(&m, parts))?;
+                    let collection = match collection {
+                        0 => None,
+                        -1 => Some(docs::create_collection(tr("Besprechungen"))?),
+                        k => Some(k),
+                    };
+                    docs::set_collection(doc, collection)?;
+                    let name = collection.and_then(|k| docs::collections().ok()?.into_iter().find(|c| c.id == k)).map(|c| c.name);
+                    // Without the embedding model it is still found by keywords.
+                    docs::index(doc)?;
+                    anyhow::Ok(name)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.saving_to_documents = false;
+                match result {
+                    Ok(Some(collection)) => this.notice = Some(trf("In Dokumente gespeichert, Sammlung „{}“", &[&collection]).into()),
+                    Ok(None) => this.notice = Some(tr("In Dokumente gespeichert").into()),
+                    Err(e) => this.error = Some(trf("In Dokumente speichern: {}", &[&format!("{e:#}")]).into()),
+                }
+                cx.emit(MeetingEvent::DocumentsChanged);
                 cx.notify();
             })
             .ok();
@@ -1356,20 +1416,8 @@ impl MeetingView {
                                     }),
                             )
                     })
-                    .child(
-                        Button::new("export")
-                            .small()
-                            .ghost()
-                            .icon(IconName::Download)
-                            .label(tr("Exportieren"))
-                            .dropdown_menu(|menu, _, _| {
-                                let mut menu = menu;
-                                for f in mostalgia_core::export::Format::ALL {
-                                    menu = menu.menu(tr(f.label()), Box::new(ExportAs(f.extension().into())));
-                                }
-                                menu
-                            }),
-                    )
+                    .child(export_menu(m, Button::new("export").small().ghost().icon(IconName::Download).label(tr("Exportieren"))))
+                    .child(documents_menu(m, self.saving_to_documents, Button::new("save-to-documents").small().ghost().icon(IconName::Library).label(tr("In Dokumente"))))
                     .when(self.player.is_some(), |el| {
                         el.child(
                             Button::new("stop-play")
@@ -1525,7 +1573,13 @@ impl MeetingView {
                 )
             })
             .child(div().flex_1())
-            .when(!m.notes.is_empty(), |el| el.child(toggle));
+            .when(!m.notes.is_empty(), |el| {
+                el.child(export_parts_menu(
+                    mostalgia_core::export::Parts::NOTES,
+                    Button::new("notes-export").xsmall().ghost().icon(IconName::Download).label(tr("Notizen exportieren")),
+                ))
+                .child(toggle)
+            });
         v_flex()
             .gap_6()
             .child(toolbar)
@@ -1953,7 +2007,16 @@ impl MeetingView {
                                 .icon(IconName::RefreshCw)
                                 .label(tr("Neu erstellen"))
                                 .on_click(cx.listener(|this, _, _, cx| this.summarize(cx))),
-                        ),
+                        )
+                        .child(export_parts_menu(
+                            mostalgia_core::export::Parts::SUMMARY,
+                            Button::new("summary-export").xsmall().ghost().icon(IconName::Download).label(tr("Exportieren")),
+                        ))
+                        .child(documents_menu(
+                            m,
+                            self.saving_to_documents,
+                            Button::new("summary-to-documents").xsmall().ghost().icon(IconName::Library).label(tr("In Dokumente speichern")),
+                        )),
                 )
                 .into_any_element(),
             None => v_flex()
@@ -2383,6 +2446,7 @@ impl Render for MeetingView {
             .relative()
             .key_context("Meeting")
             .on_action(cx.listener(Self::export))
+            .on_action(cx.listener(Self::save_to_documents))
             .on_action(cx.listener(|this, action: &CopyRecap, window, cx| {
                 let length = if action.0 >= 2 { recap::Length::Full } else { recap::Length::Short };
                 let style = if action.0 % 2 == 1 { recap::Style::Markdown } else { recap::Style::Plain };
@@ -2476,14 +2540,19 @@ impl Render for MeetingView {
                 )
             })
             .child(
-                div().flex_1().min_h_0().child(
-                    div()
-                        .id("meeting-body")
-                        .size_full()
-                        .track_scroll(&self.scroll)
-                        .overflow_y_scroll()
-                        .child(div().max_w(px(860.)).px_8().py_6().child(body)),
-                ),
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .child(
+                        div()
+                            .id("meeting-body")
+                            .size_full()
+                            .track_scroll(&self.scroll)
+                            .overflow_y_scroll()
+                            .child(div().w_full().max_w(px(860.)).mx_auto().px_8().py_6().child(body)),
+                    )
+                    .vertical_scrollbar(&self.scroll),
             )
             .children(dialog)
             .into_any_element()
@@ -2514,6 +2583,68 @@ fn cost_label(usd: f64) -> String {
         return if de { "< 0,01 $".into() } else { "< $0.01".into() };
     }
     if de { format!("≈ {:.2} $", usd).replace('.', ",") } else { format!("≈ ${usd:.2}") }
+}
+
+/// `button` with the export menu: everything, only the notes, only the
+/// summary, each in the formats that fit.
+fn export_menu(m: &Meeting, button: Button) -> impl IntoElement {
+    use mostalgia_core::export::Parts;
+    let mut groups = vec![(tr("Alles"), Parts::ALL)];
+    if !m.notes.is_empty() {
+        groups.push((tr("Nur Notizen"), Parts::NOTES));
+    }
+    if m.summary.is_some() {
+        groups.push((tr("Nur Zusammenfassung"), Parts::SUMMARY));
+    }
+    button.dropdown_menu(move |menu, _, _| {
+        let mut menu = menu;
+        for (i, (label, parts)) in groups.iter().enumerate() {
+            if i > 0 {
+                menu = menu.separator();
+            }
+            menu = menu.label(*label);
+            for f in parts.formats() {
+                menu = menu.menu(tr(f.label()), Box::new(ExportAs(parts.id().into(), f.extension().into())));
+            }
+        }
+        menu
+    })
+}
+
+/// `button` with a menu of the formats `parts` can be exported in.
+fn export_parts_menu(parts: mostalgia_core::export::Parts, button: Button) -> impl IntoElement {
+    button.dropdown_menu(move |menu, _, _| {
+        let mut menu = menu;
+        for f in parts.formats() {
+            menu = menu.menu(tr(f.label()), Box::new(ExportAs(parts.id().into(), f.extension().into())));
+        }
+        menu
+    })
+}
+
+/// `button` with the collections the summary and notes can be saved into
+/// (read when the menu opens).
+fn documents_menu(m: &Meeting, saving: bool, button: Button) -> impl IntoElement {
+    let empty = m.summary.is_none() && m.notes.is_empty();
+    button
+        .loading(saving)
+        .disabled(empty || saving)
+        .tooltip(if empty {
+            tr("Braucht eine Zusammenfassung oder Notizen")
+        } else {
+            tr("Zusammenfassung und Notizen in die Dokumente legen – Fragen findet und zitiert sie dort")
+        })
+        .dropdown_menu(|menu, _, _| {
+            let collections = mostalgia_core::docs::collections().unwrap_or_default();
+            let mut menu = menu.label(tr("In Sammlung speichern"));
+            for k in &collections {
+                menu = menu.menu(k.name.clone(), Box::new(SaveToDocuments(k.id)));
+            }
+            if !collections.iter().any(|k| k.name.eq_ignore_ascii_case(tr("Besprechungen"))) {
+                menu = menu.menu(trf("Neue Sammlung „{}“", &[&tr("Besprechungen")]), Box::new(SaveToDocuments(-1)));
+            }
+            menu.separator().menu(tr("Ohne Sammlung"), Box::new(SaveToDocuments(0)))
+        })
 }
 
 /// ~/Documents (or the home folder) as the export dialog's starting point.

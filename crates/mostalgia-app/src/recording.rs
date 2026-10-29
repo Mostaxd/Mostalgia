@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use crossbeam_channel::Receiver;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, StyledExt, h_flex, switch::Switch, v_flex};
@@ -196,6 +197,7 @@ pub struct RecordingView {
     /// Recordings recovered after a crash, being or just processed.
     recovered: Vec<SharedString>,
     scroll: ScrollHandle,
+    finalizing_scroll: ScrollHandle,
     /// Keep the newest line in view; turned off when the user scrolls up.
     follow: bool,
     focus: FocusHandle,
@@ -219,6 +221,7 @@ impl RecordingView {
             error: None,
             recovered: Vec::new(),
             scroll: ScrollHandle::new(),
+            finalizing_scroll: ScrollHandle::new(),
             follow: true,
             focus: cx.focus_handle(),
             call_mode: false,
@@ -1326,6 +1329,9 @@ impl RecordingView {
             )
             .child(
                 div()
+                    .w_full()
+                    .max_w(px(860.))
+                    .mx_auto()
                     .px_6()
                     .pt_3()
                     .text_xs()
@@ -1333,25 +1339,33 @@ impl RecordingView {
                     .child(tr("Live-Transkript – wird durch das fertige ersetzt, sobald es gespeichert ist.")),
             )
             .child(
-                v_flex()
-                    .id("finalizing-lines")
+                div()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .px_6()
-                    .py_2()
-                    .gap_1()
-                    .text_sm()
-                    .text_color(theme.muted_foreground)
-                    .children(lines.iter().map(|l| {
-                        let who = l.speaker.as_deref().unwrap_or(l.source.speaker_label());
-                        h_flex()
-                            .gap_3()
-                            .items_start()
-                            .child(div().flex_none().w(px(52.)).text_xs().font_family(theme.mono_font_family.clone()).child(ui::hms(l.start_secs)))
-                            .when(speaker_labels, |el| el.child(div().flex_none().text_xs().font_medium().child(ui::speaker_display(who))))
-                            .child(div().flex_1().min_w_0().child(l.text.clone()))
-                    })),
+                    .relative()
+                    .child(
+                        div().id("finalizing-lines").size_full().track_scroll(&self.finalizing_scroll).overflow_y_scroll().child(
+                            v_flex()
+                                .w_full()
+                                .max_w(px(860.))
+                                .mx_auto()
+                                .px_6()
+                                .py_2()
+                                .gap_1()
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .children(lines.iter().map(|l| {
+                                    let who = l.speaker.as_deref().unwrap_or(l.source.speaker_label());
+                                    h_flex()
+                                        .gap_3()
+                                        .items_start()
+                                        .child(div().flex_none().w(px(52.)).text_xs().font_family(theme.mono_font_family.clone()).child(ui::hms(l.start_secs)))
+                                        .when(speaker_labels, |el| el.child(div().flex_none().text_xs().font_medium().child(ui::speaker_display(who))))
+                                        .child(div().flex_1().min_w_0().child(l.text.clone()))
+                                })),
+                        ),
+                    )
+                    .vertical_scrollbar(&self.finalizing_scroll),
             )
     }
 
@@ -1650,14 +1664,17 @@ impl RecordingView {
                         |el, scene| el.child(scene),
                     )
                     .child(
+                    // Each row stays a direct child (scroll_to_top_of_item),
+                    // in a centered column.
                     v_flex()
                         .id("live-transcript")
                         .size_full()
                         .px_6()
                         .py_4()
+                        .items_center()
                         .track_scroll(&self.scroll)
                         .overflow_y_scroll()
-                        .children(rows)
+                        .children(rows.into_iter().map(|r| div().w_full().max_w(px(860.)).child(r)))
                         .when(empty, |el| {
                             el.child(
                                 v_flex()
@@ -1675,7 +1692,8 @@ impl RecordingView {
                                     .child(tr("Bereit, wenn ihr es seid. Der erste Satz landet hier.")),
                             )
                         }),
-                ),
+                    )
+                    .vertical_scrollbar(&self.scroll),
             )
             .child(footer)
     }
