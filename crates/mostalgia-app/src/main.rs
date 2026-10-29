@@ -21,6 +21,8 @@ fn main() {
         mostalgia_app::companion::captions::run(std::env::args().any(|a| a == "--demo"));
         return;
     }
+    // What an update on Windows left behind (no-op elsewhere).
+    mostalgia_core::self_update::cleanup();
     gpui_kit::application().with_assets(AppAssets).run(|cx: &mut App| {
         gpui_kit::init(cx);
         let config = mostalgia_core::config::Config::load();

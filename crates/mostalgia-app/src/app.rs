@@ -718,10 +718,10 @@ impl MostalgiaApp {
         )
     }
 
-    /// Asks GitHub for a newer AppImage (when running as one, and the
+    /// Asks GitHub for a newer AppImage or Windows zip (when running as one, and the
     /// setting is on). Offline or rate-limited: nothing to show.
     fn check_for_update(&mut self, cx: &mut Context<Self>) {
-        if !mostalgia_core::config::Config::load().check_updates || self_update::running_appimage().is_none() {
+        if !mostalgia_core::config::Config::load().check_updates || !self_update::updatable() {
             return;
         }
         let task = cx.background_spawn(async move { self_update::check() });
