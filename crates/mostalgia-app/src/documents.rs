@@ -160,7 +160,7 @@ impl DocumentsView {
         this
     }
 
-    fn reload(&mut self, cx: &mut Context<Self>) {
+    pub fn reload(&mut self, cx: &mut Context<Self>) {
         match docs::list().and_then(|d| Ok((d, docs::collections()?))) {
             Ok((list, collections)) => (self.docs, self.collections) = (list, collections),
             Err(e) => self.errors.push(format!("{e:#}")),

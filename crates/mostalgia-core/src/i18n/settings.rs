@@ -139,7 +139,7 @@ pub const EN: &[(&str, &str)] = &[
     ("Text", "Text"),
     ("Untertitel (SRT)", "Subtitles (SRT)"),
     ("Word (.docx)", "Word (.docx)"),
-    ("Im Terminal: mostalgia export <id> --format md|txt|srt|docx", "In a terminal: mostalgia export <id> --format md|txt|srt|docx"),
+    ("Im Terminal: mostalgia export <id> --format md|txt|srt|docx [--only notes|summary]", "In a terminal: mostalgia export <id> --format md|txt|srt|docx [--only notes|summary]"),
     // Shortcuts & system
     ("Tastenkürzel", "Keyboard shortcut"),
     ("Startet oder stoppt eine Aufnahme von überall – auch wenn die App geschlossen ist.", "Starts or stops a recording from anywhere – even when the app is closed."),

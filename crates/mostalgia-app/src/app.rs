@@ -1054,6 +1054,11 @@ impl MostalgiaApp {
                 this.delete_audio = true;
                 cx.notify();
             }
+            MeetingEvent::DocumentsChanged => {
+                if let Some(docs) = &this.documents_view {
+                    docs.update(cx, |d, cx| d.reload(cx));
+                }
+            }
         });
         self._subscriptions.push(sub);
         self.screen = Screen::Meeting(view);
