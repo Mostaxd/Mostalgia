@@ -29,6 +29,7 @@ pub mod playback;
 pub mod recorder;
 pub mod recap;
 pub mod recovery;
+pub mod self_update;
 pub mod store;
 pub mod summary;
 pub mod text_import;

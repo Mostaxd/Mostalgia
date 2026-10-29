@@ -166,6 +166,11 @@ pub struct Config {
     /// isn't asked again; Settings → System still offers it).
     pub models_prompt_dismissed: bool,
 
+    // ── Updates ──
+    /// The AppImage asks GitHub for a newer release at startup and offers
+    /// it (nothing is downloaded without a click).
+    pub check_updates: bool,
+
     // ── Decision log ──
     /// The decision log (its page in the sidebar, decisions collected from
     /// each new summary). Off by default.
@@ -345,6 +350,7 @@ impl Default for Config {
             audio_keep_days: 7,
             audio_cleanup_confirmed: false,
             models_prompt_dismissed: false,
+            check_updates: true,
             decision_log: false,
             decision_log_built: false,
             live_captions: false,

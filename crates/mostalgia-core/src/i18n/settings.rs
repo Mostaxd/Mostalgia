@@ -1,6 +1,11 @@
 //! English for the settings strings (German original → English).
 
 pub const EN: &[(&str, &str)] = &[
+    ("Nach Updates suchen", "Check for updates"),
+    (
+        "Beim Start fragt Mostalgia bei GitHub nach einer neuen Version und bietet sie an. Geladen wird erst nach einem Klick.",
+        "At startup Mostalgia asks GitHub for a new version and offers it. Nothing is downloaded until you click.",
+    ),
     // Categories
     ("Aufnahme", "Recording"),
     ("Sprecher", "Speakers"),

@@ -50,6 +50,15 @@ pub const EN: &[(&str, &str)] = &[
     ("Befehl kopieren", "Copy command"),
     ("Installiere…", "Installing…"),
     ("Beheben", "Fix it"),
+    // Update bar
+    ("Update installiert – nach einem Neustart läuft die neue Version.", "Update installed. Restart to run the new version."),
+    ("Lade Mostalgia {} … {} %", "Downloading Mostalgia {} … {} %"),
+    ("Mostalgia {} ist verfügbar.", "Mostalgia {} is available."),
+    ("Update fehlgeschlagen: {}", "Update failed: {}"),
+    ("Jetzt neu starten", "Restart now"),
+    ("Erst die Aufnahme beenden", "Stop the recording first"),
+    ("Aktualisieren ({})", "Update ({})"),
+    ("Später", "Later"),
     // Call banner
     ("Anruf in {} erkannt – aufnehmen?", "Call detected in {} – record it?"),
     ("Aufnahme starten", "Start recording"),
