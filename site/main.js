@@ -632,4 +632,8 @@
     catch { copyBtn.textContent = 'Select & copy'; }
     setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1800);
   });
+
+  // Shared with the per-episode scenes in scenes/ (loaded with defer, so
+  // they run after this file).
+  window.MostalgiaSite = { reduce, $, $$, sprite, type, preload };
 })();
