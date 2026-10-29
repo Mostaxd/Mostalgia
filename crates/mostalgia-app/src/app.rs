@@ -11,7 +11,7 @@ use gpui_kit::component::{ActiveTheme, Disableable, Icon, Selectable, Sizable, S
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use mostalgia_core::i18n::{self, tr, trf};
-use mostalgia_core::{models, paths, self_update};
+use mostalgia_core::{gpu_check, models, paths, self_update};
 use mostalgia_core::store::{MeetingSummary, SearchHit, Store};
 
 use crate::companion::{Companion, MoriEvent};
@@ -81,6 +81,8 @@ pub struct MostalgiaApp {
     mori_host: crate::companion::host::DesktopHost,
     /// The open meeting as last told to Mori (for her "This meeting" scope).
     mori_open_meeting: Option<Option<(i64, String)>>,
+    /// The NVIDIA card Whisper can't use, until dismissed.
+    gpu_problem: Option<GpuBanner>,
     /// A newer AppImage release, offered until "Later".
     update: Option<UpdateOffer>,
     _subscriptions: Vec<Subscription>,
@@ -103,6 +105,15 @@ struct UpdateOffer {
     /// Installed; takes effect on restart.
     installed: bool,
     error: Option<SharedString>,
+}
+
+/// The bar saying transcription can't use the NVIDIA card, and why.
+struct GpuBanner {
+    problem: gpu_check::GpuProblem,
+    /// "Fix it" is running (pkexec, then apt).
+    fixing: bool,
+    /// How "Fix it" ended: Ok means restart now.
+    fixed: Option<Result<(), SharedString>>,
 }
 
 /// The import dialog for an audio or video file.
@@ -222,9 +233,11 @@ impl MostalgiaApp {
             mori_host: Default::default(),
             mori_open_meeting: None,
             update: None,
+            gpu_problem: None,
             _subscriptions: subs,
         };
         this.reload(cx);
+        this.check_gpu(cx);
         this.check_for_update(cx);
         // A fresh install (AppImage, installer) has no models yet.
         if !mostalgia_core::config::Config::load().models_prompt_dismissed {
@@ -841,6 +854,133 @@ impl MostalgiaApp {
             })));
         }
         Some(bar.into_any_element())
+    }
+
+    /// Looks for an NVIDIA card the GPU backend can't see (off the UI thread:
+    /// it probes Vulkan).
+    fn check_gpu(&mut self, cx: &mut Context<Self>) {
+        let task = cx.background_spawn(async move { gpu_check::check() });
+        cx.spawn(async move |this, cx| {
+            let problem = task.await;
+            this.update(cx, |this, cx| {
+                this.gpu_problem = problem.map(|problem| GpuBanner { problem, fixing: false, fixed: None });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// "Fix it": runs the fix through pkexec (it asks for the password).
+    fn fix_gpu(&mut self, cx: &mut Context<Self>) {
+        let Some(banner) = self.gpu_problem.as_mut().filter(|b| !b.fixing) else { return };
+        let Some(fix) = banner.problem.fix.clone() else { return };
+        banner.fixing = true;
+        banner.fixed = None;
+        let task = cx.background_spawn(async move { fix.run() });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                if let Some(banner) = this.gpu_problem.as_mut() {
+                    banner.fixing = false;
+                    banner.fixed = Some(result.map_err(|e| format!("{e:#}").into()));
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Bar above the content when transcription can't use the NVIDIA card.
+    fn render_gpu_banner(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let banner = self.gpu_problem.as_ref()?;
+        let theme = cx.theme();
+        let why: SharedString = match &banner.problem.cause {
+            gpu_check::Cause::ModuleMissing { kernel } => trf(
+                "Der NVIDIA-Treiber fehlt für den laufenden Kernel {} – meist nach einem Kernel-Update. Whisper läuft deshalb langsam ohne Grafikkarte.",
+                &[kernel],
+            )
+            .into(),
+            gpu_check::Cause::RestartNeeded => {
+                tr("Der NVIDIA-Treiber ist installiert, aber noch nicht geladen. Starte den Computer neu, damit Whisper die Grafikkarte nutzt.").into()
+            }
+            gpu_check::Cause::Nouveau => {
+                tr("Die NVIDIA-Karte läuft mit dem freien nouveau-Treiber, den Whisper nicht nutzen kann. Installiere den NVIDIA-Treiber.").into()
+            }
+            gpu_check::Cause::VulkanMissing => {
+                tr("Der NVIDIA-Treiber läuft, aber Vulkan findet die Karte nicht – der Vulkan-Teil des Treibers fehlt vermutlich.").into()
+            }
+        };
+        let command = banner.problem.fix.as_ref().map(|f| f.shell());
+        let can_run = banner.problem.fix.is_some() && gpu_check::Fix::can_run();
+        let status: Option<(SharedString, Hsla)> = match &banner.fixed {
+            Some(Ok(())) => Some((tr("Treiber installiert. Starte den Computer neu, damit er geladen wird.").into(), theme.success)),
+            Some(Err(e)) => Some((trf("Hat nicht geklappt: {}", &[e]).into(), theme.danger)),
+            None => None,
+        };
+        let done = matches!(banner.fixed, Some(Ok(())));
+        let fixing = banner.fixing;
+        Some(
+            h_flex()
+                .px_4()
+                .py_2()
+                .gap_3()
+                .items_start()
+                .bg(theme.warning.opacity(0.12))
+                .border_b_1()
+                .border_color(theme.border)
+                .child(Icon::new(IconName::TriangleAlert).small().mt_0p5().text_color(theme.warning))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap_1()
+                        .text_sm()
+                        .child(div().font_semibold().child(tr("Transkription nutzt die NVIDIA-Grafikkarte nicht")))
+                        .child(div().text_color(theme.muted_foreground).child(why))
+                        .when_some(command.clone().filter(|_| !done), |el, command| {
+                            el.child(
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded(theme.radius)
+                                    .bg(theme.muted)
+                                    .font_family(theme.mono_font_family.clone())
+                                    .text_xs()
+                                    .child(command),
+                            )
+                        })
+                        .when_some(status, |el, (text, color)| el.child(div().text_color(color).child(text))),
+                )
+                .when_some(command.filter(|_| !done), |el, command| {
+                    el.child(
+                        Button::new("gpu-copy")
+                            .small()
+                            .ghost()
+                            .icon(IconName::Copy)
+                            .label(tr("Befehl kopieren"))
+                            .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(command.clone()))),
+                    )
+                })
+                .when(can_run && !done, |el| {
+                    el.child(
+                        Button::new("gpu-fix")
+                            .small()
+                            .primary()
+                            .loading(fixing)
+                            .disabled(fixing)
+                            .label(if fixing { tr("Installiere…") } else { tr("Beheben") })
+                            .on_click(cx.listener(|this, _, _, cx| this.fix_gpu(cx))),
+                    )
+                })
+                .child(Button::new("gpu-dismiss").small().ghost().icon(IconName::X).disabled(fixing).on_click(cx.listener(|this, _, _, cx| {
+                    this.gpu_problem = None;
+                    cx.notify();
+                })))
+                .into_any_element(),
+        )
     }
 
     /// Switches to the recording screen and starts recording.
@@ -2065,6 +2205,7 @@ impl Render for MostalgiaApp {
         self.tell_mori_open_meeting(cx);
         let sidebar = self.render_sidebar(cx);
         let call_prompt = self.render_call_prompt(cx);
+        let gpu_banner = self.render_gpu_banner(cx);
         let update_bar = self.render_update_bar(cx);
         let content: AnyView = match &self.screen {
             Screen::Recording => self.recording.clone().into(),
@@ -2100,6 +2241,7 @@ impl Render for MostalgiaApp {
                         .child("Mostalgia"),
                 ),
             )
+            .children(gpu_banner)
             .children(update_bar)
             .children(call_prompt)
             .child(h_flex().flex_1().min_h_0().child(sidebar).child(div().flex_1().min_w_0().h_full().child(content)))

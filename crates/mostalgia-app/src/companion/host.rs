@@ -188,6 +188,12 @@ impl Drop for DesktopHost {
 
 fn spawn(arg: &str) -> anyhow::Result<Running> {
     let exe = std::env::current_exe()?;
+    // Only the app itself knows `--mori` / `--captions`: started from an
+    // example (the screenshot tool), the child would be another screenshot
+    // run, which starts her again, and so on.
+    if exe.file_stem().is_none_or(|n| n != "mostalgia-app") {
+        anyhow::bail!("not running as mostalgia-app");
+    }
     let mut child = Command::new(exe)
         .arg(arg)
         // GPUI takes Wayland when it can; she needs X11 (XWayland).
