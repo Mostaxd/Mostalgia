@@ -16,7 +16,37 @@ env:
   CARGO_PROFILE_DEV_OPT_LEVEL: 1
 
 jobs:
+  # Pushes that only touch the website or docs skip the Rust builds. The
+  # linux and windows jobs then report "skipped", which counts as passed for
+  # the required checks on main.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - uses: actions/checkout@v4
+      # On a branch, compares against where it left main; on main, against
+      # the previous commit.
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          predicate-quantifier: every
+          filters: |
+            rust:
+              - '**'
+              - '!site/**'
+              - '!docs/**'
+              - '!**/*.md'
+              - '!LICENSE-*'
+              - '!NOTICE'
+              - '!.github/ISSUE_TEMPLATE/**'
+              - '!.github/workflows/pages.yml'
+              - '!.github/workflows/release.yml'
+
   linux:
+    needs: changes
+    # Runs if the filter failed too, so a broken filter never passes a check.
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -29,14 +59,20 @@ jobs:
             libxcb1-dev libfontconfig-dev libfreetype-dev libasound2-dev libzstd-dev
       # sherpa-onnx's libraries are downloaded by its build script into the
       # user cache; cache them with target/, or a restored build links to nothing.
+      # Only main saves: every branch writing its own ~1 GB cache per job
+      # pushes main's out of the repository's 10 GB, and builds start cold.
+      # Branches restore main's cache.
       - uses: Swatinem/rust-cache@v2
         with:
           key: sherpa
           cache-directories: ~/.cache/sherpa-rs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo build --workspace --all-targets
       - run: cargo test --workspace
 
   windows:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -45,6 +81,7 @@ jobs:
         with:
           key: sherpa
           cache-directories: ~/AppData/Local/sherpa-rs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # CMake and LLVM (for whisper.cpp and its bindings) come with the runner.
       - run: cargo build --workspace --all-targets
       - run: cargo test --workspace
