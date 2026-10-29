@@ -3429,7 +3429,9 @@ impl Render for SettingsView {
                         .overflow_y_scroll()
                         .child(
                             v_flex()
+                                .w_full()
                                 .max_w(px(1180.))
+                                .mx_auto()
                                 .px_8()
                                 .py_6()
                                 .gap_5()

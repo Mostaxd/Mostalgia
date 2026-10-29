@@ -2389,7 +2389,7 @@ impl Render for MeetingView {
                         .size_full()
                         .track_scroll(&self.scroll)
                         .overflow_y_scroll()
-                        .child(div().max_w(px(860.)).px_8().py_6().child(body)),
+                        .child(div().w_full().max_w(px(860.)).mx_auto().px_8().py_6().child(body)),
                 ),
             )
             .children(dialog)
