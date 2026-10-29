@@ -3100,7 +3100,23 @@ impl Render for SettingsView {
                 tr("Automatisch beenden, wenn der Anruf endet"),
                 Some(tr("Nur für Aufnahmen, die durch einen Anruf gestartet wurden.")),
                 switch("call-stop", self.config.call_stop_auto, cx, |c, v| c.call_stop_auto = v),
-            ))
+            ));
+        // Calls are only noticed while the app runs.
+        #[cfg(windows)]
+        let calls = calls.child(row(
+            tr("Mit Windows starten"),
+            Some(tr("Startet Mostalgia minimiert bei der Anmeldung, damit Anrufe erkannt werden.")),
+            Switch::new("login-start")
+                .checked(crate::login_start::enabled())
+                .on_change(cx.listener(|_, on: &bool, _, cx| {
+                    if let Err(e) = crate::login_start::set(*on) {
+                        eprintln!("[mostalgia] start with Windows: {e:#}");
+                    }
+                    cx.notify();
+                }))
+                .into_any_element(),
+        ));
+        let calls = calls
             .child(if app_rows.is_empty() {
                 div()
                     .text_xs()

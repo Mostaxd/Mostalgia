@@ -1,3 +1,8 @@
+// Release builds on Windows are GUI programs: no console window behind
+// the app (its stdin/stdout pipes to Mori's and the captions' processes
+// work all the same).
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use gpui_kit::component::{Root, TitleBar};
 use gpui_kit::*;
 use mostalgia_app::{AppAssets, app, load_fonts, ui};
@@ -37,6 +42,7 @@ fn main() {
         cx.on_action(|_: &app::ZoomOut, cx| app::MostalgiaApp::zoom_unfocused(Some(false), cx));
         cx.on_action(|_: &app::ZoomReset, cx| app::MostalgiaApp::zoom_unfocused(None, cx));
 
+        let minimized = std::env::args().any(|a| a == "--minimized");
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(1240.), px(820.)), cx)),
             window_min_size: Some(size(px(860.), px(560.))),
@@ -51,9 +57,15 @@ fn main() {
             if std::env::args().any(|a| a == "--start") {
                 view.update(cx, |app, cx| app.start_recording(cx));
             }
+            // Started with the system (see `login_start`): out of the way.
+            if minimized {
+                window.minimize_window();
+            }
             cx.new(|cx| Root::new(view, window, cx))
         })
         .expect("failed to open the window");
-        cx.activate(true);
+        if !minimized {
+            cx.activate(true);
+        }
     });
 }
