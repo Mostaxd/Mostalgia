@@ -18,6 +18,8 @@ pub mod desktop;
 pub mod feed;
 pub mod host;
 pub mod ipc;
+#[cfg(windows)]
+mod win32;
 mod x11;
 
 use std::cell::Cell;
