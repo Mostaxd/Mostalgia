@@ -532,10 +532,13 @@ mod tests {
         assert!((mono[0] - 0.3).abs() < 1e-6 && (mono[1] - 0.5).abs() < 1e-6, "{mono:?}");
     }
 
-    /// Asks macOS for a tap (or ScreenCaptureKit). Without permission it
-    /// may be refused; when it starts, audio (silence at least) must flow,
-    /// and stopping must not hang or crash.
+    /// Asks macOS for a tap (or ScreenCaptureKit): it must start within
+    /// 20 s, deliver audio (silence at least) and stop. Needs a Mac whose
+    /// user allowed system audio recording for the terminal: on CI runners
+    /// starting the device waits 60 s and delivers nothing. Run it with
+    /// `cargo test -p mostalgia-core --features metal -- --ignored audio_macos`.
     #[test]
+    #[ignore = "needs a Mac with system audio permission"]
     fn starting_system_audio_answers() {
         let (tx, rx) = crossbeam_channel::unbounded();
         let started = std::time::Instant::now();
