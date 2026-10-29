@@ -1328,7 +1328,7 @@ mod tests {
         let backup = Connection::open(dir.join("mostalgia-backup-v1.db"))?;
         assert_eq!(backup.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))?, 1);
         assert_eq!(backup.query_row("SELECT title FROM meetings", [], |r| r.get::<_, String>(0))?, "Old");
-        drop(store);
+        drop((store, backup));
         std::fs::remove_dir_all(&dir)?;
         Ok(())
     }
