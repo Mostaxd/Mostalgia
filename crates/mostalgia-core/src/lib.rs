@@ -18,6 +18,7 @@ pub mod diarize;
 pub mod docs;
 pub mod export;
 pub mod finalize;
+pub mod glossary;
 pub mod i18n;
 pub mod language;
 pub mod llm;

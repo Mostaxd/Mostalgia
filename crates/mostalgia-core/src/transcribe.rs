@@ -123,10 +123,12 @@ impl Engine {
     /// engine is set to "auto"; a fixed configured language always wins.
     /// `None`: the engine detects it (among the meeting languages).
     pub fn transcribe_as(&mut self, samples: &[f32], language: Option<&str>) -> Result<Vec<Segment>> {
-        match self {
-            Self::Local(w) => w.run(samples, false, language),
-            Self::Cloud(c) => c.transcribe_as(samples, language),
-        }
+        let glossary = crate::glossary::current();
+        let segments = match self {
+            Self::Local(w) => w.run(samples, false, language, &glossary),
+            Self::Cloud(c) => c.transcribe_as(samples, language, &glossary),
+        };
+        segments.map(|s| fix_segments(s, &glossary))
     }
 
     /// Transcribes a whole track in one go (see [`Whisper::transcribe_track`]).
@@ -136,17 +138,33 @@ impl Engine {
 
     /// [`Engine::transcribe_track`] in `language` (see [`Engine::transcribe_as`]).
     pub fn transcribe_track_as(&mut self, samples: &[f32], language: Option<&str>) -> Result<Vec<Segment>> {
-        match self {
-            Self::Local(w) => w.run(samples, true, language),
-            Self::Cloud(c) => c.transcribe_as(samples, language),
+        let glossary = crate::glossary::current();
+        let segments = match self {
+            Self::Local(w) => w.run(samples, true, language, &glossary),
+            Self::Cloud(c) => c.transcribe_as(samples, language, &glossary),
+        };
+        segments.map(|s| fix_segments(s, &glossary))
+    }
+}
+
+/// The glossary's fix rules applied to what the engine heard.
+fn fix_segments(mut segments: Vec<Segment>, glossary: &crate::glossary::Glossary) -> Vec<Segment> {
+    if !glossary.fixes.is_empty() {
+        let fixer = glossary.fixer();
+        for s in &mut segments {
+            s.text = fixer.apply(&s.text);
         }
     }
+    segments
 }
 
 /// Thin wrapper around whisper-rs holding one loaded model and a reusable
 /// inference state.
 pub struct Whisper {
+    ctx: WhisperContext,
     state: WhisperState,
+    /// The glossary hint and its tokens, kept until the glossary changes.
+    hint: Option<(String, Vec<std::ffi::c_int>)>,
     /// Seconds of audio per detected language since the last reset (auto mode).
     detected: Vec<(String, f64)>,
     language: Option<String>,
@@ -178,7 +196,9 @@ impl Whisper {
             .map(|n| n.get().min(8) as i32)
             .unwrap_or(4);
         Ok(Self {
+            ctx,
             state,
+            hint: None,
             detected: Vec::new(),
             language,
             allowed: Vec::new(),
@@ -203,14 +223,14 @@ impl Whisper {
 
     /// Transcribes one short live utterance, independent of earlier ones.
     pub fn transcribe(&mut self, samples: &[f32]) -> Result<Vec<Segment>> {
-        self.run(samples, false, None)
+        self.run(samples, false, None, &crate::glossary::current())
     }
 
     /// Transcribes a whole track in one go, carrying context across
     /// Whisper's 30 s windows. Prefer splitting at speech first (see
     /// `finalize`): on long silences this can skip or invent text.
     pub fn transcribe_track(&mut self, samples: &[f32]) -> Result<Vec<Segment>> {
-        self.run(samples, true, None)
+        self.run(samples, true, None, &crate::glossary::current())
     }
 
     /// Probabilities of the meeting languages for `samples`, most likely
@@ -246,14 +266,18 @@ impl Whisper {
     }
 
     /// `language` applies in auto mode only (a fixed language wins).
-    fn run(&mut self, samples: &[f32], keep_context: bool, language: Option<&str>) -> Result<Vec<Segment>> {
+    fn run(&mut self, samples: &[f32], keep_context: bool, language: Option<&str>, glossary: &crate::glossary::Glossary) -> Result<Vec<Segment>> {
         let mut language = self.language.clone().or_else(|| language.map(str::to_string));
         // Auto without a language from the caller: still only one of the
         // meeting languages, never whatever this snippet sounds like most.
         if language.is_none() && !self.allowed.is_empty() && !samples.is_empty() {
             language = self.detect_language(samples)?.first().map(|(c, _)| c.clone());
         }
-        let params = full_params(language.as_deref(), self.threads, keep_context);
+        self.update_hint(glossary.hint());
+        let mut params = full_params(language.as_deref(), self.threads, keep_context);
+        if let Some((_, tokens)) = &self.hint {
+            params.set_tokens(tokens);
+        }
 
         self.state
             .full(params, samples)
@@ -300,8 +324,31 @@ impl Whisper {
     }
 }
 
+impl Whisper {
+    /// Tokenizes the glossary hint when it changed. A hint Whisper can't
+    /// tokenize is left out rather than failing the transcription.
+    fn update_hint(&mut self, hint: Option<String>) {
+        match hint {
+            None => self.hint = None,
+            Some(text) if self.hint.as_ref().is_none_or(|(t, _)| *t != text) => {
+                self.hint = match self.ctx.tokenize(&text, MAX_HINT_TOKENS) {
+                    Ok(tokens) => Some((text, tokens)),
+                    Err(e) => {
+                        eprintln!("[whisper] glossary hint left out: {e}");
+                        None
+                    }
+                };
+            }
+            Some(_) => {}
+        }
+    }
+}
+
+/// Whisper uses at most half its 448-token text context for a prompt.
+const MAX_HINT_TOKENS: usize = 224;
+
 /// Whisper's settings for one pass in `language` (`None`: Whisper detects it).
-fn full_params(language: Option<&str>, threads: i32, keep_context: bool) -> FullParams<'_, 'static> {
+fn full_params<'b>(language: Option<&str>, threads: i32, keep_context: bool) -> FullParams<'_, 'b> {
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     params.set_language(language);
     // Transcribe, never translate: German speech stays German.

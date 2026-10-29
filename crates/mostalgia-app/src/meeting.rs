@@ -18,6 +18,7 @@ use mostalgia_core::config::{Config, SttChoice};
 use mostalgia_core::playback::{self, Player};
 use mostalgia_core::store::{Meeting, Store};
 use mostalgia_core::i18n::{self, tr, trf};
+use mostalgia_core::glossary::{self, Glossary};
 use mostalgia_core::{Source, cloud_stt, companion, finalize, paths, recap, summary, voices};
 
 use crate::recording::SharedEngine;
@@ -87,6 +88,10 @@ pub struct MeetingView {
     was_busy: bool,
     error: Option<SharedString>,
     notice: Option<SharedString>,
+    /// A fix rule learned from the last line edit, offered to remember.
+    fix_offer: Option<glossary::Fix>,
+    /// Correcting older meetings with a just-remembered rule.
+    fixing_library: bool,
     edit: Option<Edit>,
     scroll: ScrollHandle,
     /// A jump target (segment id) to scroll into view once it's laid out;
@@ -149,6 +154,8 @@ impl MeetingView {
             was_busy: false,
             error: None,
             notice: None,
+            fix_offer: None,
+            fixing_library: false,
             edit: None,
             scroll: ScrollHandle::new(),
             scroll_target: None,
@@ -987,6 +994,11 @@ impl MeetingView {
             cx.notify();
             return;
         }
+        // What the edited line said before, to learn a misheard word from.
+        let before = match &edit {
+            Edit::Line(seg, _) => self.meeting.as_ref().and_then(|m| m.segments.iter().find(|s| s.id == *seg)).map(|s| s.text.clone()),
+            _ => None,
+        };
         let result = Store::open(&paths::database()).and_then(|store| match &edit {
             Edit::Speaker(current, input) => store.rename_speaker(self.id, current, &input.read(cx).value()).map(|_| ()),
             Edit::Line(seg, input) => store.update_segment_text(*seg, &input.read(cx).value()),
@@ -1000,10 +1012,61 @@ impl MeetingView {
             self.error = Some(format!("{e:#}").into());
         } else if let Edit::Speaker(current, input) = &edit {
             self.learn_voice(current.clone(), input.read(cx).value().trim().to_string(), cx);
+        } else if let (Edit::Line(_, input), Some(before)) = (&edit, before) {
+            let known = Glossary::load().fixes;
+            self.fix_offer = glossary::fix_from_edit(&before, &input.read(cx).value()).filter(|f| !known.contains(f));
         }
         self._subscriptions.clear();
         self.reload(cx);
         cx.emit(MeetingEvent::Changed);
+    }
+
+    /// Saves the offered fix rule; with `older`, also corrects every stored
+    /// transcript and summary with it (in the background).
+    fn remember_fix(&mut self, older: bool, cx: &mut Context<Self>) {
+        let Some(fix) = self.fix_offer.take() else { return };
+        let mut g = Glossary::load();
+        g.add_fix(&fix.from, &fix.to);
+        if let Err(e) = g.save() {
+            self.error = Some(trf("Korrektur nicht gespeichert: {}", &[&format!("{e:#}")]).into());
+            cx.notify();
+            return;
+        }
+        if !older {
+            self.notice = Some(trf("Gemerkt: „{}“ wird künftig zu „{}“.", &[&fix.from, &fix.to]).into());
+            cx.notify();
+            return;
+        }
+        self.fixing_library = true;
+        cx.notify();
+        let only = Glossary { terms: Vec::new(), fixes: vec![fix.clone()] };
+        let task = cx.background_spawn(async move {
+            let mut store = Store::open(&paths::database())?;
+            glossary::apply_to_library(&mut store, &only.fixer())
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                this.fixing_library = false;
+                match result {
+                    Ok(done) => {
+                        this.notice = Some(
+                            trf(
+                                "Gemerkt: „{}“ wird zu „{}“ — {} Zeilen und {} Zusammenfassungen in {} Besprechungen korrigiert.",
+                                &[&fix.from, &fix.to, &done.lines, &done.summaries, &done.meetings],
+                            )
+                            .into(),
+                        );
+                        this.reload(cx);
+                        cx.emit(MeetingEvent::Changed);
+                    }
+                    Err(e) => this.error = Some(trf("Ältere Besprechungen nicht korrigiert: {}", &[&format!("{e:#}")]).into()),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// After a rename: remembers the named person's voice for later
@@ -2363,6 +2426,36 @@ impl Render for MeetingView {
                             cx.notify();
                         }))),
                 )
+            })
+            .when_some(self.fix_offer.clone(), |el, fix| {
+                el.child(
+                    h_flex()
+                        .mx_8()
+                        .mt_3()
+                        .p_3()
+                        .gap_2()
+                        .flex_wrap()
+                        .rounded(theme.radius)
+                        .bg(theme.primary.opacity(0.08))
+                        .text_sm()
+                        .child(Icon::new(IconName::Sparkles).small().text_color(theme.primary))
+                        .child(div().flex_1().min_w(px(200.)).child(trf("„{}“ künftig immer zu „{}“ korrigieren?", &[&fix.from, &fix.to])))
+                        .child(Button::new("fix-remember").xsmall().primary().label(tr("Merken")).on_click(cx.listener(|this, _, _, cx| this.remember_fix(false, cx))))
+                        .child(
+                            Button::new("fix-remember-older")
+                                .xsmall()
+                                .outline()
+                                .label(tr("Merken und ältere korrigieren"))
+                                .on_click(cx.listener(|this, _, _, cx| this.remember_fix(true, cx))),
+                        )
+                        .child(Button::new("fix-dismiss").xsmall().ghost().icon(IconName::X).on_click(cx.listener(|this, _, _, cx| {
+                            this.fix_offer = None;
+                            cx.notify();
+                        }))),
+                )
+            })
+            .when(self.fixing_library, |el| {
+                el.child(div().mx_8().mt_3().text_sm().text_color(theme.muted_foreground).child(tr("Ältere Besprechungen werden korrigiert …")))
             })
             .when_some(self.error.clone(), |el, err| {
                 el.child(
