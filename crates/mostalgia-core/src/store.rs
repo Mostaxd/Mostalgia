@@ -237,6 +237,15 @@ pub struct NewMeeting<'a> {
 
 const SCHEMA_VERSION: i32 = 15;
 
+/// The oldest schema version whose Mostalgia can still use a library at
+/// `SCHEMA_VERSION`: raise it only when a migration changes something an
+/// older app would misread or break (a new table or column it ignores
+/// doesn't count). Stored in the library, so an older app that knows to
+/// look keeps working after a newer one (a dev build, an update that was
+/// rolled back) upgraded it. 15: an app before it would add search vectors
+/// of the local model next to another active model's.
+const COMPATIBLE_SINCE: i32 = 15;
+
 const SCHEMA: &str = "
 CREATE TABLE meetings (
     id            INTEGER PRIMARY KEY,
@@ -450,6 +459,29 @@ fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
     )
 }
 
+/// The `COMPATIBLE_SINCE` of the Mostalgia that last upgraded the library
+/// (`None` before that was recorded).
+fn compatible_since(conn: &Connection) -> Result<Option<i32>> {
+    if !table_exists(conn, "schema_compat")? {
+        return Ok(None);
+    }
+    Ok(conn.query_row("SELECT value FROM schema_compat WHERE key = 'readable_since'", [], |r| r.get(0)).optional()?)
+}
+
+/// Copies the library to `mostalgia-backup-v<version>.db` next to it
+/// before it is upgraded from `version`, so the version before stays
+/// usable by the app that wrote it. Kept if one is already there.
+fn backup_before_upgrade(conn: &Connection, path: &Path, version: i32) -> Result<()> {
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    let backup = path.with_file_name(format!("{stem}-backup-v{version}.db"));
+    if backup.exists() {
+        return Ok(());
+    }
+    conn.execute("VACUUM INTO ?1", [backup.to_string_lossy()])
+        .with_context(|| format!("backing up {} before upgrading it", path.display()))?;
+    Ok(())
+}
+
 fn local(ts: i64) -> DateTime<Local> {
     Local.timestamp_opt(ts, 0).single().unwrap_or_else(Local::now)
 }
@@ -483,20 +515,59 @@ impl Store {
         conn.pragma_update(None, "foreign_keys", true)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         let version: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-        anyhow::ensure!(
-            version <= SCHEMA_VERSION,
-            "database {} was created by a newer Mostalgia",
-            path.display()
-        );
-        if version == 0 {
-            conn.execute_batch(SCHEMA).context("creating database schema")?;
+        if version > SCHEMA_VERSION {
+            // A newer Mostalgia upgraded it (a dev build, or an update that
+            // was rolled back). Use it as it is when that version says this
+            // one still can; never lower its version.
+            let readable_since = compatible_since(&conn)?;
+            anyhow::ensure!(
+                readable_since.is_some_and(|v| v <= SCHEMA_VERSION),
+                "{} was upgraded by a newer Mostalgia (library version {version}, this app reads up to {SCHEMA_VERSION}). \
+                 Nothing is lost: update Mostalgia to open it",
+                path.display()
+            );
+            return Ok(Self { conn });
         }
-        for (i, migration) in MIGRATIONS.iter().enumerate() {
-            if version < i as i32 + 2 {
-                conn.execute_batch(migration).context("upgrading database schema")?;
+        if version == SCHEMA_VERSION {
+            return Ok(Self { conn });
+        }
+        if version > 0 {
+            backup_before_upgrade(&conn, path, version)?;
+        }
+        // One process upgrades; another one opening it at the same time
+        // waits here and then finds it done.
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> Result<()> {
+            let version: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+            if version >= SCHEMA_VERSION {
+                return Ok(());
+            }
+            if version == 0 {
+                conn.execute_batch(SCHEMA).context("creating database schema")?;
+            }
+            for (i, migration) in MIGRATIONS.iter().enumerate() {
+                if version < i as i32 + 2 {
+                    conn.execute_batch(migration).context("upgrading database schema")?;
+                }
+            }
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS schema_compat (key TEXT PRIMARY KEY, value INTEGER NOT NULL)",
+            )?;
+            conn.execute(
+                "INSERT INTO schema_compat (key, value) VALUES ('readable_since', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [COMPATIBLE_SINCE],
+            )?;
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => conn.execute_batch("COMMIT")?,
+            Err(e) => {
+                conn.execute_batch("ROLLBACK").ok();
+                return Err(e);
             }
         }
-        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(Self { conn })
     }
 
@@ -1231,6 +1302,66 @@ mod tests {
         // Closed first: Windows can't delete an open database.
         drop(store);
         std::fs::remove_file(&path)?;
+        Ok(())
+    }
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("mostalgia-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn upgrade_backs_up_the_older_library() -> Result<()> {
+        let dir = temp_dir("upgrade");
+        let path = dir.join("mostalgia.db");
+        {
+            let conn = Connection::open(&path)?;
+            conn.execute_batch(SCHEMA)?;
+            conn.execute("INSERT INTO meetings (title, started_at, duration_secs, language, dir) VALUES ('Old', 0, 1, 'de', '/tmp/s')", [])?;
+            conn.pragma_update(None, "user_version", 1)?;
+        }
+        let store = Store::open(&path)?;
+        assert_eq!(store.list(10)?.len(), 1);
+        assert_eq!(compatible_since(&store.conn)?, Some(COMPATIBLE_SINCE));
+        let backup = Connection::open(dir.join("mostalgia-backup-v1.db"))?;
+        assert_eq!(backup.pragma_query_value(None, "user_version", |r| r.get::<_, i32>(0))?, 1);
+        assert_eq!(backup.query_row("SELECT title FROM meetings", [], |r| r.get::<_, String>(0))?, "Old");
+        drop(store);
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn opens_a_library_a_newer_version_upgraded_when_it_says_so() -> Result<()> {
+        let dir = temp_dir("newer");
+        let path = dir.join("mostalgia.db");
+        drop(Store::open(&path)?);
+        let set = |version: i32, readable_since: Option<i32>| -> Result<()> {
+            let conn = Connection::open(&path)?;
+            conn.execute("DELETE FROM schema_compat", [])?;
+            if let Some(v) = readable_since {
+                conn.execute("INSERT INTO schema_compat (key, value) VALUES ('readable_since', ?1)", [v])?;
+            }
+            conn.pragma_update(None, "user_version", version)?;
+            Ok(())
+        };
+
+        set(SCHEMA_VERSION + 1, Some(SCHEMA_VERSION))?;
+        let store = Store::open(&path)?;
+        assert!(store.list(10)?.is_empty());
+        let version: i32 = store.conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        assert_eq!(version, SCHEMA_VERSION + 1, "the newer version is kept");
+        drop(store);
+
+        set(SCHEMA_VERSION + 1, Some(SCHEMA_VERSION + 1))?;
+        let err = Store::open(&path).err().expect("too new").to_string();
+        assert!(err.contains("Nothing is lost"), "{err}");
+        set(SCHEMA_VERSION + 1, None)?;
+        assert!(Store::open(&path).is_err());
+
+        std::fs::remove_dir_all(&dir)?;
         Ok(())
     }
 }

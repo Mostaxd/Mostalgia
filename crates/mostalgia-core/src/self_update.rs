@@ -64,12 +64,27 @@ pub fn check() -> Result<Option<Update>> {
     let (Some(url), Some(zsync)) = (url(ASSET), url(&format!("{ASSET}.zsync"))) else {
         return Ok(None);
     };
+    // Never an older release over a newer build: it would open a library
+    // that build may have upgraded past what the release can read.
+    if is_older(&release.tag_name, env!("CARGO_PKG_VERSION")) {
+        return Ok(None);
+    }
     let header = client.get(zsync).send()?.error_for_status()?.bytes()?;
     let (sha1, size) = zsync_header(&header).context("unreadable .zsync")?;
     if size == fs::metadata(&appimage)?.len() && sha1 == sha1_of(&mut File::open(&appimage)?)? {
         return Ok(None);
     }
     Ok(Some(Update { tag: release.tag_name, url, sha1, size }))
+}
+
+/// Whether release `tag` ("v0.2.1") is an older version than `current`
+/// ("0.3.0"); a tag that isn't a version isn't.
+fn is_older(tag: &str, current: &str) -> bool {
+    let parse = |v: &str| -> Option<Vec<u64>> {
+        let v = v.trim_start_matches('v');
+        v.split('-').next()?.split('.').map(|n| n.parse().ok()).collect()
+    };
+    matches!((parse(tag), parse(current)), (Some(t), Some(c)) if t < c)
 }
 
 /// The SHA-1 and length from a .zsync file's text header (it ends at the
@@ -159,6 +174,15 @@ pub fn restart() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn never_offers_an_older_release() {
+        assert!(is_older("v0.2.1", "0.3.0"));
+        assert!(is_older("v0.2.1", "0.2.10"));
+        assert!(!is_older("v0.2.1", "0.2.1"));
+        assert!(!is_older("v0.3.0", "0.2.1"));
+        assert!(!is_older("nightly", "0.2.1"));
+    }
 
     #[test]
     fn reads_zsync_header() {
