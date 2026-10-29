@@ -111,8 +111,10 @@ fn hint(path: &Path) -> Hint {
     hint
 }
 
-/// Streaming windowed-sinc resampler to 16 kHz (mono f32).
-struct Resampler {
+/// Streaming windowed-sinc resampler (mono f32), to 16 kHz unless made
+/// with [`Resampler::between`]. Also used by live capture and playback
+/// where the sound system doesn't resample for us (see `audio_pump`).
+pub(crate) struct Resampler {
     ratio: f64,
     /// Input samples not yet consumed, with `pos` the next output's place.
     buf: Vec<f32>,
@@ -130,8 +132,13 @@ struct Resampler {
 const STEPS: usize = 512;
 
 impl Resampler {
-    fn new(rate: u32) -> Self {
-        let ratio = rate as f64 / SAMPLE_RATE as f64;
+    pub(crate) fn new(rate: u32) -> Self {
+        Self::between(rate, SAMPLE_RATE)
+    }
+
+    /// From `from` Hz to `to` Hz.
+    pub(crate) fn between(from: u32, to: u32) -> Self {
+        let ratio = from as f64 / to.max(1) as f64;
         // Low-pass below the new Nyquist when downsampling.
         let cutoff = (1.0 / ratio).min(1.0) * 0.95;
         let half = (16.0 * ratio.max(1.0)).ceil() as usize;
@@ -152,7 +159,7 @@ impl Resampler {
         sinc * w
     }
 
-    fn push(&mut self, input: &[f32], out: &mut Vec<f32>) {
+    pub(crate) fn push(&mut self, input: &[f32], out: &mut Vec<f32>) {
         let before = out.len();
         self.taken += input.len() as u64;
         self.resample(input, out);
@@ -187,7 +194,7 @@ impl Resampler {
     }
 
     /// The tail: as many samples as the input's length calls for.
-    fn finish(&mut self, out: &mut Vec<f32>) {
+    pub(crate) fn finish(&mut self, out: &mut Vec<f32>) {
         let want = (self.taken as f64 / self.ratio).round() as u64;
         let missing = want.saturating_sub(self.given) as usize;
         let before = out.len();
