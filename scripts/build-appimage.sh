@@ -35,8 +35,13 @@ cp -r assets/brand/icons/hicolor "$APPDIR/usr/share/icons/"
 # Runs without FUSE (containers, CI); the plugin is found next to linuxdeploy.
 export APPIMAGE_EXTRACT_AND_RUN=1
 export PATH="$TOOLS:$PATH"
-# The sherpa-onnx libraries sit next to the binaries in target/release.
-export LD_LIBRARY_PATH="$ROOT/target/release${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# The sherpa-onnx libraries: sherpa-rs copies them next to the binaries,
+# but only when its build script runs; a build restored from a cache has
+# them only in sherpa-rs's download cache.
+sherpa=$(find "$ROOT/target/release" "${XDG_CACHE_HOME:-$HOME/.cache}/sherpa-rs" \
+  -name libsherpa-onnx-c-api.so -print -quit 2>/dev/null || true)
+[[ -n "$sherpa" ]] || { echo "libsherpa-onnx-c-api.so not found; cargo clean and build again"; exit 1; }
+export LD_LIBRARY_PATH="$(dirname "$sherpa")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 # Lets AppImageUpdate / Gear Lever fetch new releases.
 export LDAI_UPDATE_INFORMATION="gh-releases-zsync|Mostaxd|Mostalgia|latest|Mostalgia-$ARCH.AppImage.zsync"
 export LDAI_OUTPUT="dist/Mostalgia-$ARCH.AppImage"

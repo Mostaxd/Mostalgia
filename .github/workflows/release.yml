@@ -12,6 +12,10 @@ on:
       - scripts/build-appimage.sh
       - packaging/**
   workflow_dispatch:
+    inputs:
+      release:
+        description: Attach the AppImage to this existing release tag (e.g. v0.2.1)
+        required: false
 
 concurrency:
   group: release-${{ github.ref }}
@@ -68,8 +72,9 @@ jobs:
           name: Mostalgia-x86_64.AppImage
           path: dist/*
       - name: Attach to the release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.release != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.release || github.ref_name }}
           files: dist/*
           generate_release_notes: true
