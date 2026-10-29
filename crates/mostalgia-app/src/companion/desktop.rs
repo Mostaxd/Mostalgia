@@ -155,7 +155,7 @@ impl Placement {
             .or(monitors.first())
             .map(|m| m.rect);
         let Some(m) = monitor else { return };
-        self.work = Some(self.x.work_area().and_then(|w| w.intersect(&m)).unwrap_or(m));
+        self.work = Some(self.x.work_area_on(&m));
         if !m.contains(center.0, center.1) {
             // Her monitor is gone: top right of the primary one.
             self.mori = (m.x + m.w - pw - self.px(48.), m.y + self.px(140.));
@@ -535,12 +535,22 @@ fn mmss(s: &str) -> Option<f64> {
     Some(m.trim().parse::<f64>().ok()? * 60. + s.trim().parse::<f64>().ok()?)
 }
 
-/// The X11 window id behind a GPUI window.
-pub(crate) fn window_id(window: &Window) -> Option<u32> {
+/// The native window behind a GPUI window: an X11 window id, or an HWND
+/// on Windows.
+#[cfg(not(windows))]
+pub(crate) type NativeWindow = u32;
+#[cfg(windows)]
+pub(crate) type NativeWindow = isize;
+
+pub(crate) fn window_id(window: &Window) -> Option<NativeWindow> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     match HasWindowHandle::window_handle(window).ok()?.as_raw() {
+        #[cfg(not(windows))]
         RawWindowHandle::Xcb(h) => Some(h.window.get()),
+        #[cfg(not(windows))]
         RawWindowHandle::Xlib(h) => Some(h.window as u32),
+        #[cfg(windows)]
+        RawWindowHandle::Win32(h) => Some(h.hwnd.get()),
         _ => None,
     }
 }
