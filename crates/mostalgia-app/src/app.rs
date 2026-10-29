@@ -912,9 +912,22 @@ impl MostalgiaApp {
             gpu_check::Cause::Nouveau => {
                 tr("Die NVIDIA-Karte läuft mit dem freien nouveau-Treiber, den Whisper nicht nutzen kann. Installiere den NVIDIA-Treiber.").into()
             }
+            gpu_check::Cause::VulkanMissing if cfg!(windows) => tr(
+                "Der NVIDIA-Treiber läuft, aber Vulkan findet die Karte nicht. Installiere den aktuellen Treiber von nvidia.com/drivers neu.",
+            )
+            .into(),
             gpu_check::Cause::VulkanMissing => {
                 tr("Der NVIDIA-Treiber läuft, aber Vulkan findet die Karte nicht – der Vulkan-Teil des Treibers fehlt vermutlich.").into()
             }
+            gpu_check::Cause::VulkanRuntimeMissing => tr(
+                "Windows fehlt die Vulkan-Laufzeit (vulkan-1.dll), die der Grafiktreiber mitbringt. Installiere den aktuellen Treiber von nvidia.com/drivers.",
+            )
+            .into(),
+            gpu_check::Cause::DriverTooOld { version } => trf(
+                "Der NVIDIA-Treiber {} ist zu alt für Whisper auf der Grafikkarte. Installiere den aktuellen Treiber von nvidia.com/drivers.",
+                &[version],
+            )
+            .into(),
         };
         let command = banner.problem.fix.as_ref().map(|f| f.shell());
         let can_run = banner.problem.fix.is_some() && gpu_check::Fix::can_run();

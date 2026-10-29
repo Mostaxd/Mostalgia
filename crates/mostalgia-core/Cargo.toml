@@ -54,6 +54,8 @@ cpal = "0.18"
 # Call detection: who uses the microphone (see `callwatch`).
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
+# The GPU check: the NVIDIA card and its driver version (DXGI).
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Dxgi"] }
 
 [features]
 default = ["diarization"]
