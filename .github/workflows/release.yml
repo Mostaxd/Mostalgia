@@ -1,8 +1,9 @@
 name: Release
 
-# A tag like v0.3.0 builds the Linux AppImage and attaches it to that tag's
-# GitHub release (created if needed). Changes to the packaging build it too,
-# without releasing, so a broken AppImage shows up before the tag.
+# A tag like v0.3.0 builds the Linux AppImage and the Windows zip and
+# attaches them to that tag's GitHub release (created if needed). Changes to
+# the packaging build them too, without releasing, so a broken package shows
+# up before the tag.
 on:
   push:
     tags: ["v*"]
@@ -10,11 +11,12 @@ on:
     paths:
       - .github/workflows/release.yml
       - scripts/build-appimage.sh
+      - scripts/build-windows.sh
       - packaging/**
   workflow_dispatch:
     inputs:
       release:
-        description: Attach the AppImage to this existing release tag (e.g. v0.2.1)
+        description: Attach the AppImage and Windows zip to this existing release tag (e.g. v0.2.1)
         required: false
 
 concurrency:
@@ -78,3 +80,49 @@ jobs:
           tag_name: ${{ inputs.release || github.ref_name }}
           files: dist/*
           generate_release_notes: true
+
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Whisper on the GPU needs the Vulkan SDK (headers, glslc, the import
+      # library) to build; users only need their GPU driver. If installing
+      # it fails, the zip is the CPU build instead of no zip at all.
+      - name: Vulkan SDK
+        id: vulkan
+        continue-on-error: true
+        env:
+          VK: 1.4.309.0
+        run: |
+          curl -fsSL -o vksdk.exe "https://sdk.lunarg.com/sdk/download/$VK/windows/VulkanSDK-$VK-Installer.exe"
+          ./vksdk.exe --root "C:\\VulkanSDK\\$VK" --accept-licenses --default-answer --confirm-command install
+          test -f "/c/VulkanSDK/$VK/Bin/glslc.exe"
+          echo "VULKAN_SDK=C:\\VulkanSDK\\$VK" >> "$GITHUB_ENV"
+          echo "/c/VulkanSDK/$VK/Bin" >> "$GITHUB_PATH"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-release
+          cache-directories: ~/AppData/Local/sherpa-rs
+      - run: bash scripts/build-windows.sh
+      - name: Smoke test
+        run: |
+          rm -rf smoke && mkdir smoke && cd smoke
+          7z x ../dist/Mostalgia-windows-x86_64.zip >/dev/null
+          ./Mostalgia/mostalgia.exe help
+          ./Mostalgia/mostalgia.exe download-models --list
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Mostalgia-windows-x86_64
+          path: dist/*
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.release != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release || github.ref_name }}
+          files: dist/*
