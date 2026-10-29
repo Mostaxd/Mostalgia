@@ -55,6 +55,21 @@ for dir in "$TARGET/release" "${LOCALAPPDATA:-$HOME/AppData/Local}/sherpa-rs"; d
 done
 [[ $found == 1 ]] || { echo "sherpa-onnx DLLs not found; cargo clean and build again"; exit 1; }
 
+# The Vulkan build links vulkan-1.dll, which only GPU drivers install: a
+# bundled loader lets the app start anywhere (without a Vulkan driver
+# Whisper just finds no GPU and runs on the CPU). Next to the exe it's
+# found first; it's Khronos' loader, which works with every driver.
+if [[ $variant == vulkan ]]; then
+  loader=$(find "$VULKAN_SDK" -iname vulkan-1.dll -path '*[Bb]in*' 2>/dev/null | head -1 || true)
+  [[ -n "$loader" ]] || loader=$(find "$VULKAN_SDK" -iname vulkan-1.dll 2>/dev/null | head -1 || true)
+  if [[ -n "$loader" ]]; then
+    cp "$loader" "$OUT/"
+    echo "Bundled the Vulkan loader from $loader"
+  else
+    echo "::warning::No vulkan-1.dll in the Vulkan SDK to bundle; the app needs a GPU driver with Vulkan to start"
+  fi
+fi
+
 # The Visual C++ runtime, for machines without the redistributable
 # (app-local deployment of these DLLs is allowed).
 sys="${SYSTEMROOT:-C:/Windows}/System32"
