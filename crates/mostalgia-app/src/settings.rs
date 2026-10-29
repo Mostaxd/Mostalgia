@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, StyledExt, h_flex, switch::Switch, v_flex};
@@ -3421,25 +3422,31 @@ impl Render for SettingsView {
             .key_context("Settings")
             .child(nav)
             .child(
-                div().flex_1().min_w_0().h_full().child(
-                    div()
-                        .id("settings")
-                        .size_full()
-                        .track_scroll(&self.scroll)
-                        .overflow_y_scroll()
-                        .child(
-                            v_flex()
-                                .w_full()
-                                .max_w(px(1180.))
-                                .mx_auto()
-                                .px_8()
-                                .py_6()
-                                .gap_5()
-                                .child(header)
-                                .child(grid)
-                                .when(empty, |el| el.child(div().text_color(theme.muted_foreground).child(tr("Keine passende Einstellung gefunden.")))),
-                        ),
-                ),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .relative()
+                    .child(
+                        div()
+                            .id("settings")
+                            .size_full()
+                            .track_scroll(&self.scroll)
+                            .overflow_y_scroll()
+                            .child(
+                                v_flex()
+                                    .w_full()
+                                    .max_w(px(1180.))
+                                    .mx_auto()
+                                    .px_8()
+                                    .py_6()
+                                    .gap_5()
+                                    .child(header)
+                                    .child(grid)
+                                    .when(empty, |el| el.child(div().text_color(theme.muted_foreground).child(tr("Keine passende Einstellung gefunden.")))),
+                            ),
+                    )
+                    .vertical_scrollbar(&self.scroll),
             )
     }
 }

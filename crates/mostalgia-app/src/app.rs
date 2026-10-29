@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{Datelike, Local};
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
@@ -75,6 +76,7 @@ pub struct MostalgiaApp {
     /// Meeting being renamed inline in the sidebar.
     rename: Option<(i64, Entity<InputState>)>,
     library_focus: FocusHandle,
+    library_scroll: ScrollHandle,
     /// Mori, drawn over the content when turned on.
     companion: Entity<Companion>,
     /// Mori on the desktop (her own process), when she's put there.
@@ -229,6 +231,7 @@ impl MostalgiaApp {
             delete_audio: true,
             rename: None,
             library_focus: cx.focus_handle(),
+            library_scroll: ScrollHandle::new(),
             companion,
             mori_host: Default::default(),
             mori_open_meeting: None,
@@ -2165,18 +2168,24 @@ impl MostalgiaApp {
                     ),
             )
             .child(
-                div().flex_1().min_h_0().child(
-                    v_flex()
-                        .id("library")
-                        .key_context("Library")
-                        .track_focus(&self.library_focus)
-                        .on_action(cx.listener(Self::delete_selected))
-                        .size_full()
-                        .px_2()
-                        .pb_2()
-                        .overflow_y_scroll()
-                        .children(items),
-                ),
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .child(
+                        v_flex()
+                            .id("library")
+                            .key_context("Library")
+                            .track_focus(&self.library_focus)
+                            .on_action(cx.listener(Self::delete_selected))
+                            .size_full()
+                            .px_2()
+                            .pb_2()
+                            .track_scroll(&self.library_scroll)
+                            .overflow_y_scroll()
+                            .children(items),
+                    )
+                    .vertical_scrollbar(&self.library_scroll),
             )
             .when_some(self.error.clone(), |el, e| el.child(div().p_3().text_xs().text_color(theme.danger).child(e)))
             .when_some(self.mori_host.problem.clone(), |el, e| el.child(div().p_3().text_xs().text_color(theme.warning).child(e)))

@@ -4,6 +4,7 @@
 use std::time::Duration;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::text::TextView;
@@ -2383,14 +2384,19 @@ impl Render for MeetingView {
                 )
             })
             .child(
-                div().flex_1().min_h_0().child(
-                    div()
-                        .id("meeting-body")
-                        .size_full()
-                        .track_scroll(&self.scroll)
-                        .overflow_y_scroll()
-                        .child(div().w_full().max_w(px(860.)).mx_auto().px_8().py_6().child(body)),
-                ),
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .child(
+                        div()
+                            .id("meeting-body")
+                            .size_full()
+                            .track_scroll(&self.scroll)
+                            .overflow_y_scroll()
+                            .child(div().w_full().max_w(px(860.)).mx_auto().px_8().py_6().child(body)),
+                    )
+                    .vertical_scrollbar(&self.scroll),
             )
             .children(dialog)
             .into_any_element()
