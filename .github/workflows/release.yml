@@ -33,8 +33,18 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential cmake clang pkg-config libpulse-dev \
-            libvulkan-dev glslc libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev \
             libxcb1-dev libfontconfig-dev libfreetype-dev libasound2-dev libzstd-dev
+      # Ubuntu 22.04 has no glslc and too old Vulkan headers for whisper.cpp;
+      # the LunarG SDK brings both (the AppImage uses the system's loader).
+      - name: Vulkan SDK
+        env:
+          VK: 1.4.309.0
+        run: |
+          curl -fsSL "https://sdk.lunarg.com/sdk/download/$VK/linux/vulkansdk-linux-x86_64-$VK.tar.xz" | tar -xJ -C "$HOME"
+          echo "VULKAN_SDK=$HOME/$VK/x86_64" >> "$GITHUB_ENV"
+          echo "$HOME/$VK/x86_64/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=$HOME/$VK/x86_64/lib" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         with:
           key: appimage
