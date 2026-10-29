@@ -108,8 +108,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: windows-release
+          workspaces: ". -> C:/t"
           cache-directories: ~/AppData/Local/sherpa-rs
       - run: bash scripts/build-windows.sh
+        env:
+          CARGO_TARGET_DIR: C:/t
       - name: Smoke test
         run: |
           rm -rf smoke && mkdir smoke && cd smoke
