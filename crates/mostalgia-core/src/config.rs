@@ -77,6 +77,10 @@ pub struct Config {
     pub live_engine: SttChoice,
     /// Speech-to-text for the final pass after a recording.
     pub final_engine: SttChoice,
+    /// Embeddings for meaning search over meetings and documents: the
+    /// local e5 model (`connection` empty) or a cloud model. Changing it
+    /// re-embeds the library (see `ask::reembed`).
+    pub embedding: SttChoice,
     /// Show the note-taking companion (Mori or one of the others).
     pub companion: bool,
     /// Which companion: "mori", "tsumugi" or "hoshi" (unknown → Mori).
@@ -237,8 +241,8 @@ fn clamp_or(v: f32, (lo, hi): (f32, f32), default: f32) -> f32 {
     if v.is_finite() && v > 0. { v.clamp(lo, hi) } else { default }
 }
 
-/// Which speech-to-text engine to use: local Whisper (`connection` empty)
-/// or a cloud model on one of the configured connections.
+/// Which engine to use for speech-to-text (or embeddings): the local model
+/// (`connection` empty) or a cloud model on one of the configured connections.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SttChoice {
@@ -261,7 +265,8 @@ impl SttChoice {
 pub enum Mode {
     /// Transcription and AI run on this machine (or the local network).
     Local,
-    /// Transcription local, summaries/answers from a cloud model.
+    /// Transcription local, summaries/answers (or search embeddings) from
+    /// a cloud model.
     Hybrid,
     /// Transcription in the cloud too.
     Cloud,
@@ -313,6 +318,7 @@ impl Default for Config {
             ask_model: String::new(),
             live_engine: SttChoice::local(),
             final_engine: SttChoice::local(),
+            embedding: SttChoice::local(),
             companion: false,
             companion_character: "mori".into(),
             companion_scale: 1.0,
@@ -518,11 +524,21 @@ impl Config {
         if stt_cloud(&self.live_engine) || stt_cloud(&self.final_engine) {
             return Mode::Cloud;
         }
-        let ai_local = [self.summary_provider.as_str(), self.ask_provider.as_str()]
+        let ai_local = [self.summary_provider.as_str(), self.ask_provider.as_str(), self.embedding.connection.as_str()]
             .iter()
             .filter(|id| !id.is_empty())
             .all(|id| self.connection(id).is_some_and(|c| c.is_local()));
         if ai_local { Mode::Local } else { Mode::Hybrid }
+    }
+
+    /// Display name of the embedding choice: "multilingual-e5-small (lokal)"
+    /// or "OpenAI · text-embedding-3-small".
+    pub fn embedding_label(&self) -> String {
+        if self.embedding.is_local() {
+            return crate::i18n::tr("multilingual-e5-small (lokal)").to_string();
+        }
+        let name = self.connection(&self.embedding.connection).map_or(self.embedding.connection.as_str(), |c| c.name.as_str());
+        format!("{name} · {}", self.embedding.model)
     }
 
     /// Display name of an engine choice: "Whisper (lokal)" or "OpenAI · gpt-4o-transcribe".
@@ -689,6 +705,19 @@ mod tests {
         assert_eq!(old.character(), Some(Character::Mori));
         let odd = Config { companion: true, companion_character: "nobody".into(), ..Config::default() };
         assert_eq!(odd.character(), Some(Character::Mori));
+    }
+
+    #[test]
+    fn cloud_embeddings_make_local_ai_hybrid() {
+        let mut c = Config::default();
+        c.connections.push(crate::connections::Connection::from_preset(crate::connections::preset("ollama"), "ollama"));
+        c.summary_provider = "ollama".into();
+        assert_eq!(c.mode(), Mode::Local);
+        c.embedding = SttChoice { connection: "ollama".into(), model: "bge-m3".into() };
+        assert_eq!(c.mode(), Mode::Local);
+        c.embedding = SttChoice { connection: "openai".into(), model: "text-embedding-3-small".into() };
+        assert_eq!(c.mode(), Mode::Hybrid);
+        assert_eq!(c.embedding_label(), "OpenAI · text-embedding-3-small");
     }
 
     #[test]

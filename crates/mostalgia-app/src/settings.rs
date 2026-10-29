@@ -12,6 +12,7 @@ use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, StyledExt, h_
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use mostalgia_core::ask::{embed::Model as EmbedModel, reembed};
 use mostalgia_core::audio::{self, SourceInfo};
 use mostalgia_core::cloud_stt;
 use mostalgia_core::store::Store;
@@ -88,6 +89,8 @@ pub struct SettingsView {
     preview_frame: usize,
     preview_ticking: bool,
     preview_seen: Instant,
+    /// Re-renders while the library is embedded with a new model.
+    embed_ticking: bool,
     /// Voices named in transcripts, recognised in later meetings.
     voices: Voices,
     /// The known voice being renamed, and the voice asked about forgetting.
@@ -129,6 +132,8 @@ enum Slot {
     Notes,
     Live,
     Final,
+    /// Embeddings for meaning search.
+    Embed,
 }
 
 struct ConnForm {
@@ -150,6 +155,12 @@ fn usd(amount: f64) -> String {
 fn cost_label(conn: &Connection, model: &str) -> Option<String> {
     let cost = cloud_stt::estimated_cost(conn, model, 1.0)?;
     Some(if cost <= 0.0 { tr("kostenlos (eigener Server)").to_string() } else { trf("≈ {} $/Std.", &[&usd(cost)]) })
+}
+
+/// "≈ 0,02 $ per million tokens" or "free (own server)".
+fn embed_cost_label(conn: &Connection, model: &str) -> Option<String> {
+    let cost = if conn.is_local() { 0.0 } else { conn.embed_models().iter().find(|m| m.id == model)?.usd_per_mtok };
+    Some(if cost <= 0.0 { tr("kostenlos (eigener Server)").to_string() } else { trf("≈ {} $ pro Mio. Tokens", &[&usd(cost)]) })
 }
 
 fn effort_label(e: &str) -> String {
@@ -409,6 +420,7 @@ impl SettingsView {
             preview_frames: HashMap::new(),
             preview_frame: 0,
             preview_ticking: false,
+            embed_ticking: false,
             preview_seen: Instant::now(),
             voices: Voices::load(),
             voice_rename: None,
@@ -1642,9 +1654,46 @@ impl SettingsView {
             Slot::Notes => self.config.companion_notes_model = model,
             Slot::Live => self.config.live_engine = SttChoice { connection: conn, model },
             Slot::Final => self.config.final_engine = SttChoice { connection: conn, model },
+            Slot::Embed => {
+                let choice = SttChoice { connection: conn, model };
+                if self.config.embedding == choice {
+                    return;
+                }
+                self.config.embedding = choice;
+                self.save(cx);
+                reembed::start();
+                self.tick_embedding(cx);
+                return;
+            }
         }
         self.fix_efforts();
         self.save(cx);
+    }
+
+    /// Re-renders while the library is embedded again, to show progress.
+    fn tick_embedding(&mut self, cx: &mut Context<Self>) {
+        if self.embed_ticking {
+            return;
+        }
+        self.embed_ticking = true;
+        cx.spawn(async move |this, cx| {
+            // Give the job a moment to report that it runs.
+            cx.background_executor().timer(Duration::from_millis(300)).await;
+            loop {
+                let running = reembed::status().running;
+                let alive = this.update(cx, |_, cx| cx.notify()).is_ok();
+                if !running || !alive {
+                    break;
+                }
+                cx.background_executor().timer(Duration::from_millis(500)).await;
+            }
+            this.update(cx, |this, cx| {
+                this.embed_ticking = false;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn open_custom_model(&mut self, slot: Slot, conn: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -1698,19 +1747,24 @@ impl SettingsView {
         self.save(cx);
     }
 
-    /// Uses a local connection for summaries and questions.
+    /// Uses a local connection for summaries and questions (and the local
+    /// model for search).
     fn use_local_ai(&mut self, id: String, cx: &mut Context<Self>) {
         self.set_ask_connection(None, cx);
         self.set_summary_connection(id, cx);
+        if self.config.connection(&self.config.embedding.connection).is_some_and(|c| !c.is_local()) {
+            self.select_model(Slot::Embed, String::new(), String::new(), cx);
+        }
     }
 
-    /// Where a connection is in use: summaries, ask, live, final.
-    fn uses(&self, id: &str) -> [bool; 4] {
+    /// Where a connection is in use: summaries, ask, live, final, search.
+    fn uses(&self, id: &str) -> [bool; 5] {
         [
             self.config.summary_provider == id,
             self.ask_conn_id() == id,
             self.config.live_engine.connection == id,
             self.config.final_engine.connection == id,
+            self.config.embedding.connection == id,
         ]
     }
 
@@ -2239,6 +2293,124 @@ impl SettingsView {
         self.picker(id, self.config.engine_label(&current), items, cx)
     }
 
+    fn embed_picker(&self, cx: &mut Context<Self>) -> AnyElement {
+        let current = self.config.embedding.clone();
+        let local_label = tr("multilingual-e5-small (lokal)").to_string();
+        let mut items: Vec<Choice> = vec![(local_label, current.is_local(), Some(Pick::Model(Slot::Embed, String::new(), String::new())))];
+        let mut listed = current.is_local();
+        for c in self.config.connections.iter().filter(|c| c.offers_embeddings() && self.configured(c)) {
+            for m in c.embed_models() {
+                let on = current.connection == c.id && current.model == m.id;
+                listed |= on;
+                let label = match embed_cost_label(c, m.id) {
+                    Some(cost) => format!("{} · {} — {cost}", c.name, m.id),
+                    None => format!("{} · {}", c.name, m.id),
+                };
+                items.push((label, on, Some(Pick::Model(Slot::Embed, c.id.clone(), m.id.into()))));
+            }
+            if c.preset().free_embed {
+                items.push((trf("{}: eigenes Modell …", &[&c.name]), false, Some(Pick::Custom(Slot::Embed, c.id.clone()))));
+            }
+        }
+        if !listed {
+            items.insert(1, (self.config.embedding_label(), true, Some(Pick::Model(Slot::Embed, current.connection.clone(), current.model.clone()))));
+        }
+        self.picker("embed-model", self.config.embedding_label(), items, cx)
+    }
+
+    fn embed_hint(&self) -> String {
+        let choice = &self.config.embedding;
+        if choice.is_local() {
+            return tr("Auf diesem Rechner (CPU) · kostenlos").into();
+        }
+        match self.config.connection(&choice.connection) {
+            None => trf("Verbindung \"{}\" gibt es nicht mehr", &[&choice.connection]),
+            Some(c) => {
+                let place = if c.is_local() { trf("Bleibt lokal ({})", &[&c.name]) } else { trf("Text der Besprechungen und Dokumente geht an {} (Cloud)", &[&c.name]) };
+                match embed_cost_label(c, &choice.model) {
+                    Some(cost) => format!("{place} · {cost}"),
+                    None => place,
+                }
+            }
+        }
+    }
+
+    /// Search: which model embeds meetings and documents for meaning
+    /// search, and how far a switch to another one is.
+    fn render_search(&mut self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
+        let picker = self.embed_picker(cx);
+        let hint = self.embed_hint();
+        let custom = self.custom_model_row(Slot::Embed, cx);
+        let status = reembed::status();
+        let target = EmbedModel::from_choice(&self.config);
+        // What searches use now, when it isn't the chosen model yet.
+        let active = (!status.running).then(|| reembed::active().ok()).flatten();
+        let pending = status.running || active.as_ref().is_some_and(|a| a.key() != target.key());
+        if status.running && !self.embed_ticking {
+            self.tick_embedding(cx);
+        }
+        let progress: Option<AnyElement> = if status.running {
+            let text = if status.total == 0 {
+                tr("Bibliothek wird neu eingebettet …").to_string()
+            } else {
+                trf("Bibliothek wird neu eingebettet: {} von {} Abschnitten", &[&status.done, &status.total])
+            };
+            let share = if status.total == 0 { 0.0 } else { status.done as f32 / status.total as f32 };
+            Some(
+                v_flex()
+                    .gap_1()
+                    .child(div().text_sm().child(text))
+                    .child(
+                        div()
+                            .h(px(4.))
+                            .w_full()
+                            .rounded_full()
+                            .bg(theme.muted)
+                            .child(div().h_full().rounded_full().bg(theme.primary).w(relative(share.clamp(0.0, 1.0)))),
+                    )
+                    .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Bis dahin sucht das bisherige Modell weiter.")))
+                    .into_any_element(),
+            )
+        } else if pending {
+            let reason = status.error.clone().unwrap_or_else(|| tr("Noch nicht fertig neu eingebettet.").to_string());
+            Some(
+                v_flex()
+                    .gap_2()
+                    .p_3()
+                    .rounded(theme.radius)
+                    .bg(theme.warning.opacity(0.1))
+                    .text_sm()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(Icon::new(IconName::TriangleAlert).small().text_color(theme.warning).flex_none())
+                            .child(div().flex_1().min_w_0().child(reason)),
+                    )
+                    .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Bis dahin sucht das bisherige Modell weiter.")))
+                    .child(
+                        h_flex().child(Button::new("embed-retry").small().outline().label(tr("Erneut versuchen")).on_click(cx.listener(
+                            |this, _, _, cx| {
+                                reembed::start();
+                                this.tick_embedding(cx);
+                            },
+                        ))),
+                    )
+                    .into_any_element(),
+            )
+        } else {
+            None
+        };
+        ui::card(cx)
+            .child(div().font_semibold().child(tr("Suche")))
+            .child(settings_row(tr("Bedeutungssuche"), Some(&hint), picker, &theme))
+            .children(custom)
+            .children(progress)
+            .child(div().text_xs().text_color(theme.muted_foreground).child(tr(
+                "Findet Stellen in Besprechungen und Dokumenten auch mit anderen Worten. Ein Wechsel bettet die ganze Bibliothek neu ein; Stichwortsuche geht immer.",
+            )))
+    }
+
     fn render_processing(&mut self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme().clone();
         let mode = self.config.mode();
@@ -2283,7 +2455,11 @@ impl SettingsView {
         let mut hint: Option<AnyElement> = None;
         if self.chosen_mode == Some(Mode::Local) && mode != Mode::Local {
             let mut cloud: Vec<String> = Vec::new();
-            for (what, id) in [(tr("Zusammenfassungen"), self.config.summary_provider.clone()), (tr("Fragen"), self.ask_conn_id())] {
+            for (what, id) in [
+                (tr("Zusammenfassungen"), self.config.summary_provider.clone()),
+                (tr("Fragen"), self.ask_conn_id()),
+                (tr("Suche"), self.config.embedding.connection.clone()),
+            ] {
                 if let Some(c) = self.config.connection(&id).filter(|c| !c.is_local()) {
                     cloud.push(format!("{what} → {}", c.name));
                 }
@@ -2395,7 +2571,7 @@ impl SettingsView {
             } else {
                 (trf("Cloud · Text geht an {}", &[&c.name]), theme.info)
             };
-            let used_for: Vec<AnyElement> = ["Zusammenfassungen", "Fragen", "Live-Transkription", "Feinschliff"]
+            let used_for: Vec<AnyElement> = ["Zusammenfassungen", "Fragen", "Live-Transkription", "Feinschliff", "Suche"]
                 .into_iter()
                 .zip(uses)
                 .filter(|(_, on)| *on)
@@ -2905,6 +3081,13 @@ impl Render for SettingsView {
             element: self.render_processing(cx).into_any_element(),
         });
 
+        cards.push(Card {
+            category: Category::Ki,
+            title: "Suche",
+            keywords: "suche search bedeutung meaning semantisch semantic embedding embeddings vektoren vectors e5 openai together ollama lokal local cloud neu einbetten re-embed index",
+            wide: false,
+            element: self.render_search(cx).into_any_element(),
+        });
         cards.push(Card {
             category: Category::Ki,
             title: "Zusammenfassungen & Fragen",

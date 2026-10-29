@@ -1,5 +1,5 @@
-//! Hybrid search over passages: FTS5 BM25 for exact words, e5 embeddings
-//! for meaning, fused with reciprocal rank fusion.
+//! Hybrid search over passages: FTS5 BM25 for exact words, embeddings
+//! (the active model, see `reembed`) for meaning, fused with reciprocal rank fusion.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
@@ -119,9 +119,14 @@ pub fn search(store: &Store, query: &str, filter: &Filter, limit: usize) -> Resu
             .collect::<rusqlite::Result<_>>()?;
     }
 
-    // Meaning ranking (cosine over normalized e5 vectors).
+    // Meaning ranking (cosine over normalized vectors). If the model can't
+    // embed the query (offline, no key), keywords alone have to do.
     let mut semantic: Vec<i64> = Vec::new();
-    if let Some(qv) = embed::embed(&[format!("query: {query}")])?.and_then(|mut v| v.pop()) {
+    let qv = super::reembed::active_model(conn)?.query(query).unwrap_or_else(|e| {
+        eprintln!("[mostalgia] search: {e:#}");
+        None
+    });
+    if let Some(qv) = qv {
         let mut slot = cache().lock().unwrap();
         if slot.is_none() {
             let mut stmt = conn.prepare("SELECT id, embedding FROM passages WHERE embedding IS NOT NULL")?;
@@ -136,7 +141,7 @@ pub fn search(store: &Store, query: &str, filter: &Filter, limit: usize) -> Resu
             .vectors
             .iter()
             .filter(|(id, _)| allowed.contains(id))
-            .map(|(id, v)| (*id, v.iter().zip(&qv).map(|(a, b)| a * b).sum()))
+            .map(|(id, v)| (*id, embed::similarity(v, &qv)))
             .collect();
         scored.sort_by(|a, b| b.1.total_cmp(&a.1));
         semantic = scored.into_iter().take(CANDIDATES).map(|(id, _)| id).collect();

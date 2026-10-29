@@ -67,7 +67,7 @@ model running on your own machine. You always see which one is doing the work.
 
 ### 💬 Ask your meetings
 - “What did Anna promise last week?” — answers **with clickable sources** that open the meeting at that line and play the audio.
-- **Hybrid search**: BM25 keywords + multilingual e5 embeddings, fused with RRF, all local (~25 ms).
+- **Hybrid search**: BM25 keywords + multilingual e5 embeddings, fused with RRF, all local (~25 ms). Embeddings can come from a cloud model instead (OpenAI, Together, or any OpenAI-compatible `/embeddings` endpoint such as Gemini or Voyage); switching re-embeds the library in the background while search keeps using the old index.
 - Says so when nobody said it — no confident inventions. Or ask [Mori](#meet-mori) right in the middle of a meeting.
 - Works with local models too; a model without tool calling gets the search results up front.
 
@@ -259,7 +259,7 @@ another engine.
 | | Where it lives |
 |---|---|
 | Recordings (WAV) | always on your disk, `~/.local/share/mostalgia` — whatever the mode |
-| Search index for *Ask* (BM25 + embeddings) | always local |
+| Search index for *Ask* (BM25 + embeddings) | always on your disk; with cloud embeddings (Settings → AI → Search) passage and question text goes to that provider to be embedded |
 | API keys | GNOME keyring, sent only to their own provider |
 
 ## How it works

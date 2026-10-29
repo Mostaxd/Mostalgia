@@ -197,8 +197,10 @@ pub fn chunk(sections: &[extract::Section]) -> Vec<extract::Section> {
 
 /// What gets embedded for a chunk: e5's passage prefix, the document and
 /// heading, then the text.
-fn embed_text(title: &str, c: &extract::Section) -> String {
-    if c.heading.is_empty() { format!("passage: {title}\n{}", c.text) } else { format!("passage: {title} — {}\n{}", c.heading, c.text) }
+/// What a chunk is embedded as: the document's title (and the heading)
+/// before its text.
+pub(crate) fn embed_text(title: &str, heading: &str, text: &str) -> String {
+    if heading.is_empty() { format!("{title}\n{text}") } else { format!("{title} — {heading}\n{text}") }
 }
 
 /// Adds a file to the drive: copies it into the data directory and
@@ -255,8 +257,13 @@ pub fn index(id: i64) -> Result<usize> {
     let chunks = chunk(&sections);
     let all: String = sections.iter().map(|s| s.text.as_str()).take(40).collect::<Vec<_>>().join("\n");
     let language = guess_language(&all);
-    let texts: Vec<String> = chunks.iter().map(|c| embed_text(&doc.title, c)).collect();
-    let vectors = embed::embed(&texts)?;
+    let texts: Vec<String> = chunks.iter().map(|c| embed_text(&doc.title, &c.heading, &c.text)).collect();
+    // Without vectors (offline, no key) the chunks are found by keywords
+    // and get vectors later (see `index_pending`).
+    let vectors = crate::ask::reembed::active_model(conn)?.passages(&texts).unwrap_or_else(|e| {
+        eprintln!("[mostalgia] document {id}: {e:#}");
+        None
+    });
     let tx = conn.transaction()?;
     tx.execute("DELETE FROM doc_chunks WHERE document_id = ?1", [id])?;
     {
@@ -276,7 +283,7 @@ pub fn index(id: i64) -> Result<usize> {
     Ok(chunks.len())
 }
 
-/// Documents indexed before the embedding model was there get vectors
+/// Documents indexed while the embedding model wasn't there get vectors
 /// (and ones never indexed get indexed). Returns how many.
 pub fn index_pending(cancel: &std::sync::atomic::AtomicBool) -> Result<usize> {
     let store = Store::open(&paths::database())?;
@@ -285,7 +292,7 @@ pub fn index_pending(cancel: &std::sync::atomic::AtomicBool) -> Result<usize> {
             "SELECT d.id FROM documents d WHERE d.indexed_at IS NULL
                 OR (d.error IS NULL AND ?1 AND EXISTS (SELECT 1 FROM doc_chunks c WHERE c.document_id = d.id AND c.embedding IS NULL))",
         )?;
-        stmt.query_map([embed::available()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+        stmt.query_map([crate::ask::reembed::active_model(store.conn())?.ready()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
     };
     drop(store);
     let mut done = 0;
@@ -543,7 +550,11 @@ pub fn search_within(query: &str, within: Within, limit: usize) -> Result<Vec<Do
         bm25 = stmt.query_map(params![q, CANDIDATES as i64], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
     }
     let mut semantic: Vec<i64> = Vec::new();
-    if let Some(qv) = embed::embed(&[format!("query: {query}")])?.and_then(|mut v| v.pop()) {
+    let qv = crate::ask::reembed::active_model(conn)?.query(query).unwrap_or_else(|e| {
+        eprintln!("[mostalgia] documents search: {e:#}");
+        None
+    });
+    if let Some(qv) = qv {
         let mut slot = cache().lock().unwrap_or_else(|e| e.into_inner());
         if slot.is_none() {
             let mut stmt = conn.prepare("SELECT id, embedding FROM doc_chunks WHERE embedding IS NOT NULL")?;
@@ -557,7 +568,7 @@ pub fn search_within(query: &str, within: Within, limit: usize) -> Result<Vec<Do
             .unwrap()
             .iter()
             .filter(|(id, _)| allowed.contains(id))
-            .map(|(id, v)| (*id, v.iter().zip(&qv).map(|(a, b)| a * b).sum()))
+            .map(|(id, v)| (*id, embed::similarity(v, &qv)))
             .collect();
         scored.sort_by(|a, b| b.1.total_cmp(&a.1));
         semantic = scored.into_iter().take(CANDIDATES).map(|(id, _)| id).collect();

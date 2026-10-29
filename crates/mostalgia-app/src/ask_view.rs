@@ -604,6 +604,8 @@ impl Render for AskView {
         let suggestions: Vec<&str> = if scoped { DOC_SUGGESTIONS.to_vec() } else { SUGGESTIONS.to_vec() };
         let theme = cx.theme().clone();
         let config = Config::load();
+        // Search embeddings from a cloud model (named in the intro).
+        let cloud_embeddings = config.connection(&config.embedding.connection).filter(|c| !c.is_local()).map(|c| c.name.clone());
         // Which connection and model answer, shown in the header; a missing
         // or unconfigured connection is shown as an error, never swapped.
         let ask = config.ask_request();
@@ -632,10 +634,11 @@ impl Render for AskView {
                             .text_center()
                             .text_sm()
                             .text_color(theme.muted_foreground)
-                            .child(if scoped {
-                                tr("Die Suche läuft lokal nur über diese Dokumente – auch wenn sie für Antworten ausgeschaltet sind. An das Sprachmodell gehen nur die gefundenen Abschnitte. Jede Aussage verweist auf die Stelle im Dokument.")
-                            } else {
-                                tr("Die Suche läuft lokal über alle Transkripte und Zusammenfassungen. An das Sprachmodell gehen nur die gefundenen Abschnitte, nie Audio. Jede Aussage verweist auf die Stelle in der Aufnahme.")
+                            .child(match (scoped, &cloud_embeddings) {
+                                (true, None) => tr("Die Suche läuft lokal nur über diese Dokumente – auch wenn sie für Antworten ausgeschaltet sind. An das Sprachmodell gehen nur die gefundenen Abschnitte. Jede Aussage verweist auf die Stelle im Dokument.").to_string(),
+                                (false, None) => tr("Die Suche läuft lokal über alle Transkripte und Zusammenfassungen. An das Sprachmodell gehen nur die gefundenen Abschnitte, nie Audio. Jede Aussage verweist auf die Stelle in der Aufnahme.").to_string(),
+                                (true, Some(name)) => trf("Die Suche läuft nur über diese Dokumente – auch wenn sie für Antworten ausgeschaltet sind – mit Embeddings von {} (Cloud). An das Sprachmodell gehen nur die gefundenen Abschnitte. Jede Aussage verweist auf die Stelle im Dokument.", &[name]),
+                                (false, Some(name)) => trf("Die Suche läuft über alle Transkripte und Zusammenfassungen, mit Embeddings von {} (Cloud). An das Sprachmodell gehen nur die gefundenen Abschnitte, nie Audio. Jede Aussage verweist auf die Stelle in der Aufnahme.", &[name]),
                             }),
                     )
                     .child(

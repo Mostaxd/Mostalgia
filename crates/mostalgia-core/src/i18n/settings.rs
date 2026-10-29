@@ -257,6 +257,17 @@ pub const EN: &[(&str, &str)] = &[
     ("Alle Sprachen", "All languages"),
     ("Sprachen in meinen Besprechungen", "Languages spoken in my meetings"),
     ("„Automatisch erkennen“ wählt nur unter diesen, erkennt auf längeren Abschnitten und bleibt pro Spur dabei – deutsche Sätze mit englischen Fachwörtern bleiben deutsch. Jetzt: {}", "“Detect automatically” only chooses among these, detects on longer stretches and sticks with it per track – German sentences full of English terms stay German. Now: {}"),
+    // Search (embeddings)
+    ("Suche", "Search"),
+    ("Bedeutungssuche", "Meaning search"),
+    ("Auf diesem Rechner (CPU) · kostenlos", "On this computer (CPU) · free"),
+    ("Text der Besprechungen und Dokumente geht an {} (Cloud)", "Meeting and document text goes to {} (cloud)"),
+    ("≈ {} $ pro Mio. Tokens", "≈ ${} per million tokens"),
+    ("Bibliothek wird neu eingebettet …", "Re-embedding the library …"),
+    ("Bibliothek wird neu eingebettet: {} von {} Abschnitten", "Re-embedding the library: {} of {} passages"),
+    ("Bis dahin sucht das bisherige Modell weiter.", "Until then, search keeps using the previous model."),
+    ("Noch nicht fertig neu eingebettet.", "The library isn't fully re-embedded yet."),
+    ("Findet Stellen in Besprechungen und Dokumenten auch mit anderen Worten. Ein Wechsel bettet die ganze Bibliothek neu ein; Stichwortsuche geht immer.", "Finds passages in meetings and documents even in other words. Switching re-embeds the whole library; keyword search always works."),
     ("Suche für „Fragen“ (e5-small)", "Search for Ask (e5-small)"),
     ("Fehlende Modelle laden ({})", "Download missing models ({})"),
 ];
