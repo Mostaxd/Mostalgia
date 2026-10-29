@@ -96,6 +96,12 @@ impl Voices {
             .unwrap_or_default()
     }
 
+    /// The known voices to name speakers with: none when recognising
+    /// voices is turned off in the settings.
+    pub fn for_matching() -> Self {
+        if crate::config::Config::load().recognize_voices { Self::load() } else { Self::default() }
+    }
+
     pub fn save(&self) -> Result<()> {
         let path = Self::path();
         if let Some(dir) = path.parent() {

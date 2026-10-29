@@ -249,6 +249,8 @@ pub const EN: &[(&str, &str)] = &[
     ("Transkript und Notizen", "Transcript and notes"),
     ("Live-Transkript, Transkript, Zusammenfassung und Notizen einer Besprechung – zusätzlich zur Textgröße der App.", "Live transcript, and a meeting's transcript, summary and notes – on top of the app text size."),
     ("Bekannte Stimmen", "Known voices"),
+    ("Bekannte Stimmen mit Namen erkennen", "Recognise known voices by name"),
+    ("Aus: Sprecher bleiben „Sprecher 1“, „Sprecher 2“, … — Namen vergibst du selbst im Transkript.", "Off: speakers stay “Speaker 1”, “Speaker 2”, … and you name them yourself in the transcript."),
     ("Bekommt ein Sprecher im Transkript einen Namen, merkt sich Mostalgia die Stimme und erkennt sie in künftigen Besprechungen wieder. Gespeichert wird nur ein Stimmabdruck, keine Aufnahme.", "When you name a speaker in a transcript, Mostalgia remembers the voice and recognises it in future meetings. Only a voice print is stored, no audio."),
     ("Noch keine Stimmen gelernt — im Transkript auf „Sprecher 1“ o. ä. klicken und einen Namen eingeben.", "No voices learned yet — click “Speaker 1” or similar in a transcript and enter a name."),
     ("aus 1 Besprechung · {} min Sprache", "from 1 meeting · {} min of speech"),

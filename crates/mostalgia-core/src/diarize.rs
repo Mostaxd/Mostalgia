@@ -218,7 +218,7 @@ pub fn label_track(samples: &[f32], segments: &mut [&mut FinalSegment], speakers
     if segments.is_empty() {
         return Ok(0);
     }
-    let sep = separate(samples, speakers, &crate::voices::Voices::load())?;
+    let sep = separate(samples, speakers, &crate::voices::Voices::for_matching())?;
     let count = sep.secs.len();
     if count < 2 && sep.names.iter().all(Option::is_none) {
         return Ok(count);
@@ -457,7 +457,7 @@ impl LiveSpeakers {
             Ok(Self {
                 extractor: extractor(&emb_model, 2)?,
                 voices: Vec::new(),
-                known: crate::voices::Voices::load(),
+                known: crate::voices::Voices::for_matching(),
             })
         }
         #[cfg(not(feature = "diarization"))]
