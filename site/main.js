@@ -291,7 +291,10 @@
   const preloaded = new Set();
   const preload = (src) => { if (!preloaded.has(src)) { preloaded.add(src); const i = new Image(); i.src = src; } };
 
-  const episodes = $$('.episode[data-char]');
+  // An episode without the companion stage or steps (a scene of its own)
+  // is skipped; data-mini="off" keeps the phone corner guide away from an
+  // episode whose scene shows its companion itself.
+  const episodes = $$('.episode[data-char]').filter((ep) => $('.stage .actor img', ep) && $('.stage .say', ep) && $('.step', ep));
   episodes.forEach((ep) => {
     const char = ep.dataset.char;
     const stage = $('.stage', ep);
@@ -310,7 +313,7 @@
       img.src = src;
       if (changed && !reduce) { actor.classList.remove('hop'); void actor.offsetWidth; actor.classList.add('hop'); }
       type(say, step.dataset.say);
-      if (mini.dataset.ep === ep.id) showMini(char, step);
+      if (mini && mini.dataset.ep === ep.id) showMini(char, step);
       // warm up the next pose so the swap is instant
       const next = steps[steps.indexOf(step) + 1];
       if (next) preload(sprite(char, next.dataset.pose));
@@ -355,7 +358,10 @@
       }
     }
   }, { rootMargin: '-35% 0px -35% 0px' });
-  episodes.forEach((ep) => epWatch.observe($('.ep-body', ep)));
+  episodes.forEach((ep) => {
+    const body = $('.ep-body', ep);
+    if (mini && body && ep.dataset.mini !== 'off') epWatch.observe(body);
+  });
 
   // ───────── episode rail ─────────
   const railLinks = $$('#rail a');
