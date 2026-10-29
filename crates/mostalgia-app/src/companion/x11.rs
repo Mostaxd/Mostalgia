@@ -3,6 +3,8 @@
 //! XWayland) can: `_NET_WM_STATE_ABOVE`, ConfigureWindow positions, an
 //! input shape so clicks on her transparent surroundings reach the windows
 //! below. All coordinates here are X11 root-window pixels.
+//!
+//! On Windows `X11` is `win32::Win32`, which does the same with Win32 calls.
 
 #[cfg(target_os = "linux")]
 use anyhow::{Context, Result};
@@ -158,9 +160,15 @@ impl X11 {
         Ok((r.root_x as i32, r.root_y as i32, r.mask.contains(xproto::KeyButMask::BUTTON1)))
     }
 
+    /// The work area (without panels) on monitor `m`: `_NET_WORKAREA`
+    /// clipped to it, or all of it if the window manager doesn't say.
+    pub fn work_area_on(&self, m: &Rect) -> Rect {
+        self.work_area().and_then(|w| w.intersect(m)).unwrap_or(*m)
+    }
+
     /// The desktop's work area (without panels), if the window manager
     /// says (`_NET_WORKAREA` of the current workspace).
-    pub fn work_area(&self) -> Option<Rect> {
+    fn work_area(&self) -> Option<Rect> {
         let reply = self.conn.get_property(false, self.root, self.atoms._NET_WORKAREA, AtomEnum::CARDINAL, 0, 4).ok()?.reply().ok()?;
         let v: Vec<u32> = reply.value32()?.collect();
         (v.len() >= 4 && v[2] > 0 && v[3] > 0).then(|| Rect { x: v[0] as i32, y: v[1] as i32, w: v[2] as i32, h: v[3] as i32 })
@@ -184,25 +192,24 @@ impl X11 {
     }
 }
 
-/// What `desktop::window_id` gives: the X11 window id (the NSView on macOS).
-#[cfg(not(target_os = "macos"))]
-pub type WindowId = u32;
+#[cfg(windows)]
+pub use super::win32::Win32 as X11;
 
 /// macOS: the same interface on the NSWindow (`macos.rs`).
 #[cfg(target_os = "macos")]
-pub use super::macos::{MacWindow as X11, WindowId};
+pub use super::macos::MacWindow as X11;
 
 /// No X11 here: `connect` always fails, so callers take their "not an X11
 /// window" path (the window stays an ordinary one).
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 pub struct X11 {
     never: std::convert::Infallible,
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 #[allow(clippy::unused_self)]
 impl X11 {
-    pub fn connect(_window: WindowId) -> anyhow::Result<Self> {
+    pub fn connect(_window: super::desktop::NativeWindow) -> anyhow::Result<Self> {
         anyhow::bail!("X11 is not available on this system")
     }
     pub fn setup_window(&self) -> anyhow::Result<()> {
@@ -223,7 +230,7 @@ impl X11 {
     pub fn pointer(&self) -> anyhow::Result<(i32, i32, bool)> {
         match self.never {}
     }
-    pub fn work_area(&self) -> Option<Rect> {
+    pub fn work_area_on(&self, _m: &Rect) -> Rect {
         match self.never {}
     }
     pub fn monitors(&self) -> Vec<Monitor> {

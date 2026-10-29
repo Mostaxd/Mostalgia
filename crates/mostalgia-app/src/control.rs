@@ -341,8 +341,12 @@ impl TrayHandle {
                     return;
                 }
             };
+            // The recording hotkey, delivered to this thread's queue.
+            register_hotkey();
             loop {
-                pump_messages();
+                if pump_messages() {
+                    let _ = tray.tx.send(Command::Toggle);
+                }
                 loop {
                     match state_rx.try_recv() {
                         Ok((recording, mic_on)) => native.set_state(recording, mic_on),
@@ -366,17 +370,39 @@ impl TrayHandle {
     }
 }
 
-/// Handles the window messages queued for this thread (the tray's).
+/// Handles the window messages queued for this thread (the tray's);
+/// returns whether the recording hotkey was pressed.
 #[cfg(windows)]
-fn pump_messages() {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage};
+fn pump_messages() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage, WM_HOTKEY};
+    let mut hotkey = false;
     // SAFETY: plain Win32 message loop on this thread with a zeroed MSG.
     unsafe {
         let mut msg: MSG = std::mem::zeroed();
         while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+            if msg.message == WM_HOTKEY && msg.wParam == HOTKEY_ID as usize {
+                hotkey = true;
+                continue;
+            }
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+    }
+    hotkey
+}
+
+#[cfg(windows)]
+const HOTKEY_ID: i32 = 0x4d53;
+
+/// Ctrl+Alt+Shift+R starts or stops a recording from anywhere (the Linux
+/// app has a GNOME shortcut for that; Win+Shift+R is the Snipping Tool's).
+#[cfg(windows)]
+fn register_hotkey() {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, RegisterHotKey};
+    // SAFETY: registers a thread hotkey (no window); fails if taken.
+    let ok = unsafe { RegisterHotKey(std::ptr::null_mut(), HOTKEY_ID, MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, b'R' as u32) };
+    if ok == 0 {
+        eprintln!("[mostalgia] Ctrl+Alt+Shift+R is taken by another program");
     }
 }
 

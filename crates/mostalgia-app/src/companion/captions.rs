@@ -125,7 +125,7 @@ impl Captions {
                 let origin = config.live_captions_pos.unwrap_or_else(|| {
                     let monitors = x.monitors();
                     let m = monitors.iter().find(|m| m.primary).or(monitors.first()).map(|m| m.rect).unwrap_or(Rect { x: 0, y: 0, w: 1920, h: 1080 });
-                    default_origin(x.work_area().and_then(|w| w.intersect(&m)).unwrap_or(m), size)
+                    default_origin(x.work_area_on(&m), size)
                 });
                 let _ = x.move_resize(Rect { x: origin.0, y: origin.1, w: size.0, h: size.1 });
             }

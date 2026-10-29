@@ -71,6 +71,7 @@ pub struct SettingsView {
     custom_target: Option<(Slot, String)>,
     /// Processing mode last clicked, to explain what's still missing.
     chosen_mode: Option<Mode>,
+    #[cfg_attr(windows, allow(dead_code))]
     shortcut_error: Option<String>,
     gpu: Option<String>,
     scroll: ScrollHandle,
@@ -307,6 +308,7 @@ fn read_shortcut() -> Option<String> {
     (!binding.is_empty()).then(|| binding.to_string())
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 /// Binds Super+Shift+R to `mostalgia toggle` (the CLI next to this app, or
 /// the AppImage, which runs the CLI when given a command: the paths inside
 /// it only exist while it runs).
@@ -349,6 +351,7 @@ fn tray_host_running() -> bool {
 }
 
 /// "<Super><Shift>r" → "Super + Shift + R".
+#[cfg_attr(windows, allow(dead_code))]
 fn pretty_binding(b: &str) -> String {
     let mut parts: Vec<String> = Vec::new();
     let mut rest = b;
@@ -3100,7 +3103,23 @@ impl Render for SettingsView {
                 tr("Automatisch beenden, wenn der Anruf endet"),
                 Some(tr("Nur für Aufnahmen, die durch einen Anruf gestartet wurden.")),
                 switch("call-stop", self.config.call_stop_auto, cx, |c, v| c.call_stop_auto = v),
-            ))
+            ));
+        // Calls are only noticed while the app runs.
+        #[cfg(windows)]
+        let calls = calls.child(row(
+            tr("Mit Windows starten"),
+            Some(tr("Startet Mostalgia minimiert bei der Anmeldung, damit Anrufe erkannt werden.")),
+            Switch::new("login-start")
+                .checked(crate::login_start::enabled())
+                .on_change(cx.listener(|_, on: &bool, _, cx| {
+                    if let Err(e) = crate::login_start::set(*on) {
+                        eprintln!("[mostalgia] start with Windows: {e:#}");
+                    }
+                    cx.notify();
+                }))
+                .into_any_element(),
+        ));
+        let calls = calls
             .child(if app_rows.is_empty() {
                 div()
                     .text_xs()
@@ -3387,6 +3406,7 @@ impl Render for SettingsView {
         });
 
         // ── Tastenkürzel & System ──
+        #[cfg(not(windows))]
         let shortcut = ui::card(cx)
             .child(title("Tastenkürzel"))
             .child(div().text_sm().text_color(theme.muted_foreground).child(tr("Startet oder stoppt eine Aufnahme von überall – auch wenn die App geschlossen ist.")))
@@ -3413,6 +3433,19 @@ impl Render for SettingsView {
             })
             .when_some(self.shortcut_error.clone(), |el, e| el.child(div().text_xs().text_color(theme.danger).child(e)))
             .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Ändern oder entfernen: GNOME-Einstellungen → Tastatur → Eigene Tastenkürzel.")));
+        // Windows: the app registers the hotkey itself (see `control`).
+        #[cfg(windows)]
+        let shortcut = ui::card(cx)
+            .child(title("Tastenkürzel"))
+            .child(div().text_sm().text_color(theme.muted_foreground).child(tr("Startet oder stoppt eine Aufnahme von überall, solange Mostalgia läuft – auch minimiert.")))
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(Icon::new(IconName::Check).small().text_color(theme.success))
+                    .child(div().text_sm().child(tr("Eingerichtet:")))
+                    .child(div().px_2().py_0p5().rounded(theme.radius).border_1().border_color(theme.border).text_sm().font_family(theme.mono_font_family.clone()).child(tr("Strg + Alt + Umschalt + R"))),
+            );
         cards.push(Card {
             category: Category::System,
             title: "Tastenkürzel",
@@ -3420,6 +3453,11 @@ impl Render for SettingsView {
             wide: false,
             element: shortcut.into_any_element(),
         });
+        #[cfg(not(target_os = "linux"))]
+        let tray = ui::card(cx)
+            .child(title("Tray-Symbol"))
+            .child(h_flex().gap_2().child(Icon::new(IconName::Check).small().text_color(theme.success)).child(div().text_sm().child(tr("Aktiv – im Infobereich der Taskleiste."))));
+        #[cfg(target_os = "linux")]
         let tray = ui::card(cx)
             .child(title("Tray-Symbol"))
             .child(match self.tray_available {

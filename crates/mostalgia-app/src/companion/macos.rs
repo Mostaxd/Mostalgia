@@ -162,10 +162,16 @@ impl MacWindow {
         Ok(((m.x * self.scale).round() as i32, ((h0 - m.y) * self.scale).round() as i32, down))
     }
 
-    /// The visible frame (without menu bar and Dock) of the window's screen.
-    pub fn work_area(&self) -> Option<Rect> {
-        let screen = self.window.screen().or_else(|| NSScreen::mainScreen(self.mtm))?;
-        Some(to_rect(screen.visibleFrame(), primary_height(self.mtm), self.scale))
+    /// The visible frame (without menu bar and Dock) of monitor `m` (one of
+    /// `monitors`), or all of it if that screen is gone.
+    pub fn work_area_on(&self, m: &Rect) -> Rect {
+        let h0 = primary_height(self.mtm);
+        let (cx, cy) = (m.x + m.w / 2, m.y + m.h / 2);
+        NSScreen::screens(self.mtm)
+            .iter()
+            .find(|s| to_rect(s.frame(), h0, self.scale).contains(cx, cy))
+            .and_then(|s| to_rect(s.visibleFrame(), h0, self.scale).intersect(m))
+            .unwrap_or(*m)
     }
 
     pub fn monitors(&self) -> Vec<Monitor> {
