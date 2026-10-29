@@ -102,22 +102,25 @@ impl CloudEngine {
     }
 
     pub fn transcribe(&mut self, samples: &[f32]) -> Result<Vec<Segment>> {
-        self.transcribe_as(samples, None)
+        self.transcribe_as(samples, None, &crate::glossary::current())
     }
 
     /// Transcribes in `language` when set to "auto" (a fixed one wins).
     /// Always `/audio/transcriptions`, never `/audio/translations`.
-    pub fn transcribe_as(&mut self, samples: &[f32], language: Option<&str>) -> Result<Vec<Segment>> {
+    /// The glossary's terms go along as the `prompt`; fix rules are
+    /// the caller's ([`crate::transcribe::Engine`]).
+    pub fn transcribe_as(&mut self, samples: &[f32], language: Option<&str>, glossary: &crate::glossary::Glossary) -> Result<Vec<Segment>> {
+        let hint = glossary.hint();
         let language = self.language.clone().or_else(|| language.map(str::to_string));
         if samples.len() < SAMPLE_RATE as usize / 5 {
             return Ok(Vec::new());
         }
         let wav = encode_wav(samples)?;
         let duration = samples.len() as f64 / SAMPLE_RATE as f64;
-        match self.request(&wav, self.timestamps, language.as_deref()) {
+        match self.request(&wav, self.timestamps, language.as_deref(), hint.as_deref()) {
             Err(e) if self.timestamps && format!("{e:#}").contains("response_format") => {
                 self.timestamps = false;
-                self.request(&wav, false, language.as_deref())
+                self.request(&wav, false, language.as_deref(), hint.as_deref())
             }
             other => other,
         }
@@ -141,7 +144,7 @@ impl CloudEngine {
         &self.detected
     }
 
-    fn request(&self, wav: &[u8], verbose: bool, language: Option<&str>) -> Result<Value> {
+    fn request(&self, wav: &[u8], verbose: bool, language: Option<&str>, hint: Option<&str>) -> Result<Value> {
         let file = reqwest::blocking::multipart::Part::bytes(wav.to_vec())
             .file_name("audio.wav")
             .mime_str("audio/wav")?;
@@ -152,6 +155,9 @@ impl CloudEngine {
             .text("temperature", "0");
         if let Some(lang) = language {
             form = form.text("language", lang.to_string());
+        }
+        if let Some(hint) = hint {
+            form = form.text("prompt", hint.to_string());
         }
         let mut request = self.client.post(format!("{}/audio/transcriptions", self.conn.base())).multipart(form);
         if let Some(key) = &self.key {

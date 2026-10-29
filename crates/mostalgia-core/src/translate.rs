@@ -2,7 +2,7 @@
 //! language by the chosen AI connection while the meeting goes on. Only
 //! text is sent, never audio. Lines are batched (a few at a time, as they
 //! arrive) and the last translated lines go along as context, so names and
-//! terms stay consistent; terms the caller names (the user's own words)
+//! terms stay consistent; the glossary's terms (and any the caller adds)
 //! are kept as written.
 
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
@@ -112,7 +112,10 @@ fn run(mut ask: Ask, target: &str, terms: &[String], jobs: Receiver<Job>, out: S
                 Err(RecvTimeoutError::Disconnected) => break,
             }
         }
-        let (system, user) = prompt(target, terms, &context, &batch);
+        // The glossary as saved now (it can change during a recording).
+        let mut keep: Vec<String> = terms.to_vec();
+        keep.extend(crate::glossary::current().terms.iter().filter(|t| !terms.contains(t)).cloned());
+        let (system, user) = prompt(target, &keep, &context, &batch);
         let reply = ask(&system, &user).and_then(|reply| parse(&reply, batch.len()));
         match reply {
             Ok(lines) => {
