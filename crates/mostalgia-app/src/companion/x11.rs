@@ -184,17 +184,25 @@ impl X11 {
     }
 }
 
+/// What `desktop::window_id` gives: the X11 window id (the NSView on macOS).
+#[cfg(not(target_os = "macos"))]
+pub type WindowId = u32;
+
+/// macOS: the same interface on the NSWindow (`macos.rs`).
+#[cfg(target_os = "macos")]
+pub use super::macos::{MacWindow as X11, WindowId};
+
 /// No X11 here: `connect` always fails, so callers take their "not an X11
 /// window" path (the window stays an ordinary one).
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub struct X11 {
     never: std::convert::Infallible,
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 #[allow(clippy::unused_self)]
 impl X11 {
-    pub fn connect(_window: u32) -> anyhow::Result<Self> {
+    pub fn connect(_window: WindowId) -> anyhow::Result<Self> {
         anyhow::bail!("X11 is not available on this system")
     }
     pub fn setup_window(&self) -> anyhow::Result<()> {

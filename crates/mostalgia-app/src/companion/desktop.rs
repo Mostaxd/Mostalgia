@@ -535,12 +535,16 @@ fn mmss(s: &str) -> Option<f64> {
     Some(m.trim().parse::<f64>().ok()? * 60. + s.trim().parse::<f64>().ok()?)
 }
 
-/// The X11 window id behind a GPUI window.
-pub(crate) fn window_id(window: &Window) -> Option<u32> {
+/// The X11 window id behind a GPUI window (its NSView on macOS).
+pub(crate) fn window_id(window: &Window) -> Option<super::x11::WindowId> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     match HasWindowHandle::window_handle(window).ok()?.as_raw() {
+        #[cfg(not(target_os = "macos"))]
         RawWindowHandle::Xcb(h) => Some(h.window.get()),
+        #[cfg(not(target_os = "macos"))]
         RawWindowHandle::Xlib(h) => Some(h.window as u32),
+        #[cfg(target_os = "macos")]
+        RawWindowHandle::AppKit(h) => Some(h.ns_view.as_ptr() as usize),
         _ => None,
     }
 }
