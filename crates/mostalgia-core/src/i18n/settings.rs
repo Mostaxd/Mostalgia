@@ -56,6 +56,8 @@ pub const EN: &[(&str, &str)] = &[
     ("Anrufe erkennen", "Detect calls"),
     ("Bemerkt, wenn Zoom, Teams, Meet im Browser, Discord & Co. das Mikrofon benutzen.", "Notices when Zoom, Teams, Meet in the browser, Discord and others use the microphone."),
     ("Bei einem Anruf", "When a call starts"),
+    ("Mit Windows starten", "Start with Windows"),
+    ("Startet Mostalgia minimiert bei der Anmeldung, damit Anrufe erkannt werden.", "Starts Mostalgia minimized when you sign in, so calls are noticed."),
     ("Aus", "Off"),
     ("Fragen", "Ask"),
     ("Automatisch", "Automatic"),
