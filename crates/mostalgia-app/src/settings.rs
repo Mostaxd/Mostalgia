@@ -3237,7 +3237,7 @@ impl Render for SettingsView {
                     .text_color(theme.muted_foreground)
                     .children(mostalgia_core::export::Format::ALL.map(|f| h_flex().gap_2().child(Icon::new(IconName::FileText).xsmall()).child(tr(f.label())))),
             )
-            .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Im Terminal: mostalgia export <id> --format md|txt|srt|docx")));
+            .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Im Terminal: mostalgia export <id> --format md|txt|srt|docx [--only notes|summary]")));
         cards.push(Card {
             category: Category::Speicher,
             title: "Export",

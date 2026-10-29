@@ -237,6 +237,45 @@ pub fn add(path: &Path) -> Result<(i64, bool)> {
     Ok((id, true))
 }
 
+/// Puts a Markdown text the app wrote (a meeting's summary and notes) into
+/// the drive as `file_name`, titled `title`. A document of the same file
+/// name made this way before is replaced, so saving again updates it.
+/// Returns its id and whether it is new; it still needs [`index`].
+pub fn put_markdown(title: &str, file_name: &str, text: &str) -> Result<(i64, bool)> {
+    let bytes = text.as_bytes();
+    let h = hash(bytes);
+    let store = Store::open(&paths::database())?;
+    let conn = store.conn();
+    let existing: Option<(i64, String)> = conn
+        .query_row("SELECT id, path FROM documents WHERE file_name = ?1 AND kind = ?2 ORDER BY id DESC LIMIT 1", params![file_name, Kind::Markdown.id()], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .optional()?;
+    if let Some((id, path)) = existing.filter(|(_, p)| Path::new(p).starts_with(dir())) {
+        std::fs::write(&path, bytes).with_context(|| trf("{} konnte nicht gespeichert werden", &[&path]))?;
+        conn.execute(
+            "UPDATE documents SET title = ?2, size_bytes = ?3, hash = ?4, indexed_at = NULL, error = NULL WHERE id = ?1",
+            params![id, title, bytes.len() as i64, h],
+        )?;
+        invalidate_cache();
+        return Ok((id, false));
+    }
+    conn.execute(
+        "INSERT INTO documents (title, file_name, path, kind, size_bytes, hash, added_at) VALUES (?1, ?2, '', ?3, ?4, ?5, ?6)",
+        params![title, file_name, Kind::Markdown.id(), bytes.len() as i64, h, Local::now().timestamp()],
+    )?;
+    let id = conn.last_insert_rowid();
+    let safe: String = file_name.chars().map(|c| if c.is_alphanumeric() || ".-_ ".contains(c) { c } else { '_' }).collect();
+    let dest = dir().join(format!("{id}-{safe}"));
+    if let Err(e) = std::fs::create_dir_all(dir()).and_then(|_| std::fs::write(&dest, bytes)) {
+        conn.execute("DELETE FROM documents WHERE id = ?1", [id])?;
+        return Err(e).with_context(|| trf("{} konnte nicht gespeichert werden", &[&dest.display()]));
+    }
+    conn.execute("UPDATE documents SET path = ?2 WHERE id = ?1", params![id, dest.to_string_lossy()])?;
+    invalidate_cache();
+    Ok((id, true))
+}
+
 /// Reads, chunks and embeds a document (again). A file that can't be read
 /// keeps its entry with the error. Returns the number of chunks.
 pub fn index(id: i64) -> Result<usize> {
@@ -673,6 +712,17 @@ mod tests {
         assert_eq!(search("VPN", None, 5).unwrap().len(), 1);
         assert!(delete(id).unwrap());
         assert!(search("VPN", None, 5).unwrap().is_empty());
+        // A meeting's summary saved into the drive, then saved again.
+        let (m, new) = put_markdown("Weekly", "2026-10-29-Weekly-summary-notes.md", "# Weekly\nThe launch moves to March.").unwrap();
+        assert!(new);
+        index(m).unwrap();
+        assert_eq!(search("launch", None, 5).unwrap().len(), 1);
+        let again = put_markdown("Weekly sync", "2026-10-29-Weekly-summary-notes.md", "# Weekly\nThe launch moves to April.").unwrap();
+        assert_eq!(again, (m, false));
+        index(m).unwrap();
+        let doc = get(m).unwrap().unwrap();
+        assert_eq!(doc.title, "Weekly sync");
+        assert_eq!(sections(m).unwrap()[0].text, "The launch moves to April.");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
