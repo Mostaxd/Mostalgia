@@ -330,6 +330,13 @@ enum Command {
     },
     /// List capture devices (for --mic-device / --system-device)
     Devices,
+    /// Download the Whisper, voice-activity, speaker and search models
+    /// (~2.1 GB) that aren't there yet
+    DownloadModels {
+        /// Only show which models are there and where they come from
+        #[arg(long)]
+        list: bool,
+    },
     /// Transcribe a 16 kHz mono WAV file
     Transcribe {
         /// WAV file to transcribe
@@ -486,7 +493,7 @@ impl ModelArgs {
         anyhow::ensure!(
             model.exists(),
             "{}",
-            trf("Modell nicht gefunden: {} — zuerst scripts/download-model.sh ausführen oder --model angeben", &[&model.display()])
+            trf("Modell nicht gefunden: {} — zuerst mostalgia download-models ausführen oder --model angeben", &[&model.display()])
         );
         eprintln!("[mostalgia] {}", trf("Lade Modell {} …", &[&model.display()]));
         let mut engine = Engine::load(&model, &self.language())?;
@@ -575,6 +582,7 @@ fn main() -> Result<()> {
         Command::Docs { action } => docs_cmd(action.unwrap_or(DocsAction::List)),
         Command::Suggest { sources, question } => suggest(&question.join(" "), sources.as_deref()),
         Command::Devices => list_devices(),
+        Command::DownloadModels { list } => download_models(list),
         Command::Transcribe { file, models } => transcribe_file(&file, &models),
     }
 }
@@ -1113,13 +1121,20 @@ fn control(cmd: &str, launch_args: &[&str]) -> Result<()> {
     // Not running: start the app (next to this binary, else from PATH).
     let beside = std::env::current_exe()?.with_file_name(format!("mostalgia-app{}", std::env::consts::EXE_SUFFIX));
     let app = if beside.exists() { beside } else { PathBuf::from("mostalgia-app") };
-    std::process::Command::new(&app)
+    let mut command = std::process::Command::new(&app);
+    command
         .args(launch_args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .with_context(|| trf("{} konnte nicht gestartet werden", &[&app.display()]))?;
+        .stderr(std::process::Stdio::null());
+    let failed = || trf("{} konnte nicht gestartet werden", &[&app.display()]);
+    // In an AppImage our files go away when this process exits, so stay
+    // with the app until it quits.
+    if std::env::var_os("APPIMAGE").is_some() {
+        command.status().with_context(failed)?;
+    } else {
+        command.spawn().with_context(failed)?;
+    }
     Ok(())
 }
 
@@ -1135,7 +1150,7 @@ fn index_for_ask(id: i64) {
 fn reindex(all: bool) -> Result<()> {
     use mostalgia_core::ask;
     if !ask::embed::available() {
-        eprintln!("[mostalgia] {}", tr("Bedeutungsmodell fehlt (scripts/download-model.sh) — nur Stichwortsuche"));
+        eprintln!("[mostalgia] {}", tr("Bedeutungsmodell fehlt (mostalgia download-models) — nur Stichwortsuche"));
     }
     let t = std::time::Instant::now();
     let n = if all {
@@ -1180,7 +1195,7 @@ fn docs_cmd(action: DocsAction) -> Result<()> {
         }
         DocsAction::Add { files, collection } => {
             if !mostalgia_core::ask::embed::available() {
-                eprintln!("[mostalgia] {}", tr("Bedeutungsmodell fehlt (scripts/download-model.sh) — nur Stichwortsuche"));
+                eprintln!("[mostalgia] {}", tr("Bedeutungsmodell fehlt (mostalgia download-models) — nur Stichwortsuche"));
             }
             let collection = collection.map(|n| docs::create_collection(&n)).transpose()?;
             for f in files {
@@ -1441,6 +1456,40 @@ fn list_devices() -> Result<()> {
         println!();
     }
     println!("{}", tr("* = wird standardmäßig verwendet"));
+    Ok(())
+}
+
+fn download_models(list: bool) -> Result<()> {
+    use mostalgia_core::models;
+    if list {
+        for m in models::MODELS {
+            let mark = if m.present() { "✓" } else { " " };
+            println!("{mark} {:<40} {:>9}  {}", m.file, mostalgia_core::cleanup::human(m.size), m.url);
+        }
+        println!("\n{}", trf("Ordner: {}", &[&models::dir().display()]));
+        return Ok(());
+    }
+    let missing = models::missing();
+    if missing.is_empty() {
+        println!("{}", trf("Alle Modelle sind da ({}).", &[&models::dir().display()]));
+        return Ok(());
+    }
+    println!(
+        "{}",
+        trf("Lade {} Dateien ({}) nach {} …", &[&missing.len(), &mostalgia_core::cleanup::human(models::total_size(&missing)), &models::dir().display()])
+    );
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let mut shown = String::new();
+    let result = models::download(&missing, &cancel, |p| {
+        let line = format!("{:>3} %  {}", (p.fraction() * 100.0) as u32, p.file);
+        if line != shown {
+            eprint!("\r\x1b[2K{line}");
+            shown = line;
+        }
+    });
+    eprintln!();
+    result?;
+    println!("{}", tr("Fertig."));
     Ok(())
 }
 

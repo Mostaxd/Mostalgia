@@ -351,7 +351,7 @@ impl RecordingView {
         if let Phase::Recording(live) = &mut self.phase {
             live.engine_error = Some((engine.to_string().into(), message.to_string().into()));
             live.failed_chunks = failed;
-            live.warnings.push(trf("Sprechertrennung aus: {}", &[&tr("Modelle für die Sprechertrennung fehlen — scripts/download-model.sh ausführen")]).into());
+            live.warnings.push(trf("Sprechertrennung aus: {}", &[&tr("Modelle für die Sprechertrennung fehlen — unter Einstellungen → System herunterladen")]).into());
             cx.notify();
         }
     }
@@ -1705,7 +1705,7 @@ fn check_final_engine(config: &Config) -> Result<()> {
         if model.exists() {
             Ok(())
         } else {
-            Err(anyhow::anyhow!(trf("Whisper-Modell nicht gefunden: {} — scripts/download-model.sh ausführen", &[&model.display()])))
+            Err(anyhow::anyhow!(trf("Whisper-Modell nicht gefunden: {} — unter Einstellungen → System herunterladen", &[&model.display()])))
         }
     } else {
         cloud_stt::check(config.connection(&choice.connection), &choice.connection, &choice.model)

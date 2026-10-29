@@ -154,7 +154,39 @@ and their own (honest, concise) personality in the chat:
 
 ![Theme scenes](docs/screenshots/themes-scenes.png)
 
-## Quick start
+## Install
+
+**Linux (x86_64):** download
+**[Mostalgia-x86_64.AppImage](https://github.com/Mostaxd/Mostalgia/releases/latest/download/Mostalgia-x86_64.AppImage)**,
+make it executable and start it:
+
+```bash
+chmod +x Mostalgia-x86_64.AppImage
+./Mostalgia-x86_64.AppImage
+```
+
+(Or right-click it → *Properties* → *Allow executing as program*, then
+double-click.) That's it: no Rust, no packages, no scripts.
+
+- **First launch** puts Mostalgia in your app menu and offers to download the
+  speech models (~2.1 GB, once) with a progress bar. Only using a cloud
+  transcription service? Click *Not now*; you can download them later in
+  *Settings → System*.
+- **Connect an AI** for summaries and *Ask* in *Settings → AI & transcription*
+  (Ollama for a local model, or a cloud provider with your own key).
+- **The CLI** is inside the AppImage too:
+  `./Mostalgia-x86_64.AppImage connections add ollama`, `… list`, `… ask "…"`.
+- **Start/stop shortcut:** add a custom shortcut in your desktop's keyboard
+  settings that runs `/path/to/Mostalgia-x86_64.AppImage toggle`.
+- **Updates:** [Gear Lever](https://flathub.org/apps/it.mijorus.gearlever)
+  or AppImageUpdate pick up new releases automatically.
+
+It needs PipeWire or PulseAudio and a Vulkan driver, which desktop
+distributions ship by default (glibc 2.35 or newer: Ubuntu 22.04, Debian 12,
+Fedora 36 and later). The tray icon needs GNOME's AppIndicator extension:
+`gnome-extensions enable ubuntu-appindicators@ubuntu.com` (log out and in once).
+
+### Build from source
 
 ```bash
 # 1. System packages (Ubuntu/Debian)
@@ -162,25 +194,22 @@ sudo apt install build-essential cmake clang pkg-config libpulse-dev pulseaudio-
   libvulkan-dev glslc libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev \
   libxcb1-dev libfontconfig-dev libfreetype-dev libasound2-dev libzstd-dev
 
-# 2. Models: Whisper (~1.6 GB), Silero VAD, speaker + search models
-./scripts/download-model.sh
-
-# 3. Build (Vulkan works on NVIDIA/AMD/Intel without extra toolkits)
+# 2. Build (Vulkan works on NVIDIA/AMD/Intel without extra toolkits)
 cargo build --release --features vulkan
 
-# 4. Put it in your app grid, and add the Super+Shift+R shortcut
+# 3. Put it in your app grid, and add the Super+Shift+R shortcut
 ./scripts/install-desktop.sh
 ./scripts/install-gnome-shortcut.sh
 
-# 5. Connect an AI provider for summaries and Ask — in the app under
+# 4. Connect an AI provider for summaries and Ask — in the app under
 #    Settings → AI & transcription, or from the terminal:
 mostalgia connections add ollama            # a local model, no key needed
 mostalgia set-api-key --provider openai     # or claude, deepseek, groq, … (GNOME keyring)
 ```
 
-Then launch **Mostalgia** from the app grid, or `mostalgia-app`. The tray icon
-needs GNOME's AppIndicator extension:
-`gnome-extensions enable ubuntu-appindicators@ubuntu.com` (log out and in once).
+Then launch **Mostalgia** from the app grid, or `mostalgia-app`; it offers to
+download the models on first launch (or run `mostalgia download-models`).
+`./scripts/build-appimage.sh` builds the AppImage yourself.
 
 ## Supported providers
 
@@ -288,8 +317,8 @@ The CLI follows the app's language setting (English by default).
 
 ## FAQ
 
-**Does it work without a GPU?** Yes — build without `--features vulkan` and
-Whisper runs on the CPU. It's slower; a smaller model (`--model`) helps — or
+**Does it work without a GPU?** Yes — without a Vulkan-capable GPU Whisper
+runs on the CPU (or build without `--features vulkan`). It's slower; a smaller model (`--model`) helps — or
 switch transcription to a provider in *Cloud* mode.
 
 **Which call apps are detected?** Zoom, Teams, Discord, Slack, Signal, Element,

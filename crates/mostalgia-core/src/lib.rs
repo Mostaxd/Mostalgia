@@ -22,6 +22,7 @@ pub mod i18n;
 pub mod language;
 pub mod llm;
 pub mod media_import;
+pub mod models;
 pub mod paths;
 pub mod playback;
 pub mod recorder;

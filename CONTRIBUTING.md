@@ -19,7 +19,8 @@ sudo apt install build-essential cmake clang pkg-config libpulse-dev pulseaudio-
   libvulkan-dev glslc libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev \
   libxcb1-dev libfontconfig-dev libfreetype-dev libasound2-dev libzstd-dev
 
-# Models: Whisper, Silero VAD, speaker and search models (into ./models)
+# Models: Whisper, Silero VAD, speaker and search models (the app also
+# offers this on first launch, and `mostalgia download-models` does it too)
 ./scripts/download-model.sh
 
 # Build: drop --features vulkan for a CPU-only build, or use --features cuda

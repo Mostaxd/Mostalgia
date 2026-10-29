@@ -535,6 +535,8 @@ code { font: 500 .88em var(--mono); background: rgba(91,42,78,.1); padding: .1em
 /* ───────── INSTALL ───────── */
 .install { padding: 100px 0; background: var(--cream); }
 .install-grid { display: grid; grid-template-columns: 1fr 1.1fr; gap: 48px; align-items: center; }
+.install .btn-ghost { color: var(--ink); border-color: var(--ink); }
+.install .btn-ghost:hover { background: rgba(0,0,0,.06); }
 .platform-row { display: flex; flex-wrap: wrap; gap: 10px; }
 .plat { font: 600 14px var(--sans); border: 2px solid var(--ink); border-radius: 999px; padding: 6px 14px; }
 .plat.now { background: var(--sage); }

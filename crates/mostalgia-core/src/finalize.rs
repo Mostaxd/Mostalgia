@@ -164,7 +164,7 @@ fn final_pass_in(
 ) -> Result<Vec<FinalSegment>> {
     engine.reset_detected_language();
     if opts.vad_model.is_none() {
-        notes.push(crate::i18n::tr("Ohne Sprachfilter (Silero-VAD-Modell fehlt — scripts/download-model.sh): Stille kann zu erfundenem Text führen").to_string());
+        notes.push(crate::i18n::tr("Ohne Sprachfilter (Silero-VAD-Modell fehlt): Stille kann zu erfundenem Text führen").to_string());
     }
     let mut vad = opts.vad_model.as_deref().map(load_vad).transpose()?;
     let diarize = opts.diarize;
@@ -345,7 +345,7 @@ pub fn engine_for(config: &crate::config::Config, choice: &crate::config::SttCho
         anyhow::ensure!(
             model.exists(),
             "{}",
-            crate::i18n::trf("Whisper-Modell nicht gefunden: {} — scripts/download-model.sh ausführen", &[&model.display()])
+            crate::i18n::trf("Whisper-Modell nicht gefunden: {} — unter Einstellungen → System herunterladen", &[&model.display()])
         );
         let mut engine = Engine::load(&model, &config.language)?;
         engine.set_meeting_languages(&config.meeting_languages);
