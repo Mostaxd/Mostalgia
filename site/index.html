@@ -1528,19 +1528,125 @@
       <h2>Twenty themes. <span>From warm Mostalgia to Blockworld pixels.</span></h2>
     </div>
   </header>
-  <div class="marquee" aria-label="All twenty themes">
-    <div class="track" id="trackA"></div>
-    <div class="track rev" id="trackB"></div>
-  </div>
-  <div class="wrap polish">
-    <div class="polish-grid">
-      <div class="pg reveal"><h3>Little animated scenes</h3><p>Each theme brings its own palette, corners, fonts, speaker colours and a small scene while you wait for the first word. All of it respects “reduce motion”.</p></div>
-      <div class="pg reveal"><h3>Text size, your way</h3><p>Scale the app from 90 to 150 % and the transcript separately, live, with <kbd>Ctrl</kbd> <kbd>=</kbd> / <kbd>−</kbd> / <kbd>0</kbd>. The companions follow.</p></div>
-      <div class="pg reveal"><h3>English and German</h3><p>Switch the UI language live. Settings are grouped into categories with search.</p></div>
-      <div class="pg reveal"><h3>Make your own</h3><p>Drop a JSON file into <code>~/.config/mostalgia/themes/</code> and it shows up next to the others.</p></div>
+  <link rel="stylesheet" href="scenes/ep9.css">
+  <div class="wrap t9">
+    <p class="sr-only" id="t9Desc">A mock-up of the Mostalgia window that re-skins itself. It starts in the warm Mostalgia theme and spins through Mostalgia Night, Sakura, Synthwave, Blockworld (with a pixel font), Comic, Terminal and Aurora, each with its own little animated scene above the transcript. Then the text size slider grows the window's text to 140 % and back, the language switches to German and back, and the accent colour is edited into a custom theme file. The theme buttons, the text size slider, the language buttons and the colour picker all work: try them.</p>
+
+    <div class="t9-scene" id="t9Scene">
+      <div class="t9-deck">
+        <div class="t9-cassette" aria-hidden="true">
+          <span class="t9-screw"></span><span class="t9-screw"></span><span class="t9-screw"></span><span class="t9-screw"></span>
+          <span class="t9-sticker">
+            <span class="t9-side">A · テーマ</span>
+            <b class="t9-name" id="t9Name">Mostalgia</b>
+            <small class="t9-sub" id="t9Sub">"mostalgia" · steam scene</small>
+          </span>
+          <span class="t9-window">
+            <span class="t9-reel l"><i></i></span>
+            <span class="t9-tape"></span>
+            <span class="t9-reel r"><i></i></span>
+          </span>
+          <span class="t9-count" id="t9Count">01 / 20</span>
+        </div>
+        <div class="t9-swatches" id="t9Swatches" role="group" aria-label="Themes"></div>
+        <div class="t9-actions">
+          <button type="button" class="t9-try" id="t9Try" aria-pressed="false" hidden>Try it on this page</button>
+          <button type="button" class="t9-replay" id="t9Replay" aria-label="Replay the themes animation" hidden><span aria-hidden="true">↻</span> Replay</button>
+        </div>
+      </div>
+
+      <div class="t9-win" id="t9Win">
+        <div class="t9-titlebar" aria-hidden="true"><img src="assets/brand/icon.svg" alt="" width="16" height="16"> Mostalgia <span class="t9-dots"><i></i><i></i><i></i></span></div>
+        <div class="t9-body">
+          <div class="t9-app" aria-hidden="true">
+            <div class="t9-nav">
+              <span class="t9-new"><i></i> <span data-de="Neue Aufnahme">New recording</span></span>
+              <span class="t9-ask">✦ <span data-de="Fragen">Ask</span></span>
+              <span class="t9-group" data-de="Heute">Today</span>
+              <span class="t9-item on"><b>Spring launch sync</b><small>10:00 · 2 min</small></span>
+              <span class="t9-item"><b>Design review: icons</b><small>09:15 · 24 min</small></span>
+              <span class="t9-group" data-de="Gestern">Yesterday</span>
+              <span class="t9-item"><b>1:1 with Sam</b><small>16:30 · 30 min</small></span>
+              <span class="t9-gear">⚙ <span data-de="Einstellungen">Settings</span></span>
+            </div>
+            <div class="t9-main">
+              <div class="t9-band" id="t9Band" data-scene="steam">
+                <span class="t9-cup"><i></i><i></i><i></i></span>
+              </div>
+              <div class="t9-head">
+                <b>Spring launch sync</b>
+                <small><span data-de="Heute">Today</span>, 10:00 · 2 min · <span data-de="3 Sprecher">3 speakers</span></small>
+              </div>
+              <div class="t9-tabs"><span class="on" data-de="Transkript">Transcript</span><span data-de="Zusammenfassung">Summary</span></div>
+              <ol class="t9-lines">
+                <li><span class="t9-ts">02:07</span><span class="t9-chip s1">Lena</span><span>Morning! Are we still on for the spring launch on the 14th?</span></li>
+                <li><span class="t9-ts">02:09</span><span class="t9-chip s0">Me</span><span>Yes, as long as the onboarding screens are ready.</span></li>
+                <li><span class="t9-ts">02:12</span><span class="t9-chip s2">Sam</span><span>They're close. I'll have them done by Thursday.</span></li>
+                <li><span class="t9-ts">02:14</span><span class="t9-chip s0">Me</span><span>Great. Then we keep the 14th and skip the extra beta week.</span></li>
+                <li><span class="t9-ts">02:16</span><span class="t9-chip s1">Lena</span><span>I'll draft the release notes by Friday.</span></li>
+              </ol>
+            </div>
+          </div>
+
+          <div class="t9-panel" role="group" aria-label="Appearance settings in the mock window">
+            <p class="t9-ptitle" data-de="Darstellung">Appearance</p>
+            <div class="t9-row t9-r-theme">
+              <span class="t9-lbl" data-de="Design">Theme</span>
+              <span class="t9-val" id="t9Theme">Mostalgia</span>
+            </div>
+            <div class="t9-row t9-r-theme t9-r-sp" aria-hidden="true">
+              <span class="t9-lbl" data-de="Sprecherfarben">Speaker colours</span>
+              <span class="t9-sps"><i class="s0"></i><i class="s1"></i><i class="s2"></i></span>
+            </div>
+            <div class="t9-row t9-r-size">
+              <label class="t9-lbl" for="t9Size"><span data-de="Textgröße">Text size</span> <output id="t9SizeOut" for="t9Size">100 %</output></label>
+              <input type="range" id="t9Size" min="90" max="150" step="10" value="100" disabled>
+              <span class="t9-keys" aria-hidden="true"><kbd>Ctrl</kbd> <kbd>=</kbd> <kbd>−</kbd> <kbd>0</kbd></span>
+            </div>
+            <div class="t9-row t9-r-lang">
+              <span class="t9-lbl" id="t9LangLbl" data-de="Sprache">Language</span>
+              <span class="t9-seg" role="group" aria-labelledby="t9LangLbl">
+                <button type="button" data-lang="en" aria-pressed="true" disabled>EN</button>
+                <button type="button" data-lang="de" aria-pressed="false" disabled>DE</button>
+              </span>
+            </div>
+            <div class="t9-row t9-r-own">
+              <label class="t9-lbl" for="t9Accent" data-de="Eigenes Design">Make your own</label>
+              <span class="t9-own">
+                <input type="color" id="t9Accent" value="#b8472a" aria-label="Accent colour of your own theme" disabled>
+                <code class="t9-json" aria-hidden="true">"primary": "<b id="t9Hex">#B8472A</b>"</code>
+              </span>
+              <span class="t9-path" id="t9Path" aria-hidden="true">~/.config/mostalgia/themes/</span>
+            </div>
+          </div>
+        </div>
+        <span class="t9-wipe" id="t9Wipe" aria-hidden="true"></span>
+      </div>
+      <span class="t9-cursor" id="t9Cursor" aria-hidden="true"><svg viewBox="0 0 24 24" width="26" height="26"><path d="M4 2l16 10-7 1.6L9.6 21z" fill="#fff" stroke="#2B1730" stroke-width="2" stroke-linejoin="round"/></svg></span>
     </div>
-    <figure class="shot wide reveal"><img src="assets/shots/themes-scenes.webp" alt="The animated scenes of each theme" loading="lazy" width="1400" height="1157"></figure>
+
+    <ul class="t9-bullets">
+      <li><b>Twenty themes</b>, each with its own palette, corners, fonts and a little scene.</li>
+      <li><b>Text size</b> from 90 to 150 %, live, with <kbd>Ctrl</kbd> <kbd>=</kbd> / <kbd>−</kbd> / <kbd>0</kbd>.</li>
+      <li><b>English or German</b>, switched live.</li>
+      <li><b>Make your own</b> with one JSON file.</li>
+    </ul>
+
+    <details class="t9-more">
+      <summary>All details</summary>
+      <div class="t9-more-body">
+        <div class="t9-more-grid">
+          <div><h3>Little animated scenes</h3><p>Each theme brings its own palette, corners, fonts, speaker colours and a small scene while you wait for the first word. All of it respects “reduce motion”.</p></div>
+          <div><h3>Text size, your way</h3><p>Scale the app from 90 to 150 % and the transcript separately, live, with <kbd>Ctrl</kbd> <kbd>=</kbd> / <kbd>−</kbd> / <kbd>0</kbd>. The companions follow.</p></div>
+          <div><h3>English and German</h3><p>Switch the UI language live. Settings are grouped into categories with search.</p></div>
+          <div><h3>Make your own</h3><p>Drop a JSON file into <code>~/.config/mostalgia/themes/</code> and it shows up next to the others.</p></div>
+        </div>
+        <p class="t9-all"><b>All twenty:</b> Mostalgia, Mostalgia Night, Sakura, Synthwave, Blockworld, Comic, Aurora, Retro 90s, Space, Terminal, Nord, Solarized, Paper, High contrast, Ocean, Forest, Nightshade, Coffee, Light and Dark.</p>
+        <figure class="shot wide"><img src="assets/shots/themes-scenes.webp" alt="The animated scenes of each theme" loading="lazy" width="1400" height="1157"></figure>
+      </div>
+    </details>
   </div>
+  <script src="scenes/ep9.js" defer></script>
 </section>
 
 <!-- ───────────────────────── NUMBERS ───────────────────────── -->
