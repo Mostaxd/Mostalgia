@@ -181,12 +181,20 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: windows-release
+          workspaces: ". -> C:/t"
           cache-directories: ~/AppData/Local/sherpa-rs
       - run: bash scripts/build-windows.sh
+        env:
+          CARGO_TARGET_DIR: C:/t
+      # The app's updater checks the download against this.
+      - name: Checksum
+        run: cd dist && sha256sum Mostalgia-windows-x86_64.zip > Mostalgia-windows-x86_64.zip.sha256 && cat *.sha256
       - name: Smoke test
         run: |
           rm -rf smoke && mkdir smoke && cd smoke
           7z x ../dist/Mostalgia-windows-x86_64.zip >/dev/null
+          ls -l Mostalgia
+          echo "::notice::zip contents: $(ls Mostalgia | tr '\n' ' ')"
           ./Mostalgia/mostalgia.exe help
           ./Mostalgia/mostalgia.exe download-models --list
       - uses: actions/upload-artifact@v4

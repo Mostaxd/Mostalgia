@@ -3498,7 +3498,7 @@ impl Render for SettingsView {
             .child(status_row(diarize_ok, tr("Sprechertrennung (sherpa-onnx)").into()))
             .child(status_row(mostalgia_core::ask::embed::available(), tr("Suche für „Fragen“ (e5-small)").into()))
             // Only the AppImage updates itself; a source build has git.
-            .when(mostalgia_core::self_update::running_appimage().is_some(), |el| {
+            .when(mostalgia_core::self_update::updatable(), |el| {
                 el.child(row(
                     tr("Nach Updates suchen"),
                     Some(tr("Beim Start fragt Mostalgia bei GitHub nach einer neuen Version und bietet sie an. Geladen wird erst nach einem Klick.")),

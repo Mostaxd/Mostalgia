@@ -10,6 +10,9 @@ use mostalgia_app::{AppAssets, app, load_fonts, ui};
 actions!(mostalgia, [Quit]);
 
 fn main() {
+    // Windows groups the app's windows and shows its toasts under this id.
+    #[cfg(windows)]
+    mostalgia_app::win_identity::set_process_id();
     // Mori on the desktop: her own small always-on-top window (started by
     // the app; `--demo` runs her alone with a fake recording).
     if std::env::args().any(|a| a == "--mori") {
@@ -20,6 +23,14 @@ fn main() {
     if std::env::args().any(|a| a == "--captions") {
         mostalgia_app::companion::captions::run(std::env::args().any(|a| a == "--demo"));
         return;
+    }
+    // What an update on Windows left behind (no-op elsewhere).
+    mostalgia_core::self_update::cleanup();
+    // The Start Menu entry toasts are shown under (installed copies only,
+    // not development builds).
+    #[cfg(windows)]
+    if mostalgia_core::self_update::running_install().is_some() {
+        mostalgia_app::win_identity::ensure_shortcut();
     }
     gpui_kit::application().with_assets(AppAssets).run(|cx: &mut App| {
         gpui_kit::init(cx);

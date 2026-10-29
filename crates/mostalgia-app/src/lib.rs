@@ -19,6 +19,8 @@ pub mod settings;
 pub mod text_import;
 pub mod themes;
 pub mod ui;
+#[cfg(windows)]
+pub mod win_identity;
 
 use std::borrow::Cow;
 

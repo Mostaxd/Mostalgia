@@ -10,6 +10,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$PWD
+# A short target dir keeps whisper.cpp's nested CMake build paths under
+# Windows' 260-character limit (CI sets CARGO_TARGET_DIR=C:/t).
+TARGET="${CARGO_TARGET_DIR:-$ROOT/target}"
 OUT="$ROOT/target/Mostalgia"
 ZIP="dist/Mostalgia-windows-x86_64.zip"
 mkdir -p dist
@@ -24,22 +27,25 @@ fi
 # In CI, compiler errors also become annotations.
 run=()
 [[ -n "${GITHUB_ACTIONS:-}" ]] && run=(bash scripts/ci-cargo.sh)
+variant=cpu
+[[ ${#features[@]} -gt 0 ]] && variant=vulkan
 if ! "${run[@]}" cargo build --release "${features[@]}" -p mostalgia-app -p mostalgia; then
   [[ ${#features[@]} -gt 0 ]] || exit 1
   # A zip without GPU support beats no zip.
   echo "::warning::The Vulkan build failed; packaging the CPU build"
+  variant=cpu
   "${run[@]}" cargo build --release -p mostalgia-app -p mostalgia
 fi
 
 rm -rf "$OUT"
 mkdir -p "$OUT"
-cp target/release/mostalgia-app.exe target/release/mostalgia.exe "$OUT/"
+cp "$TARGET/release/mostalgia-app.exe" "$TARGET/release/mostalgia.exe" "$OUT/"
 
 # The sherpa-onnx DLLs: sherpa-rs copies them next to the binaries, but
 # only when its build script runs; a build restored from a cache has them
 # only in sherpa-rs's download cache.
 found=0
-for dir in "$ROOT/target/release" "${LOCALAPPDATA:-$HOME/AppData/Local}/sherpa-rs"; do
+for dir in "$TARGET/release" "${LOCALAPPDATA:-$HOME/AppData/Local}/sherpa-rs"; do
   [[ -d "$dir" ]] || continue
   while IFS= read -r dll; do
     cp -n "$dll" "$OUT/"
@@ -49,6 +55,24 @@ for dir in "$ROOT/target/release" "${LOCALAPPDATA:-$HOME/AppData/Local}/sherpa-r
 done
 [[ $found == 1 ]] || { echo "sherpa-onnx DLLs not found; cargo clean and build again"; exit 1; }
 
+# The Vulkan build links vulkan-1.dll, which only GPU drivers install: a
+# bundled loader lets the app start anywhere (without a Vulkan driver
+# Whisper just finds no GPU and runs on the CPU). Next to the exe it's
+# found first; it's Khronos' loader, which works with every driver.
+if [[ $variant == vulkan ]]; then
+  loader=$(find "$VULKAN_SDK" -iname vulkan-1.dll -path '*[Bb]in*' 2>/dev/null | head -1 || true)
+  [[ -n "$loader" ]] || loader=$(find "$VULKAN_SDK" -iname vulkan-1.dll 2>/dev/null | head -1 || true)
+  # The SDK installs the loader into System32 rather than its own folder.
+  sys32="${SYSTEMROOT:-C:/Windows}/System32/vulkan-1.dll"
+  [[ -n "$loader" || ! -f "$sys32" ]] || loader="$sys32"
+  if [[ -n "$loader" ]]; then
+    cp "$loader" "$OUT/"
+    echo "Bundled the Vulkan loader from $loader"
+  else
+    echo "::warning::No vulkan-1.dll in the Vulkan SDK to bundle; the app needs a GPU driver with Vulkan to start"
+  fi
+fi
+
 # The Visual C++ runtime, for machines without the redistributable
 # (app-local deployment of these DLLs is allowed).
 sys="${SYSTEMROOT:-C:/Windows}/System32"
@@ -56,6 +80,8 @@ for dll in vcruntime140.dll vcruntime140_1.dll msvcp140.dll; do
   [[ -f "$sys/$dll" ]] && cp "$sys/$dll" "$OUT/"
 done
 
+echo "$variant" > "$OUT/build-variant.txt"
+echo "::notice::Windows zip: $variant build"
 cp LICENSE-MIT LICENSE-APACHE NOTICE "$OUT/" 2>/dev/null || true
 
 rm -f "$ZIP"
