@@ -282,9 +282,14 @@ fn read_shortcut() -> Option<String> {
     (!binding.is_empty()).then(|| binding.to_string())
 }
 
-/// Binds Super+Shift+R to `mostalgia toggle` (the CLI next to this app).
+/// Binds Super+Shift+R to `mostalgia toggle` (the CLI next to this app, or
+/// the AppImage, which runs the CLI when given a command: the paths inside
+/// it only exist while it runs).
 fn install_shortcut() -> anyhow::Result<String> {
-    let cli = std::env::current_exe()?.with_file_name(format!("mostalgia{}", std::env::consts::EXE_SUFFIX));
+    let cli = match std::env::var_os("APPIMAGE") {
+        Some(appimage) => std::path::PathBuf::from(appimage),
+        None => std::env::current_exe()?.with_file_name(format!("mostalgia{}", std::env::consts::EXE_SUFFIX)),
+    };
     anyhow::ensure!(cli.exists(), "{}", trf("mostalgia (CLI) nicht neben der App gefunden: {}", &[&cli.display()]));
     let list = gsettings(&["get", MEDIA_KEYS, "custom-keybindings"]).unwrap_or_default();
     if !list.contains(SHORTCUT_PATH) {
@@ -299,7 +304,7 @@ fn install_shortcut() -> anyhow::Result<String> {
     let binding = "<Super><Shift>r";
     for (key, value) in [
         ("name", tr("Mostalgia: Aufnahme starten/stoppen").to_string()),
-        ("command", format!("{} toggle", cli.display())),
+        ("command", format!("\"{}\" toggle", cli.display())),
         ("binding", binding.to_string()),
     ] {
         gsettings(&["set", &schema, key, &value]).ok_or_else(|| anyhow::anyhow!(tr("gsettings fehlgeschlagen")))?;
