@@ -22,10 +22,14 @@ fn main() -> Result<()> {
     let c: Value = serde_json::from_str(&std::fs::read_to_string(&corpus)?)?;
     let dir = std::env::temp_dir().join(format!("rag-eval-{}", std::process::id()));
     std::fs::create_dir_all(&dir)?;
-    if std::env::var_os("MOSTALGIA_DATA_DIR").is_none() {
-        // SAFETY: single-threaded, before anything reads it.
-        unsafe { std::env::set_var("MOSTALGIA_DATA_DIR", &dir) };
-    }
+    // A fresh library, with the models of the real data dir (the e5 model).
+    let models = paths::data_dir().join("models");
+    #[cfg(unix)]
+    let _ = std::os::unix::fs::symlink(&models, dir.join("models"));
+    #[cfg(windows)]
+    let _ = std::os::windows::fs::symlink_dir(&models, dir.join("models"));
+    // SAFETY: single-threaded, before anything else reads it.
+    unsafe { std::env::set_var("MOSTALGIA_DATA_DIR", &dir) };
     println!("embedding model: {}", if ask::embed::available() { "local e5 (keywords + meaning)" } else { "MISSING (keywords only)" });
 
     let mut ids: BTreeMap<String, (bool, i64)> = BTreeMap::new();
