@@ -274,6 +274,7 @@
 
 <!-- ───────────────────────── EPISODE 2 ───────────────────────── -->
 <section class="episode alt night" id="ep2" data-char="hoshi">
+  <link rel="stylesheet" href="scenes/ep2.css">
   <header class="ep-card">
     <div class="burst" aria-hidden="true"></div>
     <span class="ep-no" aria-hidden="true">02</span>
@@ -282,32 +283,107 @@
       <h2>Every word, as it's spoken. <span>Whisper turbo on your own GPU.</span></h2>
     </div>
   </header>
-  <div class="ep-body">
-    <aside class="stage" aria-hidden="true">
-      <div class="bubble"><span class="who">Hoshi</span><p class="say"></p></div>
-      <div class="actor"><img alt="" width="300" height="480"></div>
-      <div class="shadow"></div>
-    </aside>
-    <div class="steps">
-      <article class="step" data-pose="writing" data-say="Whisper turbo, right on your graphics card. About thirty times faster than you can talk.">
-        <div class="step-text">
+  <div class="ep-body e2-body">
+    <div class="sr-only" id="e2Desc">
+      <p>An animated scene: a video call with three people, Jonas, Priya and Layla, sharing a slide. Mostalgia's floating live-caption window sits on top of the call and writes down each line about a second after it is said, detecting the language by itself. The language chip flips from German to English to Arabic:</p>
+      <ol>
+        <li>Jonas, in German: “Können wir den Launch auf Donnerstag legen?” (Can we move the launch to Thursday?)</li>
+        <li>Priya, in English: “Thursday works if the docs are ready.”</li>
+        <li>Layla, in Arabic, shown right to left: “سأنهي الترجمة العربية يوم الأربعاء.” (I'll finish the Arabic translation on Wednesday.)</li>
+      </ol>
+      <p>Then nobody speaks. A made-up line, “Thanks for watching!”, starts to appear, but the voice detector marks the stretch as silence and the line is struck out with the tag “silence, skipped”. Below the call, the transcription engine reads “Whisper turbo, your GPU” with a latency of about one second. The switch is moved from Local to Cloud; the cloud provider is not reachable, so an error says exactly that, the recording keeps going and nothing is switched automatically. The switch is moved back to Local by hand. Hoshi, the companion, comments along the way.</p>
+    </div>
+
+    <div class="e2-scene" id="e2Scene">
+      <div class="e2-left" aria-hidden="true">
+        <div class="e2-call">
+          <div class="e2-callbar"><span class="e2-cdot"></span>Call · Thursday launch<span class="e2-clock" id="e2Clock">12:41</span></div>
+          <div class="e2-tiles">
+            <div class="e2-tile jonas" data-who="jonas"><span class="e2-av"></span><span class="e2-name">Jonas<span class="e2-eq"><i></i><i></i><i></i></span></span></div>
+            <div class="e2-tile priya" data-who="priya"><span class="e2-av"></span><span class="e2-name">Priya<span class="e2-eq"><i></i><i></i><i></i></span></span></div>
+            <div class="e2-tile layla" data-who="layla"><span class="e2-av"></span><span class="e2-name">Layla<span class="e2-eq"><i></i><i></i><i></i></span></span></div>
+          </div>
+          <div class="e2-share">
+            <div class="e2-slide"><b>Launch plan</b><i style="--w:78%"></i><i style="--w:62%"></i><i style="--w:70%"></i><span class="e2-slidechart"><i style="--h:40%"></i><i style="--h:65%"></i><i style="--h:52%"></i><i style="--h:84%"></i></span></div>
+            <div class="e2-self"><span class="e2-av"></span><span class="e2-name">Me</span></div>
+          </div>
+          <div class="e2-ctrl">
+            <span><svg viewBox="0 0 24 24" width="15" height="15"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+            <span><svg viewBox="0 0 24 24" width="15" height="15"><rect x="3" y="6" width="13" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 10l5-3v10l-5-3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></span>
+            <span><svg viewBox="0 0 24 24" width="15" height="15"><rect x="3" y="4" width="18" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 20h6M12 16v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+            <span class="leave"><svg viewBox="0 0 24 24" width="15" height="15"><path d="M3 14c5-5 13-5 18 0l-2.5 2.5-3-1.5v-2.5a10 10 0 0 0-5 0V15l-3 1.5z" fill="currentColor"/></svg></span>
+          </div>
+
+          <div class="e2-cap" id="e2Cap">
+            <div class="e2-capbar">
+              <span class="e2-rec"></span>Live captions
+              <span class="e2-lang"><small>auto</small><b id="e2Lang">AR</b></span>
+              <span class="e2-ontop" title="Always on top"><svg viewBox="0 0 24 24" width="12" height="12"><path d="M9 3h6l-1 6 3 3H7l3-3zM12 12v9" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg></span>
+              <span class="e2-op">◐</span>
+            </div>
+            <ol class="e2-lines" id="e2Lines">
+              <li class="e2-line" data-at="1.2" data-lang="DE" data-who="jonas"><b>Jonas</b><i class="e2-lt">DE</i><span class="e2-t" lang="de">Können wir den Launch auf Donnerstag legen?</span></li>
+              <li class="e2-line" data-at="4.2" data-lang="EN" data-who="priya"><b>Priya</b><i class="e2-lt">EN</i><span class="e2-t" lang="en">Thursday works if the docs are ready.</span></li>
+              <li class="e2-line rtl" data-at="7.2" data-lang="AR" data-who="layla"><b>Layla</b><i class="e2-lt">AR</i><span class="e2-t" lang="ar" dir="rtl">سأنهي الترجمة العربية يوم الأربعاء.</span></li>
+              <li class="e2-line ghost" data-at="10.0"><span class="e2-t">Thanks for watching!</span><span class="e2-skip">silence · skipped</span></li>
+            </ol>
+          </div>
+        </div>
+
+        <div class="e2-eng">
+          <div class="e2-engrow">
+            <span class="e2-switch" id="e2Switch"><span class="e2-opt on" data-mode="local"><svg viewBox="0 0 24 24" width="12" height="12"><rect x="5" y="5" width="14" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Local</span><span class="e2-opt" data-mode="hybrid">Hybrid</span><span class="e2-opt" data-mode="cloud"><svg viewBox="0 0 24 24" width="12" height="12"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18" fill="none" stroke="currentColor" stroke-width="2"/></svg>Cloud</span></span>
+            <span class="e2-engine" id="e2Engine"><b id="e2Eng">Whisper turbo</b><small id="e2Where">your GPU · free</small></span>
+            <span class="e2-lat">Latency <b id="e2Lat">0.9 s</b></span>
+          </div>
+          <div class="e2-vad">
+            <span class="e2-vlabel">Voice activity</span>
+            <div class="e2-lane" id="e2Lane">
+              <span class="e2-seg jonas" data-from="0.4" data-to="3.0"><i style="--h:.35"></i><i style="--h:.94"></i><i style="--h:.47"></i><i style="--h:.49"></i><i style="--h:.46"></i><i style="--h:.76"></i><i style="--h:.77"></i><i style="--h:.63"></i><i style="--h:.47"></i><em>Jonas</em></span>
+              <span class="e2-seg priya" data-from="3.4" data-to="6.0"><i style="--h:.84"></i><i style="--h:.44"></i><i style="--h:.81"></i><i style="--h:.37"></i><i style="--h:.57"></i><i style="--h:.53"></i><i style="--h:.88"></i><i style="--h:.62"></i><em>Priya</em></span>
+              <span class="e2-seg layla" data-from="6.4" data-to="9.0"><i style="--h:.53"></i><i style="--h:.62"></i><i style="--h:.89"></i><i style="--h:.48"></i><i style="--h:.48"></i><i style="--h:.36"></i><i style="--h:.87"></i><i style="--h:.48"></i><em>Layla</em></span>
+              <span class="e2-seg sil" data-from="9.2" data-to="11.2"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><em>silence · skipped</em></span>
+            </div>
+          </div>
+          <div class="e2-slot" id="e2Slot">
+            <p class="e2-ok"><svg viewBox="0 0 24 24" width="14" height="14"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Transcribing on this computer. The audio is saved to disk as it records.</span></p>
+            <p class="e2-err" id="e2Err"><svg viewBox="0 0 24 24" width="14" height="14"><path d="M12 3 2 20h20zM12 10v4M12 17v.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg><span><b>Cloud transcription failed:</b> provider not reachable. Is the server running? <small>Recording continues and is saved. Nothing was switched for you.</small></span><span class="e2-stamp">No silent fallbacks</span></p>
+          </div>
+        </div>
+      </div>
+
+      <div class="e2-cast">
+        <aside class="stage" aria-hidden="true">
+          <div class="bubble"><span class="who">Hoshi</span><p class="say" id="e2Say">Back on your GPU. Every switch is yours to make.</p></div>
+          <div class="actor"><img id="e2Hoshi" src="assets/cast/hoshi-idle.webp" alt="" width="300" height="480" loading="lazy"></div>
+          <div class="shadow"></div>
+        </aside>
+        <p class="e2-foot"><button type="button" class="e2-replay" id="e2Replay" aria-label="Replay the live transcription animation" hidden>↻ Replay</button></p>
+      </div>
+    </div>
+    <!-- main.js takes the companion's pose for the phone corner guide from the first .step; no line, Hoshi talks in the scene -->
+    <div class="step e2-shim" hidden data-pose="listening" data-say=""></div>
+
+    <ul class="e2-points">
+      <li><b>~1 second</b> Whisper turbo on your GPU</li>
+      <li><b>Any language</b> detected, right-to-left too</li>
+      <li><b>Floating captions</b> over any call</li>
+      <li><b>No phantom lines</b> silence stays silent</li>
+      <li><b>Local, Hybrid or Cloud</b> no silent fallbacks</li>
+    </ul>
+
+    <details class="e2-more">
+      <summary>All details</summary>
+      <div class="e2-more-grid">
+        <div class="e2-d">
           <h3>Whisper, locally, fast</h3>
           <p><b>Whisper large-v3-turbo</b> through whisper.cpp on <b>Vulkan</b> (NVIDIA, AMD and Intel, no extra toolkits), CUDA, or the CPU. Around <b>30× faster than real time</b> on a laptop GPU, multilingual, and nothing leaves your machine.</p>
         </div>
-        <figure class="shot"><img src="assets/shots/transcript.webp" alt="Transcript with timestamps and speaker chips in the night theme" loading="lazy" width="1240" height="820"></figure>
-      </article>
-      <article class="step" data-pose="listening" data-say="I don't wait for the sentence to end. You see the words while they're still being said.">
-        <div class="step-text">
+        <div class="e2-d">
           <h3>Words in about a second</h3>
           <p><b>Provisional text appears after ~1 s</b> while someone is still talking, then is replaced by the clean line when they pause.</p>
-          <div class="live-demo" id="liveDemo" aria-label="A demonstration of provisional text turning into a final line">
-            <div class="ld-line"><span class="ld-ts">00:15</span><span class="ld-chip others">Others</span><span class="ld-text final">We're about ten percent under plan right now.</span></div>
-            <div class="ld-line"><span class="ld-ts">00:27</span><span class="ld-chip me">Me</span><span class="ld-text" id="ldType"></span></div>
-          </div>
         </div>
-      </article>
-      <article class="step" data-pose="thinking" data-say="Silence stays silence. No phantom “Thanks for watching!” in your notes.">
-        <div class="step-text">
+        <div class="e2-d">
           <h3>Clean by design</h3>
           <ul class="ticks">
             <li><b>Silero VAD</b> decides what's speech, so silence never turns into hallucinated lines.</li>
@@ -315,34 +391,27 @@
             <li>After you stop, a <b>final pass</b> re-transcribes the full tracks for the archive.</li>
           </ul>
         </div>
-      </article>
-      <article class="step" data-pose="talking" data-say="Any language Whisper speaks. Right-to-left too. I'll detect it, or you pin it.">
-        <div class="step-text">
+        <div class="e2-d">
           <h3>Any language</h3>
           <p>Mostalgia auto-detects the language or lets you pin one. Right-to-left transcripts like Arabic render properly, and the summary is written in the meeting's own language.</p>
         </div>
-        <figure class="shot"><img src="assets/shots/arabic.webp" alt="An Arabic transcript rendered right to left" loading="lazy" width="1240" height="820"></figure>
-      </article>
-      <article class="step" data-pose="idle" data-say="Need the words in front of you? Live captions float above every window.">
-        <div class="step-text">
+        <div class="e2-d">
           <h3>Floating live captions</h3>
           <p>An optional always-on-top caption window shows the latest lines and who spoke, above Teams or Zoom, without stealing keyboard focus. Flag a line to bookmark it; place, size and opacity are remembered.</p>
-          <div class="captions-mock" aria-hidden="true">
-            <div class="cm-bar"><span class="rec"></span> Live · 12:41 <span class="cm-op">◐</span></div>
-            <p><b>Anna</b> Could you send a new forecast by Friday?</p>
-            <p><b>Me</b> Sure, I just need the numbers from sales<span class="caret"></span></p>
-          </div>
         </div>
-      </article>
-      <article class="step" data-pose="error" data-say="If an engine fails, I say which one and why. Your audio stays safe on disk.">
-        <div class="step-text">
+        <div class="e2-d">
           <h3>Local, Hybrid or Cloud, and no silent fallbacks</h3>
           <p>Use Whisper on your GPU, a self-hosted Whisper server, or a cloud service (OpenAI, Groq) for machines without a GPU, chosen separately for live text and the final pass, with the <b>cost per hour shown</b>. If a provider fails you see which one and why, the audio stays on disk, and <b>Transcribe again</b> lets you pick another engine. Nothing switches behind your back.</p>
         </div>
+      </div>
+      <div class="e2-shots">
+        <figure class="shot"><img src="assets/shots/transcript.webp" alt="Transcript with timestamps and speaker chips in the night theme" loading="lazy" width="1240" height="820"></figure>
+        <figure class="shot"><img src="assets/shots/arabic.webp" alt="An Arabic transcript rendered right to left" loading="lazy" width="1240" height="820"></figure>
         <figure class="shot"><img src="assets/shots/engine-error.webp" alt="A clear error naming the transcription provider that failed" loading="lazy" width="1240" height="820"></figure>
-      </article>
-    </div>
+      </div>
+    </details>
   </div>
+  <script src="scenes/ep2.js" defer></script>
 </section>
 
 <!-- ───────────────────────── EPISODE 3 ───────────────────────── -->
