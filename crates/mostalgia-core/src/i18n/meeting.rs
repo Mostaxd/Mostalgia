@@ -158,6 +158,13 @@ pub const EN: &[(&str, &str)] = &[
     ("Audio belegt {} in 1 Besprechung.", "Audio takes {} in 1 meeting."),
     ("Das nächste Aufräumen löscht das Audio von 1 Besprechung ({}).", "The next cleanup deletes the audio of 1 meeting ({})."),
     ("Audio von 1 Besprechung löschen ({})?", "Delete the audio of 1 meeting ({})?"),
+    // Glossary
+    ("Korrektur nicht gespeichert: {}", "Correction not saved: {}"),
+    ("Gemerkt: „{}“ wird künftig zu „{}“.", "Remembered: “{}” becomes “{}” from now on."),
+    ("Gemerkt: „{}“ wird zu „{}“ — {} Zeilen und {} Zusammenfassungen in {} Besprechungen korrigiert.", "Remembered: “{}” becomes “{}” — corrected {} lines and {} summaries in {} meetings."),
+    ("„{}“ künftig immer zu „{}“ korrigieren?", "Always correct “{}” to “{}” from now on?"),
+    ("Merken", "Remember"),
+    ("Merken und ältere korrigieren", "Remember and fix older meetings"),
     // Export and "Save to Documents"
     ("Alles", "Everything"),
     ("Nur Notizen", "Notes only"),

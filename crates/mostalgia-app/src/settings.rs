@@ -16,6 +16,7 @@ use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use mostalgia_core::ask::{embed::Model as EmbedModel, reembed};
 use mostalgia_core::audio::{self, SourceInfo};
 use mostalgia_core::cloud_stt;
+use mostalgia_core::glossary::{self, Glossary, Suggestion, SuggestionKind};
 use mostalgia_core::store::Store;
 use mostalgia_core::config::{Config, Mode, NotesMode, SttChoice};
 use mostalgia_core::connections::{self, Api, Connection, PRESETS};
@@ -97,6 +98,16 @@ pub struct SettingsView {
     /// The known voice being renamed, and the voice asked about forgetting.
     voice_rename: Option<(String, Entity<InputState>)>,
     voice_forget: Option<String>,
+    /// Terms and fix rules for transcription.
+    glossary: Glossary,
+    glossary_term: Entity<InputState>,
+    glossary_from: Entity<InputState>,
+    glossary_to: Entity<InputState>,
+    /// Terms the library suggests (`None` until asked for).
+    glossary_suggestions: Option<Vec<Suggestion>>,
+    /// Looking for suggestions or correcting the library.
+    glossary_busy: bool,
+    glossary_status: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -388,6 +399,19 @@ impl SettingsView {
                 cx.notify();
             }
         });
+        let glossary_term = cx.new(|cx| InputState::new(window, cx).placeholder(tr("z. B. Brightwell")));
+        let glossary_from = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Falsch gehört, z. B. Bright Well")));
+        let glossary_to = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Richtig, z. B. Brightwell")));
+        let term_sub = cx.subscribe_in(&glossary_term, window, |this, _, event: &InputEvent, window, cx| {
+            if let InputEvent::PressEnter { .. } = event {
+                this.add_glossary_term(window, cx);
+            }
+        });
+        let fix_sub = cx.subscribe_in(&glossary_to, window, |this, _, event: &InputEvent, window, cx| {
+            if let InputEvent::PressEnter { .. } = event {
+                this.add_glossary_fix(window, cx);
+            }
+        });
         let config = Config::load();
         let category = Category::parse(&config.settings_category);
         let mut this = Self {
@@ -426,7 +450,14 @@ impl SettingsView {
             voices: Voices::load(),
             voice_rename: None,
             voice_forget: None,
-            _subscriptions: vec![sub, custom_sub, url_sub, focus_sub],
+            glossary: Glossary::load(),
+            glossary_term,
+            glossary_from,
+            glossary_to,
+            glossary_suggestions: None,
+            glossary_busy: false,
+            glossary_status: None,
+            _subscriptions: vec![sub, custom_sub, url_sub, focus_sub, term_sub, fix_sub],
         };
         this.load_system_status(cx);
         this.load_keys(cx);
@@ -3089,6 +3120,13 @@ impl Render for SettingsView {
 
         cards.push(Card {
             category: Category::Ki,
+            title: "Glossar",
+            keywords: "glossar glossary begriffe terms wörter words vokabular vocabulary namen names fachbegriffe jargon schreibweise spelling korrektur korrigieren correction correct fix falsch verstanden misheard whisper hinweis hint prompt jira",
+            wide: true,
+            element: self.render_glossary(cx).into_any_element(),
+        });
+        cards.push(Card {
+            category: Category::Ki,
             title: "Suche",
             keywords: "suche search bedeutung meaning semantisch semantic embedding embeddings vektoren vectors e5 openai together ollama lokal local cloud neu einbetten re-embed index",
             wide: false,
@@ -3560,6 +3598,231 @@ impl SettingsView {
         } else {
             cx.notify();
         }
+    }
+
+    fn render_glossary(&mut self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
+        let muted = theme.muted_foreground;
+        let chip = |id: (&'static str, usize), label: String, on_remove: Box<dyn Fn(&mut Self, &mut Context<Self>)>, cx: &mut Context<Self>| {
+            h_flex()
+                .gap_1()
+                .pl_2()
+                .rounded(theme.radius)
+                .bg(theme.muted)
+                .text_sm()
+                .child(label)
+                .child(Button::new(id).xsmall().ghost().icon(IconName::X).tooltip(tr("Entfernen")).on_click(cx.listener(move |this, _, _, cx| {
+                    on_remove(this, cx);
+                    this.save_glossary(cx);
+                })))
+        };
+
+        let mut terms = h_flex().gap_1().flex_wrap();
+        for (ix, term) in self.glossary.terms.clone().into_iter().enumerate() {
+            let t = term.clone();
+            terms = terms.child(chip(("glossary-term", ix), term, Box::new(move |this, _| { this.glossary.remove_term(&t); }), cx));
+        }
+        let mut fixes = v_flex().gap_1();
+        for (ix, fix) in self.glossary.fixes.clone().into_iter().enumerate() {
+            let from = fix.from.clone();
+            fixes = fixes.child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .text_sm()
+                    .child(div().text_color(muted).line_through().child(fix.from.clone()))
+                    .child(Icon::new(IconName::ArrowRight).xsmall().text_color(muted))
+                    .child(div().flex_1().child(fix.to.clone()))
+                    .child(Button::new(("glossary-fix", ix)).xsmall().ghost().icon(IconName::Trash).tooltip(tr("Entfernen")).on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            this.glossary.remove_fix(&from);
+                            this.save_glossary(cx);
+                        },
+                    ))),
+            );
+        }
+
+        let suggestions: Option<AnyElement> = self.glossary_suggestions.clone().map(|list| {
+            if list.is_empty() {
+                return div().text_sm().text_color(muted).child(tr("Keine neuen Vorschläge — Dokumente hochladen oder Sprecher benennen hilft.")).into_any_element();
+            }
+            let mut row = h_flex().gap_1().flex_wrap();
+            for (ix, s) in list.iter().enumerate() {
+                let what = match s.kind {
+                    SuggestionKind::Name => tr("Name"),
+                    SuggestionKind::ProjectKey => tr("Ticket-Projekt"),
+                    SuggestionKind::Term => tr("aus Dokumenten"),
+                };
+                let term = s.term.clone();
+                row = row.child(
+                    Button::new(("glossary-suggest", ix))
+                        .xsmall()
+                        .outline()
+                        .icon(IconName::Plus)
+                        .label(s.term.clone())
+                        .tooltip(what)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.glossary.add_term(&term);
+                            if let Some(list) = &mut this.glossary_suggestions {
+                                list.retain(|s| s.term != term);
+                            }
+                            this.save_glossary(cx);
+                        })),
+                );
+            }
+            v_flex()
+                .gap_2()
+                .child(row)
+                .child(h_flex().child(Button::new("glossary-add-all").xsmall().ghost().label(tr("Alle hinzufügen")).on_click(cx.listener(|this, _, _, cx| {
+                    for s in this.glossary_suggestions.take().unwrap_or_default() {
+                        this.glossary.add_term(&s.term);
+                    }
+                    this.glossary_suggestions = Some(Vec::new());
+                    this.save_glossary(cx);
+                }))))
+                .into_any_element()
+        });
+
+        let hint_len = self.glossary.hint().map_or(0, |h| h.len());
+        ui::card(cx)
+            .child(div().font_semibold().child(tr("Glossar")))
+            .child(div().text_xs().text_color(muted).child(tr(
+                "Eigene Begriffe, Namen und Projektwörter. Die Transkription bekommt sie als Hinweis und schreibt sie richtig; Korrekturen ersetzen falsch Gehörtes in jedem neuen Transkript.",
+            )))
+            .child(div().text_sm().font_medium().child(tr("Begriffe")))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(div().flex_1().child(Input::new(&self.glossary_term).small()))
+                    .child(Button::new("glossary-add").small().outline().icon(IconName::Plus).label(tr("Hinzufügen")).on_click(cx.listener(
+                        |this, _, window, cx| this.add_glossary_term(window, cx),
+                    ))),
+            )
+            .when(!self.glossary.terms.is_empty(), |el| el.child(terms))
+            .when(hint_len >= glossary::MAX_HINT_CHARS - 40, |el| {
+                el.child(div().text_xs().text_color(theme.warning).child(tr(
+                    "Die Liste ist lang: nur die ersten Begriffe gehen als Hinweis mit. Die wichtigsten nach vorn, selten gebrauchte entfernen.",
+                )))
+            })
+            .child(div().text_sm().font_medium().child(tr("Korrekturen")))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .flex_wrap()
+                    .child(div().flex_1().min_w(px(140.)).child(Input::new(&self.glossary_from).small()))
+                    .child(Icon::new(IconName::ArrowRight).small().text_color(muted))
+                    .child(div().flex_1().min_w(px(140.)).child(Input::new(&self.glossary_to).small()))
+                    .child(Button::new("glossary-fix-add").small().outline().icon(IconName::Plus).label(tr("Hinzufügen")).on_click(cx.listener(
+                        |this, _, window, cx| this.add_glossary_fix(window, cx),
+                    ))),
+            )
+            .when(!self.glossary.fixes.is_empty(), |el| el.child(fixes))
+            .child(div().text_xs().text_color(muted).child(tr(
+                "Tipp: Korrigierst du ein Wort im Transkript, bietet Mostalgia an, es sich als Korrektur zu merken.",
+            )))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .flex_wrap()
+                    .child(
+                        Button::new("glossary-suggest")
+                            .small()
+                            .outline()
+                            .icon(IconName::Sparkles)
+                            .label(tr("Vorschläge aus Dokumenten & Namen"))
+                            .disabled(self.glossary_busy)
+                            .on_click(cx.listener(|this, _, _, cx| this.suggest_glossary(cx))),
+                    )
+                    .child(
+                        Button::new("glossary-apply")
+                            .small()
+                            .ghost()
+                            .label(tr("Ältere Besprechungen korrigieren"))
+                            .disabled(self.glossary_busy || self.glossary.fixes.is_empty())
+                            .on_click(cx.listener(|this, _, _, cx| this.apply_glossary_to_library(cx))),
+                    ),
+            )
+            .children(suggestions)
+            .when_some(self.glossary_status.clone(), |el, status| el.child(div().text_sm().text_color(muted).child(status)))
+    }
+
+    fn add_glossary_term(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let value = self.glossary_term.read(cx).value().to_string();
+        // Several at once, separated by commas.
+        let mut added = false;
+        for term in value.split(',') {
+            added |= self.glossary.add_term(term);
+        }
+        if added {
+            self.glossary_term.update(cx, |s, cx| s.set_value("", window, cx));
+            self.save_glossary(cx);
+        }
+    }
+
+    fn add_glossary_fix(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let from = self.glossary_from.read(cx).value().to_string();
+        let to = self.glossary_to.read(cx).value().to_string();
+        if self.glossary.add_fix(&from, &to) {
+            self.glossary_from.update(cx, |s, cx| s.set_value("", window, cx));
+            self.glossary_to.update(cx, |s, cx| s.set_value("", window, cx));
+            self.save_glossary(cx);
+        }
+    }
+
+    fn suggest_glossary(&mut self, cx: &mut Context<Self>) {
+        self.glossary_busy = true;
+        self.glossary_status = None;
+        cx.notify();
+        let glossary = self.glossary.clone();
+        let task = cx.background_spawn(async move { glossary::suggest(&Store::open(&paths::database())?, &glossary) });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                this.glossary_busy = false;
+                match result {
+                    Ok(list) => this.glossary_suggestions = Some(list),
+                    Err(e) => this.glossary_status = Some(trf("Keine Vorschläge: {}", &[&format!("{e:#}")]).into()),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Runs every fix rule over the stored transcripts and summaries.
+    fn apply_glossary_to_library(&mut self, cx: &mut Context<Self>) {
+        self.glossary_busy = true;
+        self.glossary_status = Some(tr("Ältere Besprechungen werden korrigiert …").into());
+        cx.notify();
+        let fixer = self.glossary.fixer();
+        let task = cx.background_spawn(async move { glossary::apply_to_library(&mut Store::open(&paths::database())?, &fixer) });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                this.glossary_busy = false;
+                this.glossary_status = Some(
+                    match result {
+                        Ok(done) => trf(
+                            "{} Zeilen und {} Zusammenfassungen in {} Besprechungen korrigiert.",
+                            &[&done.lines, &done.summaries, &done.meetings],
+                        ),
+                        Err(e) => trf("Ältere Besprechungen nicht korrigiert: {}", &[&format!("{e:#}")]),
+                    }
+                    .into(),
+                );
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn save_glossary(&mut self, cx: &mut Context<Self>) {
+        if let Err(e) = self.glossary.save() {
+            self.glossary_status = Some(trf("Glossar nicht gespeichert: {}", &[&format!("{e:#}")]).into());
+        }
+        cx.notify();
     }
 
     fn save_voices(&mut self, cx: &mut Context<Self>) {
