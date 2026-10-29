@@ -1149,7 +1149,6 @@ fn export(id: i64, format: Option<&str>, output: Option<PathBuf>, only: Option<&
 }
 
 /// Sends a command to the running app, or launches it.
-#[cfg_attr(not(unix), allow(unused_variables))]
 fn control(cmd: &str, launch_args: &[&str]) -> Result<()> {
     #[cfg(unix)]
     if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(paths::control_socket()) {
@@ -1158,6 +1157,12 @@ fn control(cmd: &str, launch_args: &[&str]) -> Result<()> {
         let mut reply = String::new();
         let _ = stream.read_to_string(&mut reply);
         anyhow::ensure!(reply.trim() == "ok", "mostalgia-app: {}", reply.trim());
+        return Ok(());
+    }
+    // Windows: a localhost port announced in the data directory.
+    #[cfg(not(unix))]
+    if let Ok(reply) = mostalgia_core::control_channel::send(&mostalgia_core::control_channel::endpoint_file(), cmd) {
+        anyhow::ensure!(reply == "ok", "mostalgia-app: {reply}");
         return Ok(());
     }
     // Not running: start the app (next to this binary, else from PATH).

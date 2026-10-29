@@ -49,6 +49,10 @@ libpulse-simple-binding = "2.29.0"
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 cpal = "0.18"
 
+# Call detection: who uses the microphone (see `callwatch`).
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+
 # Core Audio (system audio tap, call detection) and ScreenCaptureKit (system
 # audio before macOS 14.2) on macOS. Same objc2 generation as GPUI's.
 [target.'cfg(target_os = "macos")'.dependencies]

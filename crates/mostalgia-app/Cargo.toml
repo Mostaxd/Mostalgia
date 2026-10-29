@@ -34,8 +34,21 @@ zbus = { version = "5.19", default-features = false, features = ["blocking-api",
 # Same x11rb as GPUI's Linux backend.
 x11rb = { version = "0.13.2", features = ["shape", "randr"] }
 
+# The tray icon and notifications everywhere else (Windows, macOS).
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+tray-icon = "0.26"
+notify-rust = "4.18"
+
+# Mori's desktop window and the captions window (always on top, no taskbar
+# entry, click-through), the tray's message loop, and starting with Windows.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse"] }
+winreg = "0.56"
+
 # Mori's desktop window and the live captions on macOS (same objc2 as GPUI's).
 [target.'cfg(target_os = "macos")'.dependencies]
+# Notifications with an "Aufnahme starten" button (what notify-rust uses there).
+mac-notification-sys = "0.6"
 block2 = "0.6"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-core-foundation", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSGraphics", "NSPanel", "NSResponder", "NSRunningApplication", "NSScreen", "NSView", "NSWindow"] }

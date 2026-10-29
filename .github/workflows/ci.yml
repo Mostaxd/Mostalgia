@@ -68,9 +68,9 @@ jobs:
           cache-directories: ~/.cache/sherpa-rs
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # Errors and failed tests also become annotations (see the script).
-      - run: scripts/ci-cargo.sh cargo build --workspace --all-targets
+      - run: bash scripts/ci-cargo.sh cargo build --workspace --all-targets
         shell: bash
-      - run: scripts/ci-cargo.sh cargo test --workspace --no-fail-fast
+      - run: bash scripts/ci-cargo.sh cargo test --workspace --no-fail-fast
         shell: bash
 
   windows:
@@ -87,9 +87,9 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # CMake and LLVM (for whisper.cpp and its bindings) come with the runner.
       # Errors and failed tests also become annotations (see the script).
-      - run: scripts/ci-cargo.sh cargo build --workspace --all-targets
+      - run: bash scripts/ci-cargo.sh cargo build --workspace --all-targets
         shell: bash
-      - run: scripts/ci-cargo.sh cargo test --workspace --no-fail-fast
+      - run: bash scripts/ci-cargo.sh cargo test --workspace --no-fail-fast
         shell: bash
 
   macos:
