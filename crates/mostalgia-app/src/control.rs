@@ -1,7 +1,9 @@
 //! Controlling the running app from outside: a Unix socket for
 //! `mostalgia toggle` (bind it to a GNOME keyboard shortcut — Wayland doesn't
-//! let apps grab global hotkeys) and a tray icon (StatusNotifierItem; GNOME
-//! shows it with the AppIndicator extension Ubuntu ships).
+//! let apps grab global hotkeys; on Windows a token-protected localhost port,
+//! see `mostalgia_core::control_channel`) and a tray icon (StatusNotifierItem
+//! on Linux — GNOME shows it with the AppIndicator extension Ubuntu ships —
+//! and the system tray elsewhere).
 
 #[cfg(unix)]
 use std::io::{BufRead, BufReader, Write};
@@ -11,6 +13,7 @@ use std::sync::mpsc::Sender;
 
 #[cfg(target_os = "linux")]
 use mostalgia_core::i18n::tr;
+#[cfg(unix)]
 use mostalgia_core::paths;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,7 +30,6 @@ pub enum Command {
 }
 
 impl Command {
-    #[cfg_attr(not(unix), allow(dead_code))]
     fn parse(s: &str) -> Option<Self> {
         Some(match s.trim() {
             "toggle" => Command::Toggle,
@@ -73,13 +75,25 @@ pub fn listen(tx: Sender<Command>) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Listens on a localhost port announced (with a token) in the data
+/// directory. Fails if another instance already listens.
 #[cfg(not(unix))]
-pub fn listen(_tx: Sender<Command>) -> std::io::Result<()> {
-    Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "no control channel on this system yet"))
+pub fn listen(tx: Sender<Command>) -> std::io::Result<()> {
+    use mostalgia_core::control_channel;
+    control_channel::serve(&control_channel::endpoint_file(), move |line| match Command::parse(line) {
+        Some(cmd) => {
+            let _ = tx.send(cmd);
+            true
+        }
+        None => false,
+    })
 }
 
 pub fn cleanup() {
+    #[cfg(unix)]
     let _ = std::fs::remove_file(paths::control_socket());
+    #[cfg(not(unix))]
+    mostalgia_core::control_channel::cleanup(&mostalgia_core::control_channel::endpoint_file());
 }
 
 pub struct Tray {
