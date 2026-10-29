@@ -82,6 +82,8 @@ struct Backend {
     _inner: Inner,
 }
 
+// Held for their Drop (which stops the capture).
+#[allow(dead_code)]
 enum Inner {
     Tap(Tap),
     Sck(Sck),
@@ -102,6 +104,26 @@ impl Backend {
 
 // ---------------------------------------------------------------------------
 // Core Audio process tap (macOS 14.2+)
+
+/// Logs setup steps that take long (macOS may wait on a permission or the
+/// audio server), to tell where a slow start went.
+struct Phases(std::cell::Cell<std::time::Instant>);
+
+impl Default for Phases {
+    fn default() -> Self {
+        Self(std::cell::Cell::new(std::time::Instant::now()))
+    }
+}
+
+impl Phases {
+    fn done(&self, what: &str) {
+        let took = self.0.get().elapsed();
+        if took > Duration::from_secs(1) {
+            eprintln!("[mostalgia] system audio: {what} took {took:.1?}");
+        }
+        self.0.set(std::time::Instant::now());
+    }
+}
 
 /// `AudioHardwareCreateProcessTap` / `AudioHardwareDestroyProcessTap`, looked
 /// up at run time: linked directly, the app wouldn't start before 14.2.
@@ -140,6 +162,7 @@ impl Tap {
         {
             exclude.push(NSNumber::new_u32(me));
         }
+        let t = Phases::default();
         let desc = unsafe {
             let d = CATapDescription::initMonoGlobalTapButExcludeProcesses(CATapDescription::alloc(), &NSArray::from_retained_slice(&exclude));
             d.setName(&NSString::from_str("Mostalgia"));
@@ -150,6 +173,7 @@ impl Tap {
         let tap_uid = unsafe { desc.UUID().UUIDString() };
         let mut tap: AudioObjectID = 0;
         let status = unsafe { create(Retained::as_ptr(&desc).cast(), &mut tap) };
+        t.done("creating the tap");
         anyhow::ensure!(status == 0 && tap != 0, "creating the process tap failed (OSStatus {status}); is system audio recording allowed for Mostalgia?");
 
         let mut this = Self { rate: 48_000.0, tap, aggregate: 0, proc_id: None, destroy_tap, sender: std::ptr::null_mut() };
@@ -168,6 +192,7 @@ impl Tap {
         // the default output device (so it runs, and delivers silence,
         // while nothing plays).
         let output_uid = default_output_uid();
+        t.done("reading the output device");
         let key = |k: &CStr| NSString::from_str(k.to_str().unwrap_or_default());
         let dict = |pairs: &[(&CStr, &AnyObject)]| -> Retained<NSDictionary<NSString, AnyObject>> {
             let keys: Vec<Retained<NSString>> = pairs.iter().map(|(k, _)| key(k)).collect();
@@ -201,6 +226,7 @@ impl Tap {
             let cf: &CFDictionary = &*Retained::as_ptr(&description).cast::<CFDictionary>();
             AudioHardwareCreateAggregateDevice(cf, NonNull::from(&mut aggregate))
         };
+        t.done("creating the aggregate device");
         anyhow::ensure!(status == 0 && aggregate != 0, "creating the aggregate device failed (OSStatus {status})");
         this.aggregate = aggregate;
 
@@ -210,6 +236,7 @@ impl Tap {
         anyhow::ensure!(status == 0 && proc_id.is_some(), "registering the audio callback failed (OSStatus {status})");
         this.proc_id = proc_id;
         let status = unsafe { AudioDeviceStart(aggregate, proc_id) };
+        t.done("starting the device");
         anyhow::ensure!(status == 0, "starting the tap failed (OSStatus {status})");
         Ok(this)
     }
@@ -505,14 +532,28 @@ mod tests {
         assert!((mono[0] - 0.3).abs() < 1e-6 && (mono[1] - 0.5).abs() < 1e-6, "{mono:?}");
     }
 
-    /// Asks macOS for a tap (or ScreenCaptureKit). On CI it may be refused
-    /// (no permission); either way it must answer, not hang or crash.
+    /// Asks macOS for a tap (or ScreenCaptureKit). Without permission it
+    /// may be refused; when it starts, audio (silence at least) must flow,
+    /// and stopping must not hang or crash.
     #[test]
     fn starting_system_audio_answers() {
-        let (tx, _rx) = crossbeam_channel::unbounded();
+        let (tx, rx) = crossbeam_channel::unbounded();
         let started = std::time::Instant::now();
         let result = Backend::start(RawSink::new(tx, 1));
-        eprintln!("system audio backend: {:?}", result.as_ref().map(|b| b.rate).map_err(|e| format!("{e:#}")));
-        assert!(started.elapsed() < Duration::from_secs(40));
+        let took = started.elapsed();
+        eprintln!("system audio backend: {:?} after {took:?}", result.as_ref().map(|b| b.rate).map_err(|e| format!("{e:#}")));
+        let Ok(backend) = result else { return };
+        let mut samples = 0usize;
+        let until = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < until && samples < 4_800 {
+            if let Ok(crate::audio_pump::Raw::Audio(a)) = rx.recv_timeout(Duration::from_millis(200)) {
+                samples += a.len();
+            }
+        }
+        let stopping = std::time::Instant::now();
+        drop(backend);
+        eprintln!("{samples} samples, stopped in {:?}", stopping.elapsed());
+        assert!(samples >= 4_800, "the started backend (after {took:?}) delivered only {samples} samples in 5 s");
+        assert!(took < Duration::from_secs(20), "starting took {took:?}");
     }
 }
