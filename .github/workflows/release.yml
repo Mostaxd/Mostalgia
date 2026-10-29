@@ -120,6 +120,8 @@ jobs:
         run: |
           rm -rf smoke && mkdir smoke && cd smoke
           7z x ../dist/Mostalgia-windows-x86_64.zip >/dev/null
+          ls -l Mostalgia
+          echo "::notice::zip contents: $(ls Mostalgia | tr '\n' ' ')"
           ./Mostalgia/mostalgia.exe help
           ./Mostalgia/mostalgia.exe download-models --list
       - uses: actions/upload-artifact@v4

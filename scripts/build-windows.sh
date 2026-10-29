@@ -62,6 +62,9 @@ done
 if [[ $variant == vulkan ]]; then
   loader=$(find "$VULKAN_SDK" -iname vulkan-1.dll -path '*[Bb]in*' 2>/dev/null | head -1 || true)
   [[ -n "$loader" ]] || loader=$(find "$VULKAN_SDK" -iname vulkan-1.dll 2>/dev/null | head -1 || true)
+  # The SDK installs the loader into System32 rather than its own folder.
+  sys32="${SYSTEMROOT:-C:/Windows}/System32/vulkan-1.dll"
+  [[ -n "$loader" || ! -f "$sys32" ]] || loader="$sys32"
   if [[ -n "$loader" ]]; then
     cp "$loader" "$OUT/"
     echo "Bundled the Vulkan loader from $loader"
