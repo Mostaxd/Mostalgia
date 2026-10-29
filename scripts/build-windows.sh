@@ -24,7 +24,12 @@ fi
 # In CI, compiler errors also become annotations.
 run=()
 [[ -n "${GITHUB_ACTIONS:-}" ]] && run=(bash scripts/ci-cargo.sh)
-"${run[@]}" cargo build --release "${features[@]}" -p mostalgia-app -p mostalgia
+if ! "${run[@]}" cargo build --release "${features[@]}" -p mostalgia-app -p mostalgia; then
+  [[ ${#features[@]} -gt 0 ]] || exit 1
+  # A zip without GPU support beats no zip.
+  echo "::warning::The Vulkan build failed; packaging the CPU build"
+  "${run[@]}" cargo build --release -p mostalgia-app -p mostalgia
+fi
 
 rm -rf "$OUT"
 mkdir -p "$OUT"

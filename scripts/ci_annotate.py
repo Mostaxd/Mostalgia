@@ -52,8 +52,17 @@ def compiler_blocks(lines):
             continue
         block = [lines[i]]
         j = i + 1
-        # A diagnostic runs to the next blank line; a failed build script
-        # dumps its whole output, so cap it.
+        if m.group(3).startswith("failed to run custom build command"):
+            # A build script's whole output follows, blank lines and all;
+            # its end (stderr, the panic) says what went wrong.
+            while j < len(lines) and not HEAD.match(lines[j]):
+                j += 1
+            body = [l for l in lines[i + 1 : j] if l.strip() and "cargo:rerun-if" not in l and not re.match(r"^\s*\w+ = (None|Some)", l)]
+            block += body[-(MAX_LINES - 1) :]
+            out.append((m.group(1), m.group(3), None, None, "\n".join(block)))
+            i = j
+            continue
+        # A diagnostic runs to the next blank line, capped.
         while j < len(lines) and lines[j].strip() != "" and not HEAD.match(lines[j]) and len(block) < MAX_LINES:
             block.append(lines[j])
             j += 1
