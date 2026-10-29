@@ -235,7 +235,7 @@ pub struct NewMeeting<'a> {
     pub dir: &'a Path,
 }
 
-const SCHEMA_VERSION: i32 = 14;
+const SCHEMA_VERSION: i32 = 15;
 
 const SCHEMA: &str = "
 CREATE TABLE meetings (
@@ -416,6 +416,16 @@ const MIGRATIONS: &[&str] = &[
         created_at    INTEGER NOT NULL
     );
     CREATE INDEX decisions_meeting ON decisions(meeting_id);",
+    // 15: which embedding model the vectors come from ('active'), and the
+    // vectors of the model being switched to ('next', in `embedding_next`)
+    // until the whole library has them (see `ask::reembed`)
+    "CREATE TABLE embed_state (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );
+    INSERT INTO embed_state (key, value) VALUES ('active', 'local:e5-small');
+    ALTER TABLE passages ADD COLUMN embedding_next BLOB;
+    ALTER TABLE doc_chunks ADD COLUMN embedding_next BLOB;",
 ];
 
 /// Moves a meeting's current unpinned notes into a new archived version;

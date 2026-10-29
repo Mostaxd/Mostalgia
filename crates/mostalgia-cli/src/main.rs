@@ -1134,9 +1134,7 @@ fn index_for_ask(id: i64) {
 
 fn reindex(all: bool) -> Result<()> {
     use mostalgia_core::ask;
-    if !ask::embed::available() {
-        eprintln!("[mostalgia] {}", tr("Bedeutungsmodell fehlt (scripts/download-model.sh) — nur Stichwortsuche"));
-    }
+    warn_no_embeddings();
     let t = std::time::Instant::now();
     let n = if all {
         let ids: Vec<i64> = open_store()?.list(100_000)?.into_iter().map(|m| m.id).collect();
@@ -1148,7 +1146,30 @@ fn reindex(all: bool) -> Result<()> {
         ask::index_pending()?
     };
     println!("{}", trf("{} Besprechung(en) in {} s indexiert.", &[&n, &format!("{:.2}", t.elapsed().as_secs_f64())]));
+    // Finish a switch to another embedding model (see Settings → AI).
+    if ask::reembed::pending()? {
+        println!("{}", trf("Bibliothek wird neu eingebettet ({}) …", &[&Config::load().embedding_label()]));
+        let mut shown = 0;
+        let switched = ask::reembed::run(&std::sync::atomic::AtomicBool::new(false), |done, total| {
+            if done > shown && (done == total || done >= shown + 500) {
+                eprintln!("  {done} / {total}");
+                shown = done;
+            }
+        })?;
+        if switched {
+            println!("{}", tr("Fertig: die Suche nutzt jetzt das neue Modell."));
+        }
+    }
     Ok(())
+}
+
+/// Warns when searches can't embed (only keywords then).
+fn warn_no_embeddings() {
+    if let Ok(model) = mostalgia_core::ask::reembed::active()
+        && !model.ready()
+    {
+        eprintln!("[mostalgia] {} — {}", model.not_ready_reason(), tr("nur Stichwortsuche"));
+    }
 }
 
 fn docs_cmd(action: DocsAction) -> Result<()> {
@@ -1179,9 +1200,7 @@ fn docs_cmd(action: DocsAction) -> Result<()> {
             }
         }
         DocsAction::Add { files, collection } => {
-            if !mostalgia_core::ask::embed::available() {
-                eprintln!("[mostalgia] {}", tr("Bedeutungsmodell fehlt (scripts/download-model.sh) — nur Stichwortsuche"));
-            }
+            warn_no_embeddings();
             let collection = collection.map(|n| docs::create_collection(&n)).transpose()?;
             for f in files {
                 let added = docs::add(&f);
@@ -1358,6 +1377,9 @@ fn connections_cmd(action: Option<ConnectionsAction>) -> Result<()> {
                 if [&config.live_engine, &config.final_engine].iter().any(|e| e.connection == c.id) {
                     u.push(tr("Transkription"));
                 }
+                if config.embedding.connection == c.id {
+                    u.push(tr("Suche"));
+                }
                 u.join(", ")
             };
             for c in &config.connections {
@@ -1380,6 +1402,7 @@ fn connections_cmd(action: Option<ConnectionsAction>) -> Result<()> {
             println!("\n{}: {}", tr("Modus"), config.mode().label());
             println!("{}: {}", tr("Live-Transkription"), config.engine_label(&config.live_engine));
             println!("{}: {}", tr("Feinschliff"), config.engine_label(&config.final_engine));
+            println!("{}: {}", tr("Bedeutungssuche"), config.embedding_label());
             Ok(())
         }
         ConnectionsAction::Add { preset, name, url, models, key } => {
@@ -1418,7 +1441,8 @@ fn connections_cmd(action: Option<ConnectionsAction>) -> Result<()> {
             let in_use = config.summary_provider == id
                 || config.ask_provider == id
                 || config.live_engine.connection == id
-                || config.final_engine.connection == id;
+                || config.final_engine.connection == id
+                || config.embedding.connection == id;
             anyhow::ensure!(!in_use, "{}", trf("{} ist noch in Gebrauch — erst in den Einstellungen etwas anderes wählen", &[&conn.name]));
             conn.delete_api_key()?;
             config.connections.retain(|c| c.id != id);

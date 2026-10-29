@@ -1,5 +1,5 @@
 //! AI connections: the providers Mostalgia talks to for summaries, "ask
-//! your meetings" and (optionally) cloud transcription. Claude speaks the
+//! your meetings" and (optionally) cloud transcription and embeddings. Claude speaks the
 //! Anthropic Messages API; everything else speaks the OpenAI-compatible
 //! API (OpenAI, DeepSeek, Ollama, LiteLLM, LM Studio, vLLM, OpenRouter,
 //! Groq, Together, or any custom endpoint).
@@ -65,6 +65,14 @@ pub struct SttModel {
     pub timestamps: bool,
 }
 
+/// An embedding model a preset offers, with its list price.
+#[derive(Clone, Copy, Debug)]
+pub struct EmbedModel {
+    pub id: &'static str,
+    /// US dollars per million input tokens (list price; check the provider).
+    pub usd_per_mtok: f64,
+}
+
 /// A template for a new connection.
 #[derive(Clone, Copy, Debug)]
 pub struct Preset {
@@ -80,6 +88,11 @@ pub struct Preset {
     pub default_model: &'static str,
     /// Cloud transcription models (empty: no speech-to-text).
     pub stt: &'static [SttModel],
+    /// Embedding models over `/embeddings` (empty: none known).
+    pub embed: &'static [EmbedModel],
+    /// Whether any model id can be typed in for embeddings (servers that
+    /// host whatever the user pulled).
+    pub free_embed: bool,
     /// Where to get a key.
     pub key_url: &'static str,
 }
@@ -93,6 +106,13 @@ const GROQ_STT: &[SttModel] = &[
     SttModel { id: "whisper-large-v3-turbo", usd_per_hour: 0.04, timestamps: true },
     SttModel { id: "whisper-large-v3", usd_per_hour: 0.111, timestamps: true },
 ];
+const OPENAI_EMBED: &[EmbedModel] = &[
+    EmbedModel { id: "text-embedding-3-small", usd_per_mtok: 0.02 },
+    EmbedModel { id: "text-embedding-3-large", usd_per_mtok: 0.13 },
+];
+const TOGETHER_EMBED: &[EmbedModel] = &[EmbedModel { id: "intfloat/multilingual-e5-large-instruct", usd_per_mtok: 0.02 }];
+/// Multilingual models worth pulling into Ollama.
+const OLLAMA_EMBED: &[EmbedModel] = &[EmbedModel { id: "bge-m3", usd_per_mtok: 0.0 }];
 /// Self-hosted Whisper servers (faster-whisper-server, LocalAI, vLLM …).
 const GENERIC_STT: &[SttModel] = &[SttModel { id: "whisper-1", usd_per_hour: 0.0, timestamps: true }];
 
@@ -106,6 +126,8 @@ pub const PRESETS: &[Preset] = &[
         env_var: Some("ANTHROPIC_API_KEY"),
         default_model: "claude-opus-5-5",
         stt: &[],
+        embed: &[],
+        free_embed: false,
         key_url: "https://console.anthropic.com/settings/keys",
     },
     Preset {
@@ -117,6 +139,8 @@ pub const PRESETS: &[Preset] = &[
         env_var: Some("OPENAI_API_KEY"),
         default_model: "gpt-5",
         stt: OPENAI_STT,
+        embed: OPENAI_EMBED,
+        free_embed: false,
         key_url: "https://platform.openai.com/api-keys",
     },
     Preset {
@@ -128,6 +152,8 @@ pub const PRESETS: &[Preset] = &[
         env_var: Some("DEEPSEEK_API_KEY"),
         default_model: "deepseek-chat",
         stt: &[],
+        embed: &[],
+        free_embed: false,
         key_url: "https://platform.deepseek.com/api_keys",
     },
     Preset {
@@ -139,6 +165,8 @@ pub const PRESETS: &[Preset] = &[
         env_var: None,
         default_model: "",
         stt: &[],
+        embed: OLLAMA_EMBED,
+        free_embed: true,
         key_url: "",
     },
     Preset {
@@ -150,6 +178,8 @@ pub const PRESETS: &[Preset] = &[
         env_var: None,
         default_model: "",
         stt: GENERIC_STT,
+        embed: &[],
+        free_embed: true,
         key_url: "",
     },
     Preset {
@@ -161,6 +191,8 @@ pub const PRESETS: &[Preset] = &[
         env_var: None,
         default_model: "",
         stt: &[],
+        embed: &[],
+        free_embed: true,
         key_url: "",
     },
     Preset {
@@ -172,6 +204,8 @@ pub const PRESETS: &[Preset] = &[
         env_var: None,
         default_model: "",
         stt: GENERIC_STT,
+        embed: &[],
+        free_embed: true,
         key_url: "",
     },
     Preset {
@@ -183,6 +217,8 @@ pub const PRESETS: &[Preset] = &[
         env_var: Some("OPENROUTER_API_KEY"),
         default_model: "",
         stt: &[],
+        embed: &[],
+        free_embed: false,
         key_url: "https://openrouter.ai/keys",
     },
     Preset {
@@ -194,6 +230,8 @@ pub const PRESETS: &[Preset] = &[
         env_var: Some("GROQ_API_KEY"),
         default_model: "",
         stt: GROQ_STT,
+        embed: &[],
+        free_embed: false,
         key_url: "https://console.groq.com/keys",
     },
     Preset {
@@ -205,6 +243,8 @@ pub const PRESETS: &[Preset] = &[
         env_var: Some("TOGETHER_API_KEY"),
         default_model: "",
         stt: &[],
+        embed: TOGETHER_EMBED,
+        free_embed: false,
         key_url: "https://api.together.xyz/settings/api-keys",
     },
     Preset {
@@ -216,6 +256,8 @@ pub const PRESETS: &[Preset] = &[
         env_var: None,
         default_model: "",
         stt: GENERIC_STT,
+        embed: &[],
+        free_embed: true,
         key_url: "",
     },
 ];
@@ -261,6 +303,17 @@ impl Connection {
 
     pub fn needs_key(&self) -> bool {
         self.preset().needs_key
+    }
+
+    /// Embedding models this connection offers.
+    pub fn embed_models(&self) -> &'static [EmbedModel] {
+        self.preset().embed
+    }
+
+    /// Whether this connection can embed at all (a known model, or any
+    /// model typed in).
+    pub fn offers_embeddings(&self) -> bool {
+        self.api == Api::OpenAi && (!self.preset().embed.is_empty() || self.preset().free_embed)
     }
 
     /// Cloud transcription models this connection offers.

@@ -263,6 +263,10 @@ impl MostalgiaApp {
                     if let Err(e) = mostalgia_core::docs::index_pending(&cancel) {
                         eprintln!("[mostalgia] documents index: {e:#}");
                     }
+                    // Finish a switch to another embedding model.
+                    if !cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                        mostalgia_core::ask::reembed::start();
+                    }
                 })
             };
             let worker = Mutex::new(Some(worker));
@@ -271,6 +275,7 @@ impl MostalgiaApp {
                 if let Some(w) = worker.lock().unwrap().take() {
                     let _ = w.join();
                 }
+                mostalgia_core::ask::reembed::stop();
                 async {}
             })
             .detach();

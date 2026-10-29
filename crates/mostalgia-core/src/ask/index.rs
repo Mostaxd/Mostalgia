@@ -121,9 +121,15 @@ pub fn index_meeting(store: &mut Store, meeting_id: i64) -> Result<usize> {
         return Ok(0);
     };
     let passages = build_passages(&m);
-    let texts: Vec<String> = passages.iter().map(|p| format!("passage: {}", p.text)).collect();
+    let texts: Vec<String> = passages.iter().map(|p| p.text.clone()).collect();
     let t = std::time::Instant::now();
-    let vectors = embed::embed(&texts)?;
+    // The active model, so the vectors match the rest of the index (a
+    // switch in progress embeds these again, see `reembed`). Without
+    // vectors the passages are still found by keywords.
+    let vectors = super::reembed::active_model(store.conn())?.passages(&texts).unwrap_or_else(|e| {
+        eprintln!("[mostalgia] meeting {meeting_id}: {e:#}");
+        None
+    });
     if std::env::var_os("MOSTALGIA_TIMING").is_some() {
         let chars: usize = texts.iter().map(|t| t.len()).sum();
         eprintln!("[timing] meeting {meeting_id}: {} passages ({chars} chars) embedded in {} ms", texts.len(), t.elapsed().as_millis());
@@ -140,7 +146,7 @@ pub fn index_meeting(store: &mut Store, meeting_id: i64) -> Result<usize> {
             stmt.execute(params![meeting_id, p.kind, p.start_secs, p.end_secs, p.text, blob])?;
         }
     }
-    // Without the model the fingerprint stays unset so a later run adds vectors.
+    // Without vectors the fingerprint stays unset so a later run adds them.
     if vectors.is_some() {
         tx.execute(
             "INSERT INTO index_state (meeting_id, fingerprint) VALUES (?1, ?2)

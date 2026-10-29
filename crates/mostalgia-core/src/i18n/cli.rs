@@ -45,7 +45,6 @@ pub const EN: &[(&str, &str)] = &[
     ("Suchindex: {} Abschnitte in {} s", "Search index: {} passages in {} s"),
     ("Suchindex nicht aktualisiert: {}", "Search index not updated: {}"),
     ("Suchindex: {}", "Search index: {}"),
-    ("Bedeutungsmodell fehlt (scripts/download-model.sh) — nur Stichwortsuche", "Embedding model missing (scripts/download-model.sh) — keyword search only"),
     ("{} Besprechung(en) in {} s indexiert.", "Indexed {} meeting(s) in {} s."),
     ("Antwort wird geschrieben …", "Writing the answer …"),
     ("Quellen", "Sources"),
@@ -117,4 +116,6 @@ pub const EN: &[(&str, &str)] = &[
     ("{} unterbrochene Aufnahme(n) gefunden – `mostalgia recover` macht Besprechungen daraus", "{} unfinished recording(s) found – `mostalgia recover` turns them into meetings"),
     ("{}: kein unterstütztes Audio- oder Videoformat ({})", "{}: not a supported audio or video format ({})"),
     ("Importiere {} ({}) …", "Importing {} ({}) …"),
+    ("Bibliothek wird neu eingebettet ({}) …", "Re-embedding the library ({}) …"),
+    ("Fertig: die Suche nutzt jetzt das neue Modell.", "Done: search now uses the new model."),
 ];
