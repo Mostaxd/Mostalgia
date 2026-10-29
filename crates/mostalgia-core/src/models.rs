@@ -190,8 +190,10 @@ fn fetch(
         };
         let start = state.done;
         let mut got = if resumed { have } else { 0 };
+        // What's left to come, when the server says (0 can mean unknown).
+        let remaining = response.content_length().filter(|&l| l > 0);
         // Scale this file's bytes to its share of the estimated total.
-        let length = response.content_length().map(|l| l + got).filter(|&l| l > 0).unwrap_or(model.size);
+        let length = remaining.map(|l| l + got).unwrap_or(model.size);
         let mut buf = vec![0u8; 256 * 1024];
         let mut last = std::time::Instant::now();
         loop {
@@ -211,7 +213,7 @@ fn fetch(
             }
         }
         file.sync_all()?;
-        if let Some(expected) = response.content_length() {
+        if let Some(expected) = remaining {
             let expected = expected + if resumed { have } else { 0 };
             if got != expected {
                 bail!("{got} of {expected} bytes");

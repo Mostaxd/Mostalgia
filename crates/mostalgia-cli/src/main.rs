@@ -1480,14 +1480,15 @@ fn download_models(list: bool) -> Result<()> {
     );
     let cancel = std::sync::atomic::AtomicBool::new(false);
     let mut shown = String::new();
-    models::download(&missing, &cancel, |p| {
+    let result = models::download(&missing, &cancel, |p| {
         let line = format!("{:>3} %  {}", (p.fraction() * 100.0) as u32, p.file);
         if line != shown {
             eprint!("\r\x1b[2K{line}");
             shown = line;
         }
-    })?;
+    });
     eprintln!();
+    result?;
     println!("{}", tr("Fertig."));
     Ok(())
 }
