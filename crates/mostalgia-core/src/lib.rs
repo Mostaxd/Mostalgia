@@ -18,6 +18,7 @@ pub mod diarize;
 pub mod docs;
 pub mod export;
 pub mod finalize;
+pub mod gpu_check;
 pub mod i18n;
 pub mod language;
 pub mod llm;

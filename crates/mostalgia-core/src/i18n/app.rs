@@ -27,6 +27,29 @@ pub const EN: &[(&str, &str)] = &[
     ("{} TREFFER", "{} RESULTS"),
     ("Noch keine Erinnerungen. Zeit, welche zu machen.", "No memories yet. Let's make some."),
     ("Einstellungen", "Settings"),
+    // GPU banner
+    ("Transkription nutzt die NVIDIA-Grafikkarte nicht", "Transcription isn't using the NVIDIA graphics card"),
+    (
+        "Der NVIDIA-Treiber fehlt für den laufenden Kernel {} – meist nach einem Kernel-Update. Whisper läuft deshalb langsam ohne Grafikkarte.",
+        "The NVIDIA driver is missing for the running kernel {}, usually after a kernel update. Whisper runs slowly without the graphics card until it's back.",
+    ),
+    (
+        "Der NVIDIA-Treiber ist installiert, aber noch nicht geladen. Starte den Computer neu, damit Whisper die Grafikkarte nutzt.",
+        "The NVIDIA driver is installed but not loaded yet. Restart your computer so Whisper can use the graphics card.",
+    ),
+    (
+        "Die NVIDIA-Karte läuft mit dem freien nouveau-Treiber, den Whisper nicht nutzen kann. Installiere den NVIDIA-Treiber.",
+        "The NVIDIA card is running on the open-source nouveau driver, which Whisper can't use. Install NVIDIA's driver.",
+    ),
+    (
+        "Der NVIDIA-Treiber läuft, aber Vulkan findet die Karte nicht – der Vulkan-Teil des Treibers fehlt vermutlich.",
+        "The NVIDIA driver is running, but Vulkan can't find the card. The driver's Vulkan part is probably missing.",
+    ),
+    ("Treiber installiert. Starte den Computer neu, damit er geladen wird.", "Driver installed. Restart your computer to load it."),
+    ("Hat nicht geklappt: {}", "That didn't work: {}"),
+    ("Befehl kopieren", "Copy command"),
+    ("Installiere…", "Installing…"),
+    ("Beheben", "Fix it"),
     // Call banner
     ("Anruf in {} erkannt – aufnehmen?", "Call detected in {} – record it?"),
     ("Aufnahme starten", "Start recording"),
