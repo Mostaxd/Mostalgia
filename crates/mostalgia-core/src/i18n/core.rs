@@ -109,4 +109,6 @@ pub const EN: &[(&str, &str)] = &[
     ("Bedeutungsmodell fehlt (mostalgia download-models)", "Embedding model missing (mostalgia download-models)"),
     ("Download fehlgeschlagen", "Download failed"),
     ("abgebrochen", "cancelled"),
+    // Live translation
+    ("{}: kein Modell für Live-Übersetzung gewählt", "{}: no model chosen for live translation"),
 ];

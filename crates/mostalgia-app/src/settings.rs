@@ -131,6 +131,8 @@ enum Slot {
     Ask,
     /// Mori's live notes.
     Notes,
+    /// Live translation.
+    Translate,
     Live,
     Final,
     /// Embeddings for meaning search.
@@ -1635,6 +1637,89 @@ impl SettingsView {
         self.save(cx);
     }
 
+    fn set_translation_connection(&mut self, id: Option<String>, cx: &mut Context<Self>) {
+        match id {
+            None => {
+                self.config.translation_provider.clear();
+                self.config.translation_model.clear();
+            }
+            Some(id) => {
+                let Some(conn) = self.config.connection(&id).cloned() else { return };
+                if self.config.translation_provider == id {
+                    return;
+                }
+                self.config.translation_provider = id.clone();
+                self.load_models(&id, cx);
+                self.config.translation_model = self.initial_model(&conn);
+            }
+        }
+        self.save(cx);
+    }
+
+    /// Live translation: on or off, into which language, with which model.
+    fn render_translation(&mut self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
+        let on = self.config.live_translation;
+        let switch = Switch::new("live-translation")
+            .checked(on)
+            .on_change(cx.listener(|this, v: &bool, _, cx| {
+                this.config.live_translation = *v;
+                this.save(cx);
+            }))
+            .into_any_element();
+
+        let target = self.config.translation_language.clone();
+        let app_name = mostalgia_core::language::native_name(&self.config.translation_target());
+        let language_label = if target.is_empty() {
+            trf("Wie die App ({})", &[&app_name])
+        } else {
+            mostalgia_core::language::native_name(&target)
+        };
+        let mut items: Vec<Choice> = vec![(trf("Wie die App ({})", &[&app_name]), target.is_empty(), Some(Pick::TranslateLanguage(String::new())))];
+        items.extend(
+            mostalgia_core::language::COMMON
+                .iter()
+                .map(|(code, name)| (name.to_string(), target == *code, Some(Pick::TranslateLanguage(code.to_string())))),
+        );
+        let language_picker = self.picker("translation-language", language_label, items, cx);
+
+        let separate = !self.config.translation_provider.is_empty();
+        let conn_id = self.config.translation_provider.clone();
+        let label = match self.config.translation_request() {
+            Ok(req) if separate => format!("{} · {}", req.connection.name, self.model_label(&req.connection.id, &req.model)),
+            _ if separate => self.config.connection(&conn_id).map_or(conn_id.clone(), |c| self.conn_label(c)),
+            _ => tr("Wie Live-Notizen").to_string(),
+        };
+        let mut items: Vec<Choice> = vec![(tr("Wie Live-Notizen").into(), !separate, Some(Pick::TranslateConn(None)))];
+        items.extend(self.config.connections.iter().map(|c| (self.conn_label(c), separate && c.id == conn_id, Some(Pick::TranslateConn(Some(c.id.clone()))))));
+        let conn_picker = self.picker("translation-conn", label, items, cx);
+        let model_picker = separate.then(|| {
+            let model = self.config.translation_request().map(|r| r.model).unwrap_or_default();
+            let items = self.model_choices(Slot::Translate, &conn_id, &model);
+            self.picker("translation-model", self.model_label(&conn_id, &model), items, cx)
+        });
+        let model_control = h_flex().flex_wrap().gap_1().child(conn_picker).children(model_picker).into_any_element();
+        let custom = self.custom_model_row(Slot::Translate, cx);
+        // Where the text goes, so nobody is surprised.
+        let goes_to = match self.config.translation_request() {
+            Ok(req) => trf("Übersetzt mit {} · {}. Nur der Text fertiger Zeilen geht dorthin, nie Audio.", &[&req.connection.name, &req.model]),
+            Err(e) => format!("{e:#}"),
+        };
+
+        ui::card(cx)
+            .child(div().font_semibold().child(tr("Live-Übersetzung")))
+            .child(settings_row(
+                tr("Während der Aufnahme übersetzen"),
+                Some(tr("Jede fertige Zeile erscheint zusätzlich übersetzt, im Fenster und in den Live-Untertiteln. Während einer Aufnahme auch über „Übersetzen“ schaltbar.")),
+                switch,
+                &theme,
+            ))
+            .child(settings_row(tr("Übersetzen in"), Some(tr("Zeilen, die schon in dieser Sprache sind, bleiben wie sie sind.")), language_picker, &theme))
+            .child(settings_row(tr("Modell für Übersetzung"), Some(tr("Ein schnelles Modell reicht. Lokal (z. B. Ollama) bleibt alles auf diesem Rechner.")), model_control, &theme))
+            .children(custom)
+            .child(div().text_xs().text_color(theme.muted_foreground).child(goes_to))
+    }
+
     /// Keeps both thinking levels valid for their models.
     fn fix_efforts(&mut self) {
         let summary = self.efforts(&self.config.summary_provider, &self.config.summary_model);
@@ -1653,6 +1738,7 @@ impl SettingsView {
             Slot::Summary => self.config.summary_model = model,
             Slot::Ask => self.config.ask_model = model,
             Slot::Notes => self.config.companion_notes_model = model,
+            Slot::Translate => self.config.translation_model = model,
             Slot::Live => self.config.live_engine = SttChoice { connection: conn, model },
             Slot::Final => self.config.final_engine = SttChoice { connection: conn, model },
             Slot::Embed => {
@@ -1905,6 +1991,10 @@ enum Pick {
     AskConn(Option<String>),
     /// Mori's live notes: a connection, or `None` for the "ask" one.
     NotesConn(Option<String>),
+    /// Live translation: a connection, or `None` for the live-notes one.
+    TranslateConn(Option<String>),
+    /// The language live translation writes in ("" = the app's).
+    TranslateLanguage(String),
     /// Slot, connection id, model id.
     Model(Slot, String, String),
     /// Type a model id for the slot on this connection.
@@ -2023,6 +2113,11 @@ impl SettingsView {
             Pick::SummaryConn(id) => self.set_summary_connection(id, cx),
             Pick::AskConn(id) => self.set_ask_connection(id, cx),
             Pick::NotesConn(id) => self.set_notes_connection(id, cx),
+            Pick::TranslateConn(id) => self.set_translation_connection(id, cx),
+            Pick::TranslateLanguage(code) => {
+                self.config.translation_language = code;
+                self.save(cx);
+            }
             Pick::Model(slot, conn, model) => self.select_model(slot, conn, model, cx),
             Pick::Custom(slot, conn) => self.open_custom_model(slot, conn, window, cx),
             Pick::SummaryLanguage(code) => {
@@ -3087,6 +3182,13 @@ impl Render for SettingsView {
             element: self.render_processing(cx).into_any_element(),
         });
 
+        cards.push(Card {
+            category: Category::Ki,
+            title: "Live-Übersetzung",
+            keywords: "übersetzung übersetzen live sprache sprachen untertitel translation translate live language languages captions subtitles dolmetscher interpreter",
+            wide: false,
+            element: self.render_translation(cx).into_any_element(),
+        });
         cards.push(Card {
             category: Category::Ki,
             title: "Suche",

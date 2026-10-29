@@ -322,7 +322,7 @@ impl DesktopMori {
                 }
                 ToMori::OpenMeeting { meeting } => self.companion.update(cx, |c, cx| c.set_open_meeting(meeting, cx)),
                 ToMori::StartFailed { message } => self.companion.update(cx, |c, cx| c.recording_start_failed(message, cx)),
-                ToMori::Stalled { .. } => {}
+                ToMori::Stalled { .. } | ToMori::Translations { .. } => {}
                 ToMori::ReloadConfig => {
                     let config = Config::load();
                     mostalgia_core::i18n::set_lang(mostalgia_core::i18n::resolve(&config.ui_language));

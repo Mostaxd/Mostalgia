@@ -91,6 +91,8 @@ pub struct Captions {
     session: Option<u64>,
     lines: Vec<WireLine>,
     interim: Vec<WireLine>,
+    /// Live translations (line start, text), when translation is on.
+    translations: Vec<(f64, String)>,
     /// Times of the lines flagged here.
     flagged: Vec<f64>,
     stalled: Option<u64>,
@@ -143,6 +145,7 @@ impl Captions {
             session: None,
             lines: Vec::new(),
             interim: Vec::new(),
+            translations: Vec::new(),
             flagged: Vec::new(),
             stalled: None,
             scroll: ScrollHandle::new(),
@@ -178,6 +181,7 @@ impl Captions {
                         self.session = live.as_ref().map(|l| l.session);
                         self.lines.clear();
                         self.flagged.clear();
+                        self.translations.clear();
                     }
                     self.live = live;
                 }
@@ -189,6 +193,12 @@ impl Captions {
                     }
                 }
                 ToMori::Stalled { secs } => self.stalled = secs,
+                ToMori::Translations { session, from, items } => {
+                    if Some(session) == self.session && from <= self.translations.len() {
+                        self.translations.truncate(from);
+                        self.translations.extend(items);
+                    }
+                }
                 ToMori::ReloadConfig => {
                     let config = Config::load();
                     mostalgia_core::i18n::set_lang(mostalgia_core::i18n::resolve(&config.ui_language));
@@ -289,6 +299,7 @@ impl Captions {
         let theme = cx.theme().clone();
         let at = l.at;
         let flagged = self.flagged.iter().any(|f| (*f - at).abs() < 0.01);
+        let translation = if interim { None } else { self.translations.iter().rev().find(|(t, _)| (*t - at).abs() < 0.01).map(|(_, t)| t.clone()) };
         let group = SharedString::from(format!("caption-line-{ix}"));
         h_flex()
             .id(("caption", ix))
@@ -314,7 +325,10 @@ impl Captions {
                     .min_w_0()
                     .text_size(ui::transcript_rems(0.95))
                     .when(interim, |el| el.text_color(theme.muted_foreground).italic())
-                    .child(ui::bidi_text(l.text.clone(), true)),
+                    .child(ui::bidi_text(l.text.clone(), true))
+                    .when_some(translation, |el, t| {
+                        el.child(ui::bidi_text(t, true).italic().text_color(theme.muted_foreground).text_size(ui::transcript_rems(0.9)))
+                    }),
             )
             .when(!interim, |el| {
                 el.child(

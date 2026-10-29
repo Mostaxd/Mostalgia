@@ -122,4 +122,6 @@ pub const EN: &[(&str, &str)] = &[
     ("Alle Modelle sind da ({}).", "All models are there ({})."),
     ("Lade {} Dateien ({}) nach {} …", "Downloading {} files ({}) to {} …"),
     ("Fertig.", "Done."),
+    // Live translation
+    ("Übersetze live in {} mit {} · {}", "Translating live into {} with {} · {}"),
 ];

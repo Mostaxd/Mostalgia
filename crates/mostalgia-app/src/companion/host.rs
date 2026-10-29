@@ -26,6 +26,8 @@ struct Running {
     rx: Receiver<FromMori>,
     /// Finalized lines of the current session she has.
     sent_lines: usize,
+    /// Live translations passed on so far.
+    sent_translations: usize,
     session: Option<u64>,
     last_live: Option<Option<LiveKey>>,
     last_interim: Vec<(f64, String)>,
@@ -156,6 +158,7 @@ impl DesktopHost {
             if r.session != Some(l.session) {
                 r.session = Some(l.session);
                 r.sent_lines = 0;
+                r.sent_translations = 0;
                 r.last_interim.clear();
             }
             if now - r.transcript_at >= TRANSCRIPT_EVERY {
@@ -171,6 +174,11 @@ impl DesktopHost {
                     });
                     r.sent_lines = total;
                     r.last_interim = interim_key;
+                }
+                let (items, total) = recording.translations_delta(r.sent_translations);
+                if !items.is_empty() {
+                    out.push(ToMori::Translations { session: l.session, from: r.sent_translations, items });
+                    r.sent_translations = total;
                 }
             }
         }
@@ -224,6 +232,7 @@ fn spawn(arg: &str) -> anyhow::Result<Running> {
         stdin,
         rx,
         sent_lines: 0,
+        sent_translations: 0,
         session: None,
         last_live: None,
         last_interim: Vec::new(),
