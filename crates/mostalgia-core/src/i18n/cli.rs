@@ -6,8 +6,8 @@ pub const EN: &[(&str, &str)] = &[
     ("Nutze GPU: {}", "Using GPU: {}"),
     ("Keine eigene Grafikkarte gefunden — nutze das Standardgerät", "No discrete GPU found — using the default device"),
     (
-        "Modell nicht gefunden: {} — zuerst scripts/download-model.sh ausführen oder --model angeben",
-        "Model not found at {} — run scripts/download-model.sh first or pass --model",
+        "Modell nicht gefunden: {} — zuerst mostalgia download-models ausführen oder --model angeben",
+        "Model not found at {} — run mostalgia download-models first or pass --model",
     ),
     ("Beende … (nochmal Strg+C überspringt den letzten Durchgang)", "Stopping … (Ctrl+C again to skip the final pass)"),
     ("Nehme auf nach {} — Strg+C beendet", "Recording to {} — press Ctrl+C to stop"),
@@ -90,7 +90,7 @@ pub const EN: &[(&str, &str)] = &[
     ("Feinschliff", "Final pass"),
     ("ca. {} $/h", "approx. ${}/h"),
     ("zeige die eingebaute Liste", "showing the built-in list"),
-    ("Modell nicht gefunden: {} — zuerst scripts/download-model.sh ausführen oder --model angeben", "Model not found: {} — run scripts/download-model.sh first or pass --model"),
+    ("Modell nicht gefunden: {} — zuerst mostalgia download-models ausführen oder --model angeben", "Model not found: {} — run mostalgia download-models first or pass --model"),
     ("{} liest die Besprechung mit {} · {} …", "{} is reading the meeting with {} · {} …"),
     ("Teil {} von {}", "Part {} of {}"),
     ("{} neue Notizen, {} angeheftete behalten, {} Wiederholungen weggelassen ({} · {})", "{} new notes, {} pinned kept, {} repeats left out ({} · {})"),
@@ -118,4 +118,8 @@ pub const EN: &[(&str, &str)] = &[
     ("Importiere {} ({}) …", "Importing {} ({}) …"),
     ("Bibliothek wird neu eingebettet ({}) …", "Re-embedding the library ({}) …"),
     ("Fertig: die Suche nutzt jetzt das neue Modell.", "Done: search now uses the new model."),
+    ("Ordner: {}", "Folder: {}"),
+    ("Alle Modelle sind da ({}).", "All models are there ({})."),
+    ("Lade {} Dateien ({}) nach {} …", "Downloading {} files ({}) to {} …"),
+    ("Fertig.", "Done."),
 ];

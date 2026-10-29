@@ -15,7 +15,7 @@ pub const EN: &[(&str, &str)] = &[
     ("Sprecher", "Speakers"),
     ("Aufnahme starten", "Start recording"),
     ("Mikrofon oder Desktop-Audio einschalten.", "Turn on the microphone or desktop audio."),
-    ("Whisper-Modell nicht gefunden: {} — scripts/download-model.sh ausführen", "Whisper model not found: {} — run scripts/download-model.sh"),
+    ("Whisper-Modell nicht gefunden: {} — unter Einstellungen → System herunterladen", "Whisper model not found: {} — download in Settings → System"),
     ("Modell nicht geladen", "Model not loaded"),
     // Busy
     ("Erinnerungen werden geladen …", "Loading memories …"),

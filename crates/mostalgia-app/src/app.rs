@@ -11,7 +11,7 @@ use gpui_kit::component::{ActiveTheme, Icon, Selectable, Sizable, StyledExt, Tit
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use mostalgia_core::i18n::{self, tr, trf};
-use mostalgia_core::paths;
+use mostalgia_core::{models, paths};
 use mostalgia_core::store::{MeetingSummary, SearchHit, Store};
 
 use crate::companion::{Companion, MoriEvent};
@@ -66,6 +66,9 @@ pub struct MostalgiaApp {
     captions_stalled: Option<Option<u64>>,
     /// "Import recording…": the file, its title and date being edited.
     import: Option<ImportDialog>,
+    /// The offer to download missing models (first launch, or from
+    /// Settings), and the download once it runs.
+    model_offer: Option<ModelOffer>,
     /// The `audio_keep_days` the last cleanup ran with.
     cleanup_days: Option<u32>,
     delete_audio: bool,
@@ -82,6 +85,13 @@ pub struct MostalgiaApp {
 }
 
 actions!(library, [DeleteSelected]);
+
+struct ModelOffer {
+    missing: Vec<models::Model>,
+    /// While downloading: how far it got, and the switch that stops it.
+    running: Option<(Arc<Mutex<models::Progress>>, Arc<std::sync::atomic::AtomicBool>)>,
+    error: Option<SharedString>,
+}
 
 /// The import dialog for an audio or video file.
 struct ImportDialog {
@@ -191,6 +201,7 @@ impl MostalgiaApp {
             caption_host: crate::companion::host::DesktopHost::captions(),
             captions_stalled: None,
             import: None,
+            model_offer: None,
             cleanup_days: None,
             delete_audio: true,
             rename: None,
@@ -201,6 +212,10 @@ impl MostalgiaApp {
             _subscriptions: subs,
         };
         this.reload(cx);
+        // A fresh install (AppImage, installer) has no models yet.
+        if !mostalgia_core::config::Config::load().models_prompt_dismissed {
+            this.offer_models(cx);
+        }
         this.sync_mori(false);
         // Recordings a crash left unfinished become meetings now.
         this.recording.update(cx, |r, cx| r.recover_orphans(cx));
@@ -248,9 +263,15 @@ impl MostalgiaApp {
         })
         .detach();
         this.start_control(window, cx);
-        // Bring the "ask your meetings" index up to date in the background.
-        // It's cancelled and joined on quit: exiting while the embedding
-        // model is mid-run crashes in native teardown.
+        this.start_backfill(cx);
+        this
+    }
+
+    /// Brings the "ask your meetings" index up to date in the background
+    /// (at start, and again once the search model is downloaded). It's
+    /// cancelled and joined on quit: exiting while the embedding model is
+    /// mid-run crashes in native teardown.
+    fn start_backfill(&mut self, cx: &mut Context<Self>) {
         if std::env::var_os("MOSTALGIA_NO_BACKFILL").is_none() {
             let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let worker = {
@@ -280,7 +301,6 @@ impl MostalgiaApp {
             })
             .detach();
         }
-        this
     }
 
     #[doc(hidden)]
@@ -785,6 +805,10 @@ impl MostalgiaApp {
                 this.open_decisions(true, window, cx);
                 return;
             }
+            if let SettingsEvent::DownloadModels = event {
+                this.offer_models(cx);
+                return;
+            }
             if this.cleanup_days != Some(mostalgia_core::config::Config::load().audio_keep_days) {
                 this.run_cleanup(cx);
             }
@@ -1204,6 +1228,200 @@ impl MostalgiaApp {
                                     cx.notify();
                                 })))
                                 .child(Button::new("import-start").primary().icon(IconName::Upload).label(tr("Importieren")).on_click(cx.listener(|this, _, window, cx| this.start_import(window, cx)))),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// Asks to download the models that are missing (nothing when none are).
+    pub fn offer_models(&mut self, cx: &mut Context<Self>) {
+        if self.model_offer.as_ref().is_some_and(|o| o.running.is_some()) {
+            return;
+        }
+        let missing = models::missing();
+        self.model_offer = (!missing.is_empty()).then_some(ModelOffer { missing, running: None, error: None });
+        cx.notify();
+    }
+
+    fn start_model_download(&mut self, cx: &mut Context<Self>) {
+        let Some(offer) = self.model_offer.as_mut() else { return };
+        if offer.running.is_some() {
+            return;
+        }
+        let list = offer.missing.clone();
+        let progress = Arc::new(Mutex::new(models::Progress { total: models::total_size(&list), ..Default::default() }));
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        offer.running = Some((progress.clone(), cancel.clone()));
+        offer.error = None;
+        let result: Arc<Mutex<Option<Result<(), String>>>> = Arc::default();
+        {
+            let (result, cancel) = (result.clone(), cancel.clone());
+            std::thread::spawn(move || {
+                let r = models::download(&list, &cancel, |p| *progress.lock().unwrap() = p.clone());
+                *result.lock().unwrap() = Some(r.map_err(|e| format!("{e:#}")));
+            });
+        }
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(std::time::Duration::from_millis(150)).await;
+                let done = result.lock().unwrap().take();
+                let finished = done.is_some();
+                let alive = this
+                    .update(cx, |this, cx| {
+                        match done {
+                            None => {}
+                            Some(Ok(())) => {
+                                this.model_offer = None;
+                                this.start_backfill(cx);
+                                this.recording.update(cx, |r, cx| r.reload_config(cx));
+                                if let Some(s) = this.settings_view() {
+                                    s.update(cx, |_, cx| cx.notify());
+                                }
+                            }
+                            Some(Err(e)) => {
+                                if let Some(offer) = this.model_offer.as_mut() {
+                                    // Cancelled: back to the question; the
+                                    // download resumes from where it stopped.
+                                    let cancelled = offer.running.take().is_some_and(|(_, c)| c.load(std::sync::atomic::Ordering::Relaxed));
+                                    offer.error = (!cancelled).then(|| e.into());
+                                    offer.missing = models::missing();
+                                }
+                            }
+                        }
+                        cx.notify();
+                    })
+                    .is_ok();
+                if finished || !alive {
+                    break;
+                }
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// The model download: what's missing and how big, then a progress bar.
+    fn render_models_dialog(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let offer = self.model_offer.as_ref()?;
+        let theme = cx.theme().clone();
+        let human = mostalgia_core::cleanup::human;
+        let groups: Vec<(models::Purpose, &str)> = vec![
+            (models::Purpose::Transcription, "Whisper large-v3-turbo und Silero VAD – Transkription"),
+            (models::Purpose::Speakers, "pyannote und WeSpeaker – Sprechertrennung"),
+            (models::Purpose::Search, "multilingual-e5-small – Suche für „Fragen“"),
+        ];
+        let rows = groups.into_iter().filter_map(|(purpose, label)| {
+            let size: u64 = offer.missing.iter().filter(|m| m.purpose == purpose).map(|m| m.size).sum();
+            (size > 0).then(|| {
+                h_flex()
+                    .gap_2()
+                    .text_sm()
+                    .child(div().flex_1().min_w_0().child(tr(label)))
+                    .child(div().flex_none().text_color(theme.muted_foreground).child(human(size)))
+            })
+        });
+        let body = match &offer.running {
+            Some((progress, _)) => {
+                let p = progress.lock().unwrap().clone();
+                v_flex()
+                    .gap_2()
+                    .child(ui::progress_bar(Some(p.fraction()), cx))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(div().flex_1().min_w_0().truncate().child(p.file.clone()))
+                            .child(div().flex_none().child(trf("{} von {} geladen", &[&human(p.done), &human(p.total)]))),
+                    )
+                    .into_any_element()
+            }
+            None => v_flex()
+                .gap_2()
+                .children(rows)
+                .child(div().text_xs().text_color(theme.muted_foreground).child(tr(
+                    "Du transkribierst nur mit einem Cloud-Dienst? Dann geht es auch ohne; die Modelle lassen sich später unter Einstellungen → System laden.",
+                )))
+                .into_any_element(),
+        };
+        let running = offer.running.is_some();
+        let error = offer.error.clone();
+        let failed = error.is_some();
+        Some(
+            div()
+                .id("models-overlay")
+                .absolute()
+                .inset_0()
+                .bg(gpui_kit::black().opacity(0.45))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    v_flex()
+                        .id("models-dialog")
+                        .w(px(480. * ui::ui_scale()))
+                        .max_w(relative(0.9))
+                        .p_5()
+                        .gap_3()
+                        .rounded(theme.radius_lg)
+                        .border(ui::border_width(cx))
+                        .border_color(theme.border)
+                        .bg(theme.background)
+                        .shadow_lg()
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .items_start()
+                                .child(Icon::new(IconName::Download).flex_none().mt_1().text_color(theme.primary))
+                                .child(div().flex_1().min_w_0().text_lg().font_semibold().child(tr("Modelle herunterladen"))),
+                        )
+                        .child(div().text_sm().text_color(theme.muted_foreground).child(trf(
+                            "Mostalgia transkribiert auf deinem Rechner. Dafür lädt es einmalig diese Modelle ({}):",
+                            &[&human(models::total_size(&offer.missing))],
+                        )))
+                        .child(body)
+                        .children(error.map(|e| {
+                            h_flex()
+                                .gap_2()
+                                .items_start()
+                                .text_sm()
+                                .child(Icon::new(IconName::TriangleAlert).small().flex_none().mt_0p5().text_color(theme.warning))
+                                .child(div().flex_1().min_w_0().child(e))
+                        }))
+                        .child(
+                            h_flex()
+                                .justify_end()
+                                .gap_2()
+                                .when(running, |el| {
+                                    el.child(Button::new("models-cancel").ghost().label(tr("Abbrechen")).on_click(cx.listener(|this, _, _, cx| {
+                                        if let Some((_, cancel)) = this.model_offer.as_ref().and_then(|o| o.running.as_ref()) {
+                                            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                                        }
+                                        cx.notify();
+                                    })))
+                                })
+                                .when(!running, |el| {
+                                    el.child(Button::new("models-later").ghost().label(tr("Nicht jetzt")).on_click(cx.listener(|this, _, _, cx| {
+                                        this.model_offer = None;
+                                        let mut config = mostalgia_core::config::Config::load();
+                                        if !config.models_prompt_dismissed {
+                                            config.models_prompt_dismissed = true;
+                                            if let Err(e) = config.save() {
+                                                this.error = Some(format!("{e:#}").into());
+                                            }
+                                        }
+                                        cx.notify();
+                                    })))
+                                    .child(
+                                        Button::new("models-download")
+                                            .primary()
+                                            .icon(IconName::Download)
+                                            .label(if failed { tr("Erneut versuchen") } else { tr("Herunterladen") })
+                                            .on_click(cx.listener(|this, _, _, cx| this.start_model_download(cx))),
+                                    )
+                                }),
                         ),
                 )
                 .into_any_element(),
@@ -1704,6 +1922,7 @@ impl Render for MostalgiaApp {
         let delete_dialog = self.render_delete_dialog(cx);
         let cleanup_dialog = self.render_cleanup_dialog(cx);
         let import_dialog = self.render_import_dialog(cx);
+        let models_dialog = self.render_models_dialog(cx);
         let theme = cx.theme();
         v_flex()
             .size_full()
@@ -1731,5 +1950,6 @@ impl Render for MostalgiaApp {
             .children(delete_dialog)
             .children(cleanup_dialog)
             .children(import_dialog)
+            .children(models_dialog)
     }
 }

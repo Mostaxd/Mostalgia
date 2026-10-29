@@ -139,4 +139,13 @@ pub const EN: &[(&str, &str)] = &[
     ("Eine Seite „Entscheidungen“ in der Seitenleiste: alle Entscheidungen aus den Zusammenfassungen, durchsuchbar, mit Sprung zur Stelle im Transkript. Kostet keine zusätzlichen KI-Anfragen.", "A “Decisions” page in the sidebar: every decision from the summaries, searchable, each opening its spot in the transcript. Costs no extra AI requests."),
     ("Die Suche läuft nur über diese Dokumente – auch wenn sie für Antworten ausgeschaltet sind – mit Embeddings von {} (Cloud). An das Sprachmodell gehen nur die gefundenen Abschnitte. Jede Aussage verweist auf die Stelle im Dokument.", "Search runs over these documents only – even if they're switched off for answers – with embeddings from {} (cloud). Only the passages it finds go to the language model. Every statement links to its place in the document."),
     ("Die Suche läuft über alle Transkripte und Zusammenfassungen, mit Embeddings von {} (Cloud). An das Sprachmodell gehen nur die gefundenen Abschnitte, nie Audio. Jede Aussage verweist auf die Stelle in der Aufnahme.", "Search runs over all transcripts and summaries, with embeddings from {} (cloud). Only the passages it finds go to the language model, never audio. Every statement links to its moment in the recording."),
+    ("Modelle herunterladen", "Download the models"),
+    ("Mostalgia transkribiert auf deinem Rechner. Dafür lädt es einmalig diese Modelle ({}):", "Mostalgia transcribes on your computer. For that it downloads these models once ({}):"),
+    ("Whisper large-v3-turbo und Silero VAD – Transkription", "Whisper large-v3-turbo and Silero VAD — transcription"),
+    ("pyannote und WeSpeaker – Sprechertrennung", "pyannote and WeSpeaker — telling speakers apart"),
+    ("multilingual-e5-small – Suche für „Fragen“", "multilingual-e5-small — search for Ask"),
+    ("Du transkribierst nur mit einem Cloud-Dienst? Dann geht es auch ohne; die Modelle lassen sich später unter Einstellungen → System laden.", "Only transcribing with a cloud service? Then you can skip this and download the models later in Settings → System."),
+    ("{} von {} geladen", "{} of {} downloaded"),
+    ("Nicht jetzt", "Not now"),
+    ("Herunterladen", "Download"),
 ];

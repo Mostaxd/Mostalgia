@@ -1,0 +1,75 @@
+name: Release
+
+# A tag like v0.3.0 builds the Linux AppImage and attaches it to that tag's
+# GitHub release (created if needed). Changes to the packaging build it too,
+# without releasing, so a broken AppImage shows up before the tag.
+on:
+  push:
+    tags: ["v*"]
+    branches: ["**"]
+    paths:
+      - .github/workflows/release.yml
+      - scripts/build-appimage.sh
+      - packaging/**
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  appimage:
+    # The oldest supported Ubuntu: the AppImage runs on its glibc and newer.
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang pkg-config libpulse-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev \
+            libxcb1-dev libfontconfig-dev libfreetype-dev libasound2-dev libzstd-dev
+      # Ubuntu 22.04 has no glslc and too old Vulkan headers for whisper.cpp;
+      # the LunarG SDK brings both (the AppImage uses the system's loader).
+      - name: Vulkan SDK
+        env:
+          VK: 1.4.309.0
+        run: |
+          curl -fsSL "https://sdk.lunarg.com/sdk/download/$VK/linux/vulkansdk-linux-x86_64-$VK.tar.xz" | tar -xJ -C "$HOME"
+          echo "VULKAN_SDK=$HOME/$VK/x86_64" >> "$GITHUB_ENV"
+          echo "$HOME/$VK/x86_64/bin" >> "$GITHUB_PATH"
+          echo "LD_LIBRARY_PATH=$HOME/$VK/x86_64/lib" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=-L native=$HOME/$VK/x86_64/lib" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: appimage
+          cache-directories: ~/.cache/sherpa-rs
+      - run: ./scripts/build-appimage.sh
+      - name: Smoke test
+        run: |
+          app=dist/Mostalgia-x86_64.AppImage
+          "$app" --appimage-extract-and-run help
+          "$app" --appimage-extract-and-run download-models --list | tee models.txt
+      # The first-launch download depends on these links; check they work.
+      - name: Model links
+        run: |
+          grep -o 'https://[^ ]*' models.txt | while read -r url; do
+            curl -fsSIL -o /dev/null "$url" || { echo "broken: $url"; exit 1; }
+            echo "ok  $url"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Mostalgia-x86_64.AppImage
+          path: dist/*
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

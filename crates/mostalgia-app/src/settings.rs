@@ -32,6 +32,8 @@ pub enum SettingsEvent {
     Changed,
     /// Open the decision log and fill it from earlier meetings.
     BuildDecisions,
+    /// Offer to download the missing models.
+    DownloadModels,
 }
 
 impl EventEmitter<SettingsEvent> for SettingsView {}
@@ -3003,7 +3005,7 @@ impl Render for SettingsView {
                 Some(tr(if diarize_ok {
                     "Teilt „Andere“ in Sprecher 1, 2, … auf. Live ungefähr, im fertigen Transkript genau."
                 } else {
-                    "Modelle fehlen — scripts/download-model.sh ausführen."
+                    "Modelle fehlen — unter Einstellungen → System herunterladen."
                 })),
                 Switch::new("set-diarize")
                     .checked(self.config.diarize && diarize_ok)
@@ -3287,6 +3289,7 @@ impl Render for SettingsView {
             element: tray.into_any_element(),
         });
         let model = self.config.whisper_model_path();
+        let missing_models = mostalgia_core::models::missing();
         let status_row = |ok: bool, text: String| {
             h_flex()
                 .gap_2()
@@ -3300,6 +3303,16 @@ impl Render for SettingsView {
             .child(status_row(model.exists(), format!("Whisper: {}", model.display())))
             .child(status_row(self.config.vad_model_path().exists(), "Silero VAD".into()))
             .child(status_row(diarize_ok, tr("Sprechertrennung (sherpa-onnx)").into()))
+            .child(status_row(mostalgia_core::ask::embed::available(), tr("Suche für „Fragen“ (e5-small)").into()))
+            .when(!missing_models.is_empty(), |el| {
+                el.child(
+                    Button::new("download-models")
+                        .small()
+                        .icon(IconName::Download)
+                        .label(trf("Fehlende Modelle laden ({})", &[&mostalgia_core::cleanup::human(mostalgia_core::models::total_size(&missing_models))]))
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(SettingsEvent::DownloadModels))),
+                )
+            })
             .child(
                 h_flex()
                     .gap_2()

@@ -184,7 +184,7 @@ impl Model {
     /// Why it can't embed (for the settings and the CLI).
     pub fn not_ready_reason(&self) -> String {
         match self {
-            Model::Local => tr("Bedeutungsmodell fehlt (scripts/download-model.sh)").into(),
+            Model::Local => tr("Bedeutungsmodell fehlt (mostalgia download-models)").into(),
             Model::Cloud { conn, model } if model.is_empty() => trf("{}: kein Embedding-Modell gewählt", &[&conn.name]),
             Model::Cloud { conn, .. } => trf("{}: kein API-Schlüssel hinterlegt (Einstellungen → KI)", &[&conn.name]),
             Model::Missing { key } => trf("Verbindung \"{}\" gibt es nicht mehr", &[&key.split(':').next().unwrap_or_default()]),

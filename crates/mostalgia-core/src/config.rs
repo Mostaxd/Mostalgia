@@ -161,6 +161,11 @@ pub struct Config {
     /// would delete any).
     pub audio_cleanup_confirmed: bool,
 
+    // ── Models ──
+    /// "Not now" on the first-launch offer to download the models (it
+    /// isn't asked again; Settings → System still offers it).
+    pub models_prompt_dismissed: bool,
+
     // ── Decision log ──
     /// The decision log (its page in the sidebar, decisions collected from
     /// each new summary). Off by default.
@@ -339,6 +344,7 @@ impl Default for Config {
             companion_answer_sources: crate::assist::Sources::Both.id().into(),
             audio_keep_days: 7,
             audio_cleanup_confirmed: false,
+            models_prompt_dismissed: false,
             decision_log: false,
             decision_log_built: false,
             live_captions: false,

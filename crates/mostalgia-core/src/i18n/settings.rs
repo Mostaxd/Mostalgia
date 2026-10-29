@@ -63,7 +63,7 @@ pub const EN: &[(&str, &str)] = &[
     ("„Ich“ (Mikrofon) und „Andere“ (Desktop) an jeder Zeile.", "“Ich” (me, microphone) and “Andere” (others, desktop) on every line."),
     ("Mehrere Sprecher unterscheiden", "Tell several speakers apart"),
     ("Teilt „Andere“ in Sprecher 1, 2, … auf. Live ungefähr, im fertigen Transkript genau.", "Splits “Andere” into Speaker 1, 2, … Approximate live, accurate in the final transcript."),
-    ("Modelle fehlen — scripts/download-model.sh ausführen.", "Models missing — run scripts/download-model.sh."),
+    ("Modelle fehlen — unter Einstellungen → System herunterladen.", "Models missing — download them in Settings → System."),
     ("Trennschärfe", "Separation"),
     ("Werden zwei Personen zusammengelegt: „Mehr Sprecher“. Wird eine Person geteilt: „Weniger“.", "If two people get merged: “More speakers”. If one person gets split: “Fewer”."),
     ("Weniger", "Fewer"),
@@ -268,4 +268,6 @@ pub const EN: &[(&str, &str)] = &[
     ("Bis dahin sucht das bisherige Modell weiter.", "Until then, search keeps using the previous model."),
     ("Noch nicht fertig neu eingebettet.", "The library isn't fully re-embedded yet."),
     ("Findet Stellen in Besprechungen und Dokumenten auch mit anderen Worten. Ein Wechsel bettet die ganze Bibliothek neu ein; Stichwortsuche geht immer.", "Finds passages in meetings and documents even in other words. Switching re-embeds the whole library; keyword search always works."),
+    ("Suche für „Fragen“ (e5-small)", "Search for Ask (e5-small)"),
+    ("Fehlende Modelle laden ({})", "Download missing models ({})"),
 ];
