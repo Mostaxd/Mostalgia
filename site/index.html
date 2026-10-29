@@ -505,6 +505,7 @@
 
 <!-- ───────────────────────── EPISODE 6 ───────────────────────── -->
 <section class="episode alt" id="ep6" data-char="mori">
+  <link rel="stylesheet" href="scenes/ep6.css">
   <header class="ep-card">
     <div class="burst" aria-hidden="true"></div>
     <span class="ep-no" aria-hidden="true">06</span>
@@ -513,44 +514,143 @@
       <h2>Your documents, <span>in the conversation.</span></h2>
     </div>
   </header>
-  <div class="ep-body">
+  <div class="e6-wrap">
+    <div class="sr-only" id="e6Desc">
+      <p>An animated mock-up of the Documents screen in Mostalgia. Three files are dropped in: “Launch plan.pdf”, “Pricing notes.docx” and “Onboarding spec.md”. Each one is split into small passages that slot into a local search index, fifteen passages in all. The files are then sorted into two collections, “Spring launch” (the launch plan and the pricing notes) and “Hiring” (the onboarding spec), each with an on/off switch. The Hiring collection is switched off and greys out, so it is no longer searched.</p>
+      <p>Then a question is asked from the Documents screen: “When does the beta start?” The answer: the closed beta starts on Monday, May 4, and in the spring launch sync you agreed to skip the extra beta week, so the launch stays on the 14th. It cites two sources, page 4 of “Launch plan.pdf” and the meeting moment at 02:14. The cited page opens with the sentence “The closed beta opens on Monday, May 4 for 200 invited teams.” highlighted.</p>
+      <p>Finally, during a live call (recording, 00:18), someone asks “Quick one: when does the beta open?” and a suggested answer card appears next to Mori: “Monday, May 4, for 200 invited teams”, quoting page 4 of “Launch plan.pdf”. Mori says: your documents back up live answers too.</p>
+    </div>
+
+    <div class="e6-stagewrap">
+      <div class="e6-scene e6-rec-on" id="e6Scene" aria-hidden="true">
+        <div class="e6-win">
+          <div class="e6-titlebar"><img src="assets/brand/icon.svg" alt="" width="16" height="16"> Mostalgia</div>
+          <div class="e6-app">
+            <div class="e6-nav">
+              <span class="e6-recpill"><i></i><b class="e6-rp-new">+ New recording</b><b class="e6-rp-rec">Recording</b></span>
+              <span class="e6-navi e6-nav-ask on">✦ Ask</span>
+              <span class="e6-navi e6-nav-docs"><svg viewBox="0 0 24 24" width="14" height="14"><path d="M4 4v16M8 4v16M12 5l5 15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg> Documents</span>
+              <span class="e6-search"><svg viewBox="0 0 24 24" width="12" height="12"><circle cx="11" cy="11" r="6" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M16 16l4 4" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg> Search transcripts</span>
+              <span class="e6-group-l">Today</span>
+              <span class="e6-mtg"><b>Spring launch sync</b><small>10:00 · 2 min</small></span>
+            </div>
+
+            <div class="e6-docs">
+              <div class="e6-head">
+                <h3>Documents</h3>
+                <span class="e6-sub">Stored locally · only the passages a question finds go to the language model</span>
+                <span class="e6-add"><svg viewBox="0 0 24 24" width="12" height="12"><path d="M12 16V4M7 9l5-5 5 5M5 20h14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg> Add</span>
+              </div>
+
+              <div class="e6-list" id="e6List">
+                <div class="e6-drop"><svg viewBox="0 0 24 24" width="22" height="22"><path d="M12 15V4M7 9l5-5 5 5M5 20h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><b>Drop files here</b><small>.md · .txt · .pdf · .docx · .odt · .html</small></div>
+                <p class="e6-loose-h"><svg viewBox="0 0 24 24" width="13" height="13"><path d="M6 3h8l4 4v14H6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg> No collection <small>3 documents</small></p>
+                <div class="e6-col" data-col="spring">
+                  <p class="e6-col-h"><span class="e6-chev">⌄</span><svg viewBox="0 0 24 24" width="14" height="14"><path d="M3 6h7l2 2h9v11H3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg> Spring launch <small>2 documents</small><span class="e6-sw on"></span></p>
+                  <div class="e6-file" data-type="pdf" data-o="1"><span class="e6-badge pdf">PDF</span><span class="e6-fn"><b>Launch plan.pdf</b><small class="e6-meta" data-done="6 pages · EN · 6 passages">6 pages · EN · 6 passages</small><span class="e6-prog"><i></i></span></span><span class="e6-sw on"></span></div>
+                  <div class="e6-file" data-type="docx" data-o="3"><span class="e6-badge docx">DOCX</span><span class="e6-fn"><b>Pricing notes.docx</b><small class="e6-meta" data-done="EN · 4 passages · 18 KB">EN · 4 passages · 18 KB</small><span class="e6-prog"><i></i></span></span><span class="e6-sw on"></span></div>
+                </div>
+                <div class="e6-col off" data-col="hiring">
+                  <p class="e6-col-h"><span class="e6-chev">⌄</span><svg viewBox="0 0 24 24" width="14" height="14"><path d="M3 6h7l2 2h9v11H3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg> Hiring <small>1 document</small><span class="e6-sw" id="e6HireSw"></span></p>
+                  <div class="e6-file" data-type="md" data-o="2"><span class="e6-badge md">MD</span><span class="e6-fn"><b>Onboarding spec.md</b><small class="e6-meta" data-done="EN · 5 passages · 9 KB">Collection off · EN · 5 passages</small><span class="e6-prog"><i></i></span></span><span class="e6-sw on"></span></div>
+                </div>
+              </div>
+
+              <div class="e6-pane">
+                <div class="e6-index">
+                  <p class="e6-ix-h"><b>Search index</b> <span><em id="e6Count">15</em> passages</span> <small>keywords + meaning · on this computer</small></p>
+                  <div class="e6-cells" id="e6Cells">
+                    <i class="pdf" data-f="0"></i><i class="pdf" data-f="0"></i><i class="pdf" data-f="0"></i><i class="pdf hit" data-f="0"></i><i class="pdf" data-f="0"></i><i class="pdf" data-f="0"></i>
+                    <i class="docx" data-f="1"></i><i class="docx" data-f="1"></i><i class="docx" data-f="1"></i><i class="docx" data-f="1"></i>
+                    <i class="md" data-f="2"></i><i class="md" data-f="2"></i><i class="md" data-f="2"></i><i class="md" data-f="2"></i><i class="md" data-f="2"></i>
+                  </div>
+                </div>
+
+                <div class="e6-chat">
+                  <p class="e6-empty"><b>✦</b>Ask about your meetings and documents.<br>Answers cite the exact page.</p>
+                  <p class="e6-q">When does the beta start?</p>
+                  <p class="e6-a" id="e6Answer">The closed beta starts on <b>Monday, May 4</b> <span class="e6-n">1</span>. In the spring launch sync you agreed to skip the extra beta week, so the launch stays on the 14th <span class="e6-n">2</span>.</p>
+                  <p class="e6-srcs"><span class="e6-sl">Sources</span> <span class="e6-chip doc"><svg viewBox="0 0 24 24" width="11" height="11"><path d="M6 3h8l4 4v14H6z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/></svg> Launch plan.pdf · p. 4 <span class="e6-n">1</span></span> <span class="e6-chip mtg">Spring launch sync <span class="e6-ts">▶ 02:14</span> <span class="e6-n">2</span></span></p>
+                  <div class="e6-page">
+                    <p class="e6-pg-h"><span class="e6-badge pdf">PDF</span> Launch plan.pdf <small>page 4 of 6</small></p>
+                    <p class="e6-pg-t">3. Beta and launch</p>
+                    <p class="e6-pg-l">The release candidate is frozen at the end of April.</p>
+                    <p class="e6-pg-l"><mark id="e6Mark">The closed beta opens on Monday, May 4 for 200 invited teams.</mark></p>
+                    <p class="e6-pg-l dim">Feedback is collected in the beta channel and triaged daily.</p>
+                  </div>
+                </div>
+
+                <div class="e6-askbar">
+                  <span class="e6-scope"><svg viewBox="0 0 24 24" width="12" height="12"><path d="M3 6h7l2 2h9v11H3z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/></svg> Meetings + documents</span>
+                  <span class="e6-input empty"><span id="e6Typed"></span><i class="e6-caret"></i></span>
+                  <span class="e6-askbtn" id="e6AskBtn">↓ Ask</span>
+                  <small class="e6-hint">Searching 2 documents · “Hiring” is switched off</small>
+                </div>
+              </div>
+            </div>
+          </div>
+          <svg class="e6-cursor" id="e6Cursor" viewBox="0 0 24 24" width="22" height="22"><path d="M5 3l14 8-6 1.6L9.6 19z" fill="#fff" stroke="#2B1730" stroke-width="1.8" stroke-linejoin="round"/></svg>
+        </div>
+
+        <div class="e6-cast">
+          <div class="e6-say"><b>Mori</b> <span id="e6Say">Your documents back up live answers too.</span></div>
+          <img class="e6-mori" id="e6Mori" src="assets/cast/mori-talking.webp" alt="" width="300" height="480" loading="lazy">
+          <div class="e6-live" id="e6Live">
+            <p class="e6-lv-bar"><span class="e6-rec"><i></i>REC</span> <span class="e6-lv-t" id="e6LvT">00:18</span> <span class="e6-lv-s">Live call</span></p>
+            <p class="e6-lv-line"><span class="e6-lv-chip">Others</span> <span id="e6LvQ">Quick one: when does the beta open?</span></p>
+            <div class="e6-card">
+              <p class="e6-card-h"><span>💡 Suggested answer</span> <em>00:18</em></p>
+              <p class="e6-card-a">Monday, May 4, for 200 invited teams <span class="e6-n">1</span>.</p>
+              <p class="e6-card-q">“The closed beta opens on Monday, May 4…”</p>
+              <p class="e6-card-s">Sources <span><svg viewBox="0 0 24 24" width="10" height="10"><path d="M6 3h8l4 4v14H6z" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linejoin="round"/></svg> Launch plan.pdf <em>1 p. 4</em></span></p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <button type="button" class="e6-replay" id="e6Replay" aria-label="Replay the documents animation" hidden><span aria-hidden="true">↻</span> Replay</button>
+    </div>
+  </div>
+
+  <div class="ep-body e6-body">
     <aside class="stage" aria-hidden="true">
       <div class="bubble"><span class="who">Mori</span><p class="say"></p></div>
       <div class="actor"><img alt="" width="300" height="480"></div>
       <div class="shadow"></div>
     </aside>
-    <div class="steps">
-      <article class="step" data-pose="writing" data-say="Handbooks, specs, notes. Drop them in, I'll read them all.">
-        <div class="step-text">
+    <ul class="e6-points">
+      <li class="step" data-pose="writing" data-say="Handbooks, specs, notes. Drop them in, I'll read them all."><b>A documents drive</b> PDF, Word, Markdown and more, indexed on your machine.</li>
+      <li class="step" data-pose="thinking" data-say="Old drafts? Switch that collection off, and I won't quote from it."><b>Collections</b> switched on or off for answers.</li>
+      <li class="step" data-pose="talking" data-say="Ask about one collection, or one document. I'll cite the page."><b>Ask one collection</b> or one document; answers cite the passage.</li>
+      <li class="step" data-pose="listening" data-say="That card from before? Here it is quoting your onboarding guide, section two."><b>Live answers</b> in a call quote your documents too.</li>
+    </ul>
+    <details class="e6-more">
+      <summary>All details</summary>
+      <div class="e6-more-grid">
+        <article>
           <h3>A documents drive</h3>
           <p>Add your own files and Mostalgia indexes them with the same local hybrid search. Markdown renders properly in the built-in reader.</p>
           <ul class="chips"><li>.md</li><li>.txt</li><li>.pdf</li><li>.docx</li><li>.odt</li><li>.html</li></ul>
-        </div>
-        <figure class="shot"><img src="assets/shots/documents-markdown.webp" alt="Documents reader showing a Markdown file" loading="lazy" width="1400" height="926"></figure>
-      </article>
-      <article class="step" data-pose="thinking" data-say="Old drafts? Switch that collection off, and I won't quote from it.">
-        <div class="step-text">
+          <figure class="e6-shot"><img src="assets/shots/documents-markdown.webp" alt="Documents reader showing a Markdown file" loading="lazy" width="1400" height="926"></figure>
+        </article>
+        <article>
           <h3>Collections, switched on or off</h3>
           <p>Group documents into <b>collections</b> and drag files straight onto one. Switch a whole collection, or a single document, <b>on or off for answers</b> in Ask, the chat and live suggestions.</p>
-        </div>
-        <figure class="shot"><img src="assets/shots/documents.webp" alt="Document collections with on and off switches" loading="lazy" width="1400" height="926"></figure>
-      </article>
-      <article class="step" data-pose="talking" data-say="Ask about one collection, or one document. I'll cite the page.">
-        <div class="step-text">
+          <figure class="e6-shot"><img src="assets/shots/documents.webp" alt="Document collections with on and off switches" loading="lazy" width="1400" height="926"></figure>
+        </article>
+        <article>
           <h3>Ask one collection, or one document</h3>
           <p>Narrow a question to a single collection or document, offered first right from the Documents screen. Answers cite the exact passage.</p>
-        </div>
-        <figure class="shot"><img src="assets/shots/ask-collection.webp" alt="Asking a question about one collection" loading="lazy" width="1400" height="926"></figure>
-      </article>
-      <article class="step" data-pose="listening" data-say="That card from before? Here it is quoting your onboarding guide, section two.">
-        <div class="step-text">
+          <figure class="e6-shot"><img src="assets/shots/ask-collection.webp" alt="Asking a question about one collection" loading="lazy" width="1400" height="926"></figure>
+        </article>
+        <article>
           <h3>Your documents back up live answers too</h3>
           <p>The suggested answers from <a href="#ep5">Episode 5</a> draw on this drive as well: when a question in the call is answered in your documents, the card cites the exact section. Copy it, or wave it away.</p>
-        </div>
-        <figure class="shot"><img src="assets/shots/live-answer.webp" alt="A suggested answer card next to Mori during a recording" loading="lazy" width="1400" height="926"></figure>
-      </article>
-    </div>
+          <figure class="e6-shot"><img src="assets/shots/live-answer.webp" alt="A suggested answer card next to Mori during a recording" loading="lazy" width="1400" height="926"></figure>
+        </article>
+      </div>
+    </details>
   </div>
+  <script src="scenes/ep6.js" defer></script>
 </section>
 
 <!-- ───────────────────────── EPISODE 7: CAST ───────────────────────── -->
