@@ -997,6 +997,7 @@
 
 <!-- ───────────────────────── EPISODE 8: PRIVACY ───────────────────────── -->
 <section class="episode night" id="ep8" data-char="jin">
+  <link rel="stylesheet" href="scenes/ep8.css">
   <header class="ep-card">
     <div class="burst" aria-hidden="true"></div>
     <span class="ep-no" aria-hidden="true">08</span>
@@ -1011,42 +1012,185 @@
       <div class="actor"><img alt="" width="300" height="480"></div>
       <div class="shadow"></div>
     </aside>
-    <div class="steps">
-      <article class="step" data-pose="idle" data-say="Three modes. You choose. The badge never lies.">
-        <div class="step-text">
-          <h3>Local, Hybrid or Cloud</h3>
-          <div class="modes">
-            <div class="mode"><span class="badge local">Local</span><p>Whisper on your GPU, a local model for summaries and Ask.</p><p class="leaves">Leaves your laptop: <b>nothing</b></p></div>
-            <div class="mode hl"><span class="badge">Hybrid · default</span><p>Whisper on your GPU, a cloud provider for summaries and Ask.</p><p class="leaves">Leaves: meeting <b>text</b> for summaries, only the <b>few passages</b> Ask looks up</p></div>
-            <div class="mode"><span class="badge cloud">Cloud</span><p>A cloud speech-to-text service, any AI provider.</p><p class="leaves">Leaves: <b>audio</b> to the transcription provider, text as above</p></div>
+
+    <div class="ep8-box" id="ep8Box">
+      <svg class="ep8-defs" aria-hidden="true" width="0" height="0" focusable="false">
+        <symbol id="ep8-wave" viewBox="0 0 24 12"><path d="M2 5v2M5 3v6M8 1v10M11 4v4M14 2v8M17 4v4M20 3v6M23 5v2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+        <symbol id="ep8-lines" viewBox="0 0 24 12"><path d="M2 2h20M2 6h16M2 10h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+        <symbol id="ep8-pin" viewBox="0 0 24 24"><path d="M9 3h6l-1 6 3 3v2h-4v7l-1 1-1-1v-7H7v-2l3-3z" fill="currentColor"/></symbol>
+      </svg>
+
+      <fieldset class="ep8-switch">
+        <legend class="sr-only">Processing mode: what leaves your laptop</legend>
+        <label class="ep8-opt local">
+          <input type="radio" name="ep8-mode" value="local">
+          <span class="ep8-optname">Local</span>
+          <span class="ep8-optleaves">Leaves your laptop: <b>nothing</b></span>
+        </label>
+        <label class="ep8-opt hybrid">
+          <input type="radio" name="ep8-mode" value="hybrid" checked>
+          <span class="ep8-optname">Hybrid <small>default</small></span>
+          <span class="ep8-optleaves">Leaves: meeting <b>text</b> only</span>
+        </label>
+        <label class="ep8-opt cloud">
+          <input type="radio" name="ep8-mode" value="cloud">
+          <span class="ep8-optname">Cloud</span>
+          <span class="ep8-optleaves">Leaves: <b>audio</b> + text</span>
+        </label>
+      </fieldset>
+
+      <p class="sr-only">A diagram of your laptop and a cloud provider. The laptop keeps the recordings, transcripts, summaries, the search index, known voices and API keys in ~/.local/share/mostalgia. Choosing a mode above changes what travels to the cloud: in Local nothing does; in Hybrid only text packets do (meeting text for summaries and the few passages Ask looks up) while audio stays; in Cloud audio chunks go to a speech-to-text provider as well. Below the switch, the scene also shows audio older than 30 days being cleaned up while transcripts stay, and a meeting being forgotten together with its search index entries.</p>
+
+      <div class="ep8-scene" id="ep8Scene" aria-hidden="true">
+        <div class="ep8-laptop">
+          <div class="ep8-screen">
+            <div class="ep8-path"><span class="ep8-folder"></span><code>~/.local/share/mostalgia</code><span class="ep8-here">on this laptop</span></div>
+            <ol class="ep8-rows">
+              <li class="ep8-row now">
+                <span class="ep8-mt"><b>Spring launch sync</b><small>Today · 32 min</small></span>
+                <span class="ep8-chips">
+                  <span class="ep8-chip au"><svg viewBox="0 0 24 12"><use href="#ep8-wave"/></svg>audio</span>
+                  <span class="ep8-chip tx"><svg viewBox="0 0 24 12"><use href="#ep8-lines"/></svg>transcript</span>
+                  <span class="ep8-chip sm">✦ summary</span>
+                </span>
+              </li>
+              <li class="ep8-row forget gone">
+                <span class="ep8-mt"><b>Design review: icons</b><small>12 days ago</small></span>
+                <span class="ep8-chips">
+                  <span class="ep8-chip au"><svg viewBox="0 0 24 12"><use href="#ep8-wave"/></svg>audio</span>
+                  <span class="ep8-chip tx"><svg viewBox="0 0 24 12"><use href="#ep8-lines"/></svg>transcript</span>
+                  <span class="ep8-chip sm">✦ summary</span>
+                </span>
+                <span class="ep8-ghost">Forgotten · library, search index and audio</span>
+                <span class="ep8-dust"><i>transcript</i><i>summary</i><i>speaker names</i><i>index entries</i><i>audio</i></span>
+              </li>
+              <li class="ep8-row old cleaned">
+                <span class="ep8-mt"><b>Q3 budget</b><small>41 days ago</small></span>
+                <span class="ep8-chips">
+                  <span class="ep8-chip au"><svg viewBox="0 0 24 12"><use href="#ep8-wave"/></svg>audio</span>
+                  <span class="ep8-chip tx"><svg viewBox="0 0 24 12"><use href="#ep8-lines"/></svg>transcript</span>
+                  <span class="ep8-chip sm">✦ summary</span>
+                  <span class="ep8-tag">Audio deleted after 30 days</span>
+                </span>
+              </li>
+              <li class="ep8-row kept">
+                <span class="ep8-mt"><b>Project kickoff</b><small>95 days ago</small></span>
+                <span class="ep8-chips">
+                  <span class="ep8-chip au"><svg viewBox="0 0 24 12"><use href="#ep8-wave"/></svg>audio<svg class="ep8-pin" viewBox="0 0 24 24"><use href="#ep8-pin"/></svg></span>
+                  <span class="ep8-chip tx"><svg viewBox="0 0 24 12"><use href="#ep8-lines"/></svg>transcript</span>
+                  <span class="ep8-chip sm">✦ summary</span>
+                  <span class="ep8-keep">Keep audio</span>
+                </span>
+              </li>
+            </ol>
+            <div class="ep8-dialog">
+              <b>Forget this meeting for good?</b>
+              <span>The transcript, summary, bookmarks, speaker names and search index will be removed.</span>
+              <span class="ep8-check"><i></i>Also delete the audio files</span>
+              <span class="ep8-dbtns"><em>Cancel</em><em class="del">Delete</em></span>
+            </div>
+            <div class="ep8-stores">
+              <span class="ep8-store idx">Search index <small>BM25 + embeddings</small><em class="ep8-minus">− 1 meeting</em></span>
+              <span class="ep8-store vo">Known voices <small>voice prints only</small></span>
+              <span class="ep8-store key">API keys <small>GNOME keyring</small></span>
+            </div>
           </div>
+          <div class="ep8-base"></div>
         </div>
-      </article>
-      <article class="step" data-pose="thinking" data-say="Recordings on your disk. Index on your disk. Keys in your keyring.">
-        <div class="step-text">
-          <h3>Where everything lives</h3>
-          <ul class="ticks">
-            <li><b>Recordings</b> always stay on your disk, whatever the mode.</li>
-            <li>The <b>search index</b> for Ask (BM25 + embeddings) is always local.</li>
-            <li><b>API keys</b> live in the GNOME keyring and go only to their own provider.</li>
+
+        <div class="ep8-gate">
+          <div class="ep8-say"><b>Jin</b> <span id="ep8Say">Three modes. You choose. The badge never lies.</span></div>
+          <img class="ep8-jin" id="ep8Jin" src="assets/cast/jin-idle.webp" alt="" width="300" height="480" loading="lazy">
+        </div>
+
+        <div class="ep8-wire">
+          <div class="ep8-lane text">
+            <span class="ep8-lname"><i class="ep8-key"></i>Text <small>meeting text for summaries · the few passages Ask looks up</small></span>
+            <div class="ep8-track">
+              <span class="ep8-lock"><svg viewBox="0 0 24 28"><path class="sh" d="M7 13V9a5 5 0 0 1 10 0v4" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><rect x="3" y="12" width="18" height="14" rx="3" fill="currentColor"/></svg></span>
+              <span class="ep8-sfx">カチッ</span>
+              <span class="ep8-pk tx st go" style="--x:34%"></span>
+              <span class="ep8-pk tx st go" style="--x:58%"></span>
+              <span class="ep8-pk tx st go" style="--x:82%"></span>
+              <span class="ep8-pk tx st held" style="--x:2%"></span>
+            </div>
+          </div>
+          <div class="ep8-lane audio">
+            <span class="ep8-lname"><i class="ep8-key"></i>Audio <small>chunks for speech-to-text</small></span>
+            <div class="ep8-track">
+              <span class="ep8-lock"><svg viewBox="0 0 24 28"><path class="sh" d="M7 13V9a5 5 0 0 1 10 0v4" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><rect x="3" y="12" width="18" height="14" rx="3" fill="currentColor"/></svg></span>
+              <span class="ep8-sfx">カチッ</span>
+              <span class="ep8-pk au st go" style="--x:34%"></span>
+              <span class="ep8-pk au st go" style="--x:58%"></span>
+              <span class="ep8-pk au st go" style="--x:82%"></span>
+              <span class="ep8-pk au st held" style="--x:2%"></span>
+            </div>
+          </div>
+          <p class="ep8-stays"><span data-m="local">Nothing leaves. Both lanes locked.</span><span data-m="hybrid">Audio stays on your laptop.</span><span data-m="cloud">The WAV files still stay on your disk.</span></p>
+        </div>
+
+        <div class="ep8-cloud">
+          <svg class="ep8-cloudsvg" viewBox="0 0 200 120"><path d="M48 104h112a34 34 0 0 0 4-67.8A44 44 0 0 0 80 26a32 32 0 0 0-34 30 24 24 0 0 0 2 48z" fill="currentColor" stroke="#2B1730" stroke-width="4" stroke-linejoin="round"/></svg>
+          <span class="ep8-cname">Cloud provider</span>
+          <span class="ep8-zzz">nothing arrives</span>
+          <ul class="ep8-rx">
+            <li class="tx"><span></span>Summaries &amp; Ask <small>gets text</small></li>
+            <li class="au"><span></span>Speech-to-text <small>gets audio</small></li>
           </ul>
         </div>
-      </article>
-      <article class="step" data-pose="writing" data-say="Old audio, cut after N days. The notes stay.">
-        <div class="step-text">
-          <h3>Auto cleanup</h3>
-          <p>Delete meeting audio after 7, 14, 30 or 90 days (or any number), and keep everything else: transcript, summary, notes. It asks the first time, never touches a meeting that's open or pinned with <b>Keep audio</b>, and logs what it removed.</p>
+      </div>
+
+      <div class="ep8-under">
+        <div class="ep8-caption" id="ep8Caption">
+          <p data-m="local"><b>Local.</b> Transcription: Whisper on your GPU <span class="badge local">local</span> · Summaries &amp; Ask: a local model <span class="badge local">local</span></p>
+          <p data-m="hybrid"><b>Hybrid, the default.</b> Transcription: Whisper on your GPU <span class="badge local">local</span> · Summaries &amp; Ask: a cloud provider <span class="badge cloud">cloud</span></p>
+          <p data-m="cloud"><b>Cloud.</b> Transcription: a cloud speech-to-text service <span class="badge cloud">cloud</span> · Summaries &amp; Ask: any AI provider <span class="badge cloud">cloud</span></p>
         </div>
-      </article>
-      <article class="step" data-pose="talking" data-say="Want a meeting gone? Gone. Index and all.">
-        <div class="step-text">
-          <h3>Forget a meeting, completely</h3>
-          <p>Delete a meeting and it's removed from the library, the search index and, if you tick the box, the disk.</p>
+        <p class="ep8-foot"><button type="button" class="ep8-replay" id="ep8Replay" aria-label="Replay the privacy data-flow animation" hidden>↻ Replay</button></p>
+      </div>
+
+      <ul class="steps ep8-points">
+        <li class="step" data-pose="idle" data-say="Three modes. You choose. The badge never lies."><b>Local, Hybrid or Cloud:</b> one switch, and every connection says where it goes.</li>
+        <li class="step" data-pose="thinking" data-say="Recordings on your disk. Index on your disk. Keys in your keyring."><b>Always on your disk:</b> recordings, the search index and your API keys.</li>
+        <li class="step" data-pose="writing" data-say="Old audio, cut after N days. The notes stay."><b>Auto cleanup</b> deletes old audio; transcripts and notes stay.</li>
+        <li class="step" data-pose="talking" data-say="Want a meeting gone? Gone. Index and all."><b>Forget a meeting</b> and it leaves the library and the search index too.</li>
+      </ul>
+
+      <details class="ep8-more">
+        <summary>All details</summary>
+        <div class="ep8-detail">
+          <section>
+            <h3>Local, Hybrid or Cloud</h3>
+            <div class="modes">
+              <div class="mode"><span class="badge local">Local</span><p>Whisper on your GPU, a local model for summaries and Ask.</p><p class="leaves">Leaves your laptop: <b>nothing</b></p></div>
+              <div class="mode hl"><span class="badge">Hybrid · default</span><p>Whisper on your GPU, a cloud provider for summaries and Ask.</p><p class="leaves">Leaves: meeting <b>text</b> for summaries, only the <b>few passages</b> Ask looks up</p></div>
+              <div class="mode"><span class="badge cloud">Cloud</span><p>A cloud speech-to-text service, any AI provider.</p><p class="leaves">Leaves: <b>audio</b> to the transcription provider, text as above</p></div>
+            </div>
+            <p>Nothing ever switches provider behind your back: if one fails you get an error naming it, the recording stays on disk, and <i>Transcribe again</i> lets you choose another engine.</p>
+          </section>
+          <section>
+            <h3>Where everything lives</h3>
+            <ul class="ticks">
+              <li><b>Recordings</b> always stay on your disk, whatever the mode, in <code>~/.local/share/mostalgia</code>.</li>
+              <li>The <b>search index</b> for Ask (BM25 + embeddings) is always local. If you pick cloud embeddings (Settings → AI → Search), passage and question text goes to that provider to be embedded.</li>
+              <li><b>API keys</b> live in the GNOME keyring and go only to their own provider.</li>
+              <li><b>Known voices</b> keep only a voice print, no audio; manage or forget them in Settings → Speakers.</li>
+            </ul>
+          </section>
+          <section>
+            <h3>Auto cleanup</h3>
+            <p>Delete meeting audio after 7, 14, 30 or 90 days (or any number), and keep everything else: transcript, summary, notes. It asks the first time, never touches a meeting that's open or pinned with <b>Keep audio</b>, and logs what it removed.</p>
+          </section>
+          <section>
+            <h3>Forget a meeting, completely</h3>
+            <p>Delete a meeting and it's removed from the library, the search index and, if you tick the box, the disk.</p>
+            <figure class="shot"><img src="assets/shots/delete.webp" alt="Dialog asking to forget a meeting for good" loading="lazy" width="1240" height="820"></figure>
+          </section>
         </div>
-        <figure class="shot"><img src="assets/shots/delete.webp" alt="Dialog asking to forget a meeting for good" loading="lazy" width="1240" height="820"></figure>
-      </article>
+      </details>
     </div>
   </div>
+  <script src="scenes/ep8.js" defer></script>
 </section>
 
 <!-- ───────────────────────── EPISODE 9: THEMES ───────────────────────── -->
