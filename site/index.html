@@ -214,6 +214,7 @@
 
 <!-- ───────────────────────── EPISODE 1 ───────────────────────── -->
 <section class="episode" id="ep1" data-char="mori">
+  <link rel="stylesheet" href="scenes/ep1.css">
   <header class="ep-card">
     <div class="burst" aria-hidden="true"></div>
     <span class="ep-no" aria-hidden="true">01</span>
@@ -223,29 +224,129 @@
     </div>
   </header>
   <div class="ep-body">
-    <aside class="stage" aria-hidden="true">
+    <!-- kept for main.js (pose + mini guide); this episode shows Mori inside its scene instead -->
+    <aside class="stage" aria-hidden="true" hidden>
       <div class="bubble"><span class="who">Mori</span><p class="say"></p></div>
       <div class="actor"><img alt="" width="300" height="480"></div>
       <div class="shadow"></div>
     </aside>
-    <div class="steps">
-      <article class="step" data-pose="listening" data-say="Your mic and the call, on separate tracks. So I always know who's talking.">
-        <div class="step-text">
+
+    <div class="sr-only" id="e1Desc">
+      <p>An animated mock-up of a computer desktop. A call called “Spring launch sync” starts in your call app and the microphone indicator in the top bar lights up. A Mostalgia notification slides in: “Your call app is using the mic. Record?” With auto-start on, recording begins by itself. The Mostalgia window shows two separate tracks with their own waveforms: “Me” from the headset microphone and “Others” from desktop audio, each bouncing when that side talks. When your microphone goes silent, a nudge flashes: “Your mic has gone quiet. Muted by accident?” Fourteen minutes later the screen flickers and the power cuts out. After the restart, Mostalgia repairs the tracks and stamps them “Recovered: 14:32 of audio”. Finally an audio file, meeting.m4a, is dropped onto the window and imported as a 42-minute meeting.</p>
+    </div>
+
+    <div class="e1-stagebox">
+      <div class="e1-scene" id="e1Scene" aria-hidden="true">
+        <div class="e1-screen">
+          <div class="e1-panel">
+            <span class="e1-clock">Tue 10:14</span>
+            <span class="e1-tray">
+              <span class="e1-micind" title=""><svg viewBox="0 0 24 24" width="12" height="12"><rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg></span>
+              <span class="e1-trayapp"><img src="assets/brand/icon.svg" alt="" width="14" height="14"></span>
+              <svg class="e1-batt" viewBox="0 0 24 24" width="14" height="14"><rect x="2" y="7" width="18" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><rect x="4.5" y="9.5" width="10" height="5" fill="currentColor"/><path d="M22 10v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </span>
+          </div>
+
+          <div class="e1-call">
+            <div class="e1-ctitle"><span class="e1-cdots"><i></i><i></i><i></i></span><b>your call app</b><span class="e1-cstat" id="e1CallStat">In call</span></div>
+            <p class="e1-cname">Spring launch sync</p>
+            <div class="e1-tiles">
+              <span class="e1-tile you"><b>Me</b><small>You</small></span>
+              <span class="e1-tile lena"><b>L</b><small>Lena</small></span>
+              <span class="e1-tile sam"><b>S</b><small>Sam</small></span>
+            </div>
+            <div class="e1-cbar">
+              <span class="e1-cbtn mic"><svg viewBox="0 0 24 24" width="14" height="14"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+              <span class="e1-cbtn"><svg viewBox="0 0 24 24" width="14" height="14"><rect x="3" y="7" width="12" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M15 11l6-3v8l-6-3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg></span>
+              <span class="e1-cbtn end"><svg viewBox="0 0 24 24" width="16" height="16"><path d="M3 14c5-5 13-5 18 0l-2.5 2.5-3-2v-2.5c-2.3-.7-4.7-.7-7 0V14.5l-3 2z" fill="currentColor"/></svg></span>
+            </div>
+          </div>
+
+          <div class="e1-app">
+            <div class="e1-titlebar"><img src="assets/brand/icon.svg" alt="" width="14" height="14"> Mostalgia</div>
+            <div class="e1-appbody">
+              <div class="e1-side">
+                <span class="e1-recpill" id="e1Pill">+ New recording</span>
+                <span class="e1-group">Today</span>
+                <span class="e1-item on"><b>Spring launch sync</b><small>10:00 · 14 min</small></span>
+                <span class="e1-item e1-import"><b>meeting.m4a</b><small><span id="e1ImpState">Imported · 42 min</span></small><i class="e1-prog"><i id="e1ImpBar"></i></i></span>
+                <span class="e1-item e1-extra"><b>Design review: icons</b><small>09:15 · 24 min</small></span>
+                <span class="e1-group e1-extra">Yesterday</span>
+                <span class="e1-item e1-extra"><b>1:1 with Sam</b><small>16:30 · 30 min</small></span>
+              </div>
+              <div class="e1-main">
+                <div class="e1-bar">
+                  <span class="e1-dot"></span>
+                  <span class="e1-timer" id="e1Timer">14:32</span>
+                  <span class="e1-state" id="e1State">Recovered</span>
+                  <span class="e1-btns"><span class="e1-btn"><svg viewBox="0 0 24 24" width="11" height="11"><path d="M7 3h10v18l-5-4-5 4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>Mark</span><span class="e1-btn"><svg viewBox="0 0 24 24" width="11" height="11"><path d="M9 5v14M15 5v14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>Pause</span><span class="e1-btn stop"><i></i>Stop</span></span>
+                </div>
+                <div class="e1-tracks">
+                  <div class="e1-track me">
+                    <span class="e1-tl"><span class="e1-chip me">Me</span><small><svg viewBox="0 0 24 24" width="11" height="11"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Headset microphone</small></span>
+                    <span class="e1-wave" id="e1WaveMe"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+                  </div>
+                  <div class="e1-track others">
+                    <span class="e1-tl"><span class="e1-chip others">Others</span><small><svg viewBox="0 0 24 24" width="11" height="11"><rect x="3" y="4" width="18" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 20h6M12 16v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Desktop audio · Laptop speakers</small></span>
+                    <span class="e1-wave" id="e1WaveOthers"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+                  </div>
+                  <p class="e1-nudge"><svg viewBox="0 0 24 24" width="16" height="16"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4M4 4l16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span><b>Your mic has gone quiet.</b> Muted by accident?</span></p>
+                </div>
+                <div class="e1-status">
+                  <span class="e1-disk"><svg viewBox="0 0 24 24" width="12" height="12"><path d="M5 3h11l3 3v15H5z M8 3v5h7V3 M8 14h8v7H8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>Synced to disk every 2 s</span>
+                  <span class="e1-final" id="e1Final">Tracks repaired · final pass done</span>
+                </div>
+                <div class="e1-stamp"><b>Recovered</b><span>14:32 of audio</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="e1-toast">
+            <img src="assets/brand/icon.svg" alt="" width="28" height="28">
+            <div class="e1-tbody">
+              <p class="e1-ttitle">Mostalgia</p>
+              <p class="e1-tmsg" id="e1ToastMsg">Your call app is using the mic. Record?</p>
+              <span class="e1-tbtns"><span class="e1-tbtn rec" id="e1RecBtn">Record</span><span class="e1-tbtn">Not now</span><span class="e1-auto">Auto-start on<i><i></i></i></span></span>
+            </div>
+          </div>
+
+          <span class="e1-later">14 minutes later…</span>
+          <span class="e1-file"><svg viewBox="0 0 24 24" width="30" height="30"><path d="M6 2h9l5 5v15H6z" fill="#FBF3E4" stroke="#2B1730" stroke-width="1.6" stroke-linejoin="round"/><path d="M15 2v5h5" fill="none" stroke="#2B1730" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 16v-3M11.5 18v-7M14 16v-3M16.5 15v-1" stroke="#D9653B" stroke-width="1.8" stroke-linecap="round"/></svg><b>meeting.m4a</b></span>
+          <div class="e1-off"><span class="e1-pow"><svg viewBox="0 0 24 24" width="34" height="34"><path d="M12 3v8M7 6.5a7 7 0 1 0 10 0" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></div>
+        </div>
+
+        <div class="e1-cast">
+          <div class="e1-say"><b>Mori</b> <span id="e1Say">Recorded, rescued, imported. Not a minute slipped by.</span></div>
+          <img class="e1-mori" id="e1Mori" src="assets/cast/mori-idle.webp" alt="" width="300" height="480" loading="lazy">
+          <div class="e1-shadow"></div>
+        </div>
+      </div>
+      <button type="button" class="e1-replay" id="e1Replay" aria-label="Replay the recording animation" hidden><span aria-hidden="true">↻</span> Replay</button>
+    </div>
+
+    <ul class="e1-points" aria-label="Recording in short">
+      <li class="step" data-pose="talking" data-say="Call starts, I start. Call ends, I stop. That's the whole deal."><b>Auto-start</b> when your call app grabs the mic</li>
+      <li class="step" data-pose="listening" data-say="Your mic and the call, on separate tracks. So I always know who's talking."><b>Two tracks:</b> your mic is <i>Me</i>, the call is <i>Others</i></li>
+      <li class="step" data-pose="thinking" data-say="Your mic's gone very quiet. Muted by accident?"><b>A nudge</b> when your mic goes quiet</li>
+      <li class="step" data-pose="error" data-say="Power cut?! Okay, okay… at most two seconds lost. I'll recover the rest at launch."><b>Crash-safe:</b> lose seconds, not the meeting</li>
+      <li class="step" data-pose="writing" data-say="Old recordings and chat exports? Hand them over. I'll treat them like any meeting."><b>Import</b> the recordings you already have</li>
+    </ul>
+
+    <details class="e1-more">
+      <summary>All details</summary>
+      <div class="e1-cards">
+        <article class="step-text">
           <h3>Two tracks, always</h3>
           <p>Mostalgia records <b>your microphone and the other side of the call</b> (desktop audio) as separate tracks, so every line knows if it came from <i>Me</i> or <i>Others</i>. Readable device names, live level meters, and a nudge when your mic has gone suspiciously quiet.</p>
-        </div>
-        <figure class="shot"><img src="assets/shots/recording.webp" alt="Live recording with speaker chips and provisional text" loading="lazy" width="1240" height="820"></figure>
-      </article>
-      <article class="step" data-pose="talking" data-say="Call starts, I start. Call ends, I stop. That's the whole deal.">
-        <div class="step-text">
+          <figure class="shot"><img src="assets/shots/recording.webp" alt="Live recording with speaker chips and provisional text" loading="lazy" width="1240" height="820"></figure>
+        </article>
+        <article class="step-text">
           <h3>Auto-start with calls</h3>
           <p>Mostalgia notices when a call app grabs the mic and offers to record (or just starts), then stops when the call ends.</p>
           <ul class="chips"><li>Zoom</li><li>Teams</li><li>Meet</li><li>Discord</li><li>Slack</li><li>Signal</li><li>Element</li><li>Jitsi</li><li>Webex</li><li>Telegram</li><li>WhatsApp</li><li>any call in your browser</li></ul>
-        </div>
-        <figure class="shot"><img src="assets/shots/new-recording.webp" alt="New recording screen with microphone and desktop audio toggles" loading="lazy" width="1240" height="820"></figure>
-      </article>
-      <article class="step" data-pose="writing" data-say="Something important? Hit Mark. I'll pin it to the second.">
-        <div class="step-text">
+          <figure class="shot"><img src="assets/shots/new-recording.webp" alt="New recording screen with microphone and desktop audio toggles" loading="lazy" width="1240" height="820"></figure>
+        </article>
+        <article class="step-text">
           <h3>Stay in the moment</h3>
           <ul class="ticks">
             <li><b>Mark</b> a moment as a bookmark, <b>pause</b> when you need to.</li>
@@ -253,23 +354,20 @@
             <li>Tray icon and a global shortcut: <kbd>Super</kbd> + <kbd>Shift</kbd> + <kbd>R</kbd>.</li>
             <li>After Stop, the meeting appears straight away with <b>real progress</b> while it's processed.</li>
           </ul>
-        </div>
-      </article>
-      <article class="step" data-pose="error" data-say="Power cut?! Okay, okay… at most two seconds lost. I'll recover the rest at launch.">
-        <div class="step-text">
+        </article>
+        <article class="step-text">
           <h3>Crash-safe recording</h3>
           <p>Tracks are flushed and synced to disk <b>every 2 seconds</b>, from their own threads, and never wait for transcription. If the app or the laptop dies mid-meeting, Mostalgia repairs the tracks at the next launch and runs the normal final pass, so you lose seconds, not the meeting.</p>
-        </div>
-      </article>
-      <article class="step" data-pose="writing" data-say="Old recordings and chat exports? Hand them over. I'll treat them like any meeting.">
-        <div class="step-text">
+        </article>
+        <article class="step-text">
           <h3>Bring the meetings you already have</h3>
           <p><b>Import recordings</b>: any audio or video file becomes a meeting, with speakers, summary and notes. Or create a <b>meeting from text</b>: paste or open a Teams, Zoom or Meet export, WebVTT/SRT subtitles or plain notes.</p>
           <ul class="chips"><li>MP3</li><li>M4A / AAC</li><li>MP4</li><li>MOV</li><li>FLAC</li><li>WAV</li><li>AIFF</li><li>Ogg</li><li>MKV / WebM</li><li>Opus (via ffmpeg)</li><li>.txt · .md · .vtt · .srt</li></ul>
-        </div>
-      </article>
-    </div>
+        </article>
+      </div>
+    </details>
   </div>
+  <script src="scenes/ep1.js" defer></script>
 </section>
 
 <!-- ───────────────────────── EPISODE 2 ───────────────────────── -->
