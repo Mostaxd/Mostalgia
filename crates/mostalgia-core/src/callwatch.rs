@@ -1,6 +1,7 @@
-//! Noticing calls: polls PipeWire (through its PulseAudio interface) for
-//! apps recording from a microphone, and reports when a call app starts and
-//! — after a grace period, so a brief stream restart doesn't count — stops.
+//! Noticing calls: polls PipeWire (through its PulseAudio interface; Core
+//! Audio on macOS, see `callwatch_macos.rs`) for apps recording from a
+//! microphone, and reports when a call app starts and — after a grace
+//! period, so a brief stream restart doesn't count — stops.
 
 #[cfg(target_os = "linux")]
 use std::cell::RefCell;
@@ -16,6 +17,7 @@ use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
 use anyhow::Context as _;
+#[cfg(not(target_os = "macos"))]
 use anyhow::Result;
 use crossbeam_channel::Sender;
 #[cfg(target_os = "linux")]
@@ -65,6 +67,8 @@ const CALL_APPS: &[(&str, &[&str])] = &[
     ("Webex", &["webex", "ciscowebex"]),
     ("Telegram", &["telegram"]),
     ("WhatsApp", &["whatsapp"]),
+    // macOS (FaceTime's audio runs in `avconferenced`).
+    ("FaceTime", &["facetime", "avconferenced"]),
 ];
 
 /// Browsers: any microphone capture there is WebRTC (Meet, Teams web, Jitsi…).
@@ -76,6 +80,8 @@ const BROWSERS: &[(&str, &[&str])] = &[
     ("Vivaldi", &["vivaldi"]),
     ("Opera", &["opera"]),
     ("Firefox", &["firefox"]),
+    // macOS: Safari's media runs in WebKit's GPU process.
+    ("Safari", &["safari", "com.apple.webkit"]),
 ];
 
 /// The call app behind a recording stream, if it is one ("Zoom",
@@ -172,12 +178,18 @@ impl Pulse {
     }
 }
 
+#[cfg(target_os = "macos")]
+#[path = "callwatch_macos.rs"]
+mod macos;
+#[cfg(target_os = "macos")]
+use macos::Watcher as Pulse;
+
 /// No call detection here yet: connecting always fails, so the watcher
 /// just keeps waiting.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 struct Pulse;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 impl Pulse {
     fn connect() -> Result<Self> {
         anyhow::bail!("call detection is not available on this system yet")

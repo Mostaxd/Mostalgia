@@ -44,6 +44,20 @@ zip = { version = "8", default-features = false, features = ["deflate"] }
 libpulse-binding = "2.30.1"
 libpulse-simple-binding = "2.29.0"
 
+# Core Audio (system audio tap, call detection) and ScreenCaptureKit (system
+# audio before macOS 14.2) on macOS. Same objc2 generation as GPUI's.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+dispatch2 = "0.3"
+libc = "0.2"
+objc2 = "0.6"
+objc2-core-audio = "0.3"
+objc2-core-audio-types = "0.3"
+objc2-core-foundation = "0.3"
+objc2-core-media = "0.3"
+objc2-foundation = "0.3"
+objc2-screen-capture-kit = "0.3"
+
 [features]
 default = ["diarization"]
 vulkan = ["whisper-rs/vulkan"]

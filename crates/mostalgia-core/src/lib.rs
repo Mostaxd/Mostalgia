@@ -5,6 +5,8 @@
 pub mod ask;
 pub mod assist;
 pub mod audio;
+#[cfg(target_os = "macos")]
+pub mod audio_macos;
 pub mod callwatch;
 pub mod chunker;
 pub mod cleanup;
