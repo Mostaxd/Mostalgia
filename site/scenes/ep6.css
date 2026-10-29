@@ -304,3 +304,6 @@
 @media (prefers-reduced-motion: reduce) {
   #ep6 .e6-cursor { display: none; }
 }
+
+/* The answer card waits off to the side before it slides in; keep that from widening the page on phones. */
+#ep6 { overflow-x: clip; }
