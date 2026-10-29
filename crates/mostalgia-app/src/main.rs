@@ -32,6 +32,22 @@ fn main() {
             KeyBinding::new("ctrl-0", app::ZoomReset, None),
             KeyBinding::new("delete", app::DeleteSelected, Some("Library")),
         ]);
+        // macOS: the same with the Command key, and quitting with the
+        // window (as elsewhere) rather than living on without one.
+        #[cfg(target_os = "macos")]
+        {
+            cx.bind_keys([
+                KeyBinding::new("cmd-q", Quit, None),
+                KeyBinding::new("cmd-k", app::OpenAsk, None),
+                KeyBinding::new("cmd-=", app::ZoomIn, None),
+                KeyBinding::new("cmd-+", app::ZoomIn, None),
+                KeyBinding::new("cmd-shift-=", app::ZoomIn, None),
+                KeyBinding::new("cmd--", app::ZoomOut, None),
+                KeyBinding::new("cmd-0", app::ZoomReset, None),
+                KeyBinding::new("cmd-backspace", app::DeleteSelected, Some("Library")),
+            ]);
+            cx.set_quit_mode(QuitMode::LastWindowClosed);
+        }
         cx.on_action(|_: &Quit, cx| cx.quit());
         cx.on_action(|_: &app::ZoomIn, cx| app::MostalgiaApp::zoom_unfocused(Some(true), cx));
         cx.on_action(|_: &app::ZoomOut, cx| app::MostalgiaApp::zoom_unfocused(Some(false), cx));
