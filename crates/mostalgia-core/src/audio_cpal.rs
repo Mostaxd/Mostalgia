@@ -16,7 +16,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::Sender;
 
 use crate::audio::{Block, CaptureCtl, DEFAULT_MONITOR, Source, SourceInfo};
-use crate::audio_pump::{Opened, RawSink, spawn_pump};
+use crate::audio_pump::{Opened, Raw, RawSink, spawn_pump};
 
 /// Captures a microphone (`device`: a name from [`input_sources`], or
 /// `None` for the default one).
@@ -43,18 +43,54 @@ fn spawn_device_capture(
     ctl: CaptureCtl,
 ) -> Result<JoinHandle<Result<()>>> {
     spawn_pump(source, wav_path, tx, ctl, loopback, move |raw| {
-        let host = cpal::default_host();
-        let dev = find_device(&host, device.as_deref(), loopback)?;
-        let config = if loopback { dev.default_output_config() } else { dev.default_input_config() }
-            .with_context(|| format!("reading the audio format of {dev}"))?;
-        let sink = RawSink::new(raw, config.channels() as usize);
-        let stream = build_input(&dev, config, sink).with_context(|| match source {
-            Source::Mic => format!("opening the microphone ({dev})"),
-            Source::System => format!("capturing the system audio of {dev}"),
-        })?;
-        stream.play().with_context(|| format!("starting the audio stream of {dev}"))?;
-        Ok(Opened { rate: config.sample_rate(), guard: Box::new(stream) })
+        #[cfg(target_os = "windows")]
+        com_mta();
+        // WASAPI sometimes refuses the first activation right after the
+        // other capture thread started (RPC_E_CHANGED_MODE, "Cannot change
+        // thread mode"); a moment later the same device opens fine.
+        let mut tries = 0;
+        loop {
+            match open_device(source, device.as_deref(), loopback, raw.clone()) {
+                Ok(opened) => return Ok(opened),
+                Err(e) if tries < OPEN_RETRIES => {
+                    eprintln!("[mostalgia] audio ({}), trying again: {e:#}", source.as_str());
+                    tries += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                }
+                Err(e) => return Err(e),
+            }
+        }
     })
+}
+
+/// How often opening a device is tried again before the recording fails.
+const OPEN_RETRIES: u32 = 2;
+
+fn open_device(source: Source, device: Option<&str>, loopback: bool, raw: Sender<Raw>) -> Result<Opened> {
+    let host = cpal::default_host();
+    let dev = find_device(&host, device, loopback)?;
+    let config = if loopback { dev.default_output_config() } else { dev.default_input_config() }
+        .with_context(|| format!("reading the audio format of {dev}"))?;
+    let sink = RawSink::new(raw, config.channels() as usize);
+    let stream = build_input(&dev, config, sink).with_context(|| match source {
+        Source::Mic => format!("opening the microphone ({dev})"),
+        Source::System => format!("capturing the system audio of {dev}"),
+    })?;
+    stream.play().with_context(|| format!("starting the audio stream of {dev}"))?;
+    Ok(Opened { rate: config.sample_rate(), guard: Box::new(stream) })
+}
+
+/// Joins this capture thread to COM's multithreaded apartment before cpal
+/// touches COM (cpal then keeps it: it only asks for a single-threaded
+/// one when the thread has none). WASAPI is meant to be used from the MTA,
+/// and an STA thread here has no message loop for its callbacks anyway.
+/// The thread ends with the capture, which releases COM with it.
+#[cfg(target_os = "windows")]
+fn com_mta() {
+    use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
+    // SAFETY: initializes COM on this thread only; an already initialized
+    // thread just reports so.
+    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
 }
 
 /// A device by the name the device list gave it (its stable id), or by

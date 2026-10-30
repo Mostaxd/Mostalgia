@@ -9,21 +9,32 @@
 //! pointer and makes the window transparent to the mouse
 //! (`WS_EX_LAYERED | WS_EX_TRANSPARENT`) while it's outside every input
 //! rectangle, and takes input again once it's over one.
+//!
+//! Moves and resizes go through a thread of their own: a `SetWindowPos`
+//! from GPUI's thread sends `WM_SIZE` right away, in the middle of the
+//! frame that asked for it, and GPUI drops the resize there (the app is
+//! busy), so it kept laying the window out at its old size.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::Result;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
+use windows_sys::Win32::Graphics::Dwm::{
+    DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DwmSetWindowAttribute,
+};
 use windows_sys::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromRect,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GWL_EXSTYLE, GetCursorPos, GetWindowLongPtrW, GetWindowRect, HWND_TOPMOST, IsWindow, LWA_ALPHA, SW_HIDE, SW_SHOWNOACTIVATE,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+    GWL_EXSTYLE, GWL_STYLE, GetCursorPos, GetWindowLongPtrW, GetWindowRect, HWND_TOPMOST, IsWindow, LWA_ALPHA, SW_HIDE,
+    SW_SHOWNOACTIVATE, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetLayeredWindowAttributes,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_STATICEDGE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_EX_WINDOWEDGE, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+    WS_POPUP, WS_SYSMENU,
 };
 
 use super::x11::{Monitor, Rect};
@@ -36,6 +47,8 @@ pub struct Win32 {
     /// `None` until set (the whole window takes input).
     input: Arc<Mutex<Option<Vec<Rect>>>>,
     watcher: Option<Arc<AtomicBool>>,
+    /// Where the window should go, for the mover thread (see the top).
+    mover: OnceLock<Sender<Rect>>,
 }
 
 impl Drop for Win32 {
@@ -57,6 +70,11 @@ fn rect_of(r: &RECT) -> Rect {
 fn ex_style(hwnd: isize) -> isize {
     // SAFETY: reading a window's extended style; a stale handle reads 0.
     unsafe { GetWindowLongPtrW(h(hwnd), GWL_EXSTYLE) as isize }
+}
+
+fn style(hwnd: isize) -> isize {
+    // SAFETY: reading a window's style; a stale handle reads 0.
+    unsafe { GetWindowLongPtrW(h(hwnd), GWL_STYLE) as isize }
 }
 
 fn set_ex_style(hwnd: isize, style: isize) {
@@ -93,17 +111,31 @@ impl Win32 {
     pub fn connect(hwnd: isize) -> Result<Self> {
         // SAFETY: checks a handle value.
         anyhow::ensure!(unsafe { IsWindow(h(hwnd)) } != 0, "not a window");
-        Ok(Self { hwnd, input: Arc::default(), watcher: None })
+        Ok(Self { hwnd, input: Arc::default(), watcher: None, mover: OnceLock::new() })
     }
 
-    /// Keeps the window above others and out of the taskbar and Alt+Tab.
+    /// Keeps the window above others and out of the taskbar and Alt+Tab,
+    /// without any frame: GPUI's windows keep a caption (Windows gives
+    /// every top-level window one), which showed as a thin outline around
+    /// her and, as a tool window, a small close button at the top.
     pub fn setup_window(&self) -> Result<()> {
-        let style = (ex_style(self.hwnd) | WS_EX_TOOLWINDOW as isize) & !(WS_EX_APPWINDOW as isize);
-        // SAFETY: plain window calls on our own window.
+        let frame = (WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX) as isize;
+        let window_style = (style(self.hwnd) & !frame) | WS_POPUP as isize;
+        let edges = (WS_EX_APPWINDOW | WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE) as isize;
+        let ex = (ex_style(self.hwnd) | WS_EX_TOOLWINDOW as isize) & !edges;
+        // SAFETY: plain window calls on our own window; the attribute
+        // values outlive the calls.
         unsafe {
             // The taskbar only drops a button when the window is shown anew.
             ShowWindow(h(self.hwnd), SW_HIDE);
-            set_ex_style(self.hwnd, style);
+            SetWindowLongPtrW(h(self.hwnd), GWL_STYLE, window_style as _);
+            set_ex_style(self.hwnd, ex);
+            // Windows 11 draws its own border and rounds the corners of
+            // every window; neither here (fails harmlessly before 11).
+            let none: u32 = DWMWA_COLOR_NONE;
+            DwmSetWindowAttribute(h(self.hwnd), DWMWA_BORDER_COLOR as u32, &none as *const u32 as _, 4);
+            let square = DWMWCP_DONOTROUND;
+            DwmSetWindowAttribute(h(self.hwnd), DWMWA_WINDOW_CORNER_PREFERENCE as u32, &square as *const _ as _, 4);
             ShowWindow(h(self.hwnd), SW_SHOWNOACTIVATE);
             SetWindowPos(h(self.hwnd), HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
         }
@@ -130,11 +162,31 @@ impl Win32 {
         Ok(())
     }
 
+    /// Moves the window a moment later, from the mover thread (see the
+    /// top), so GPUI hears of the new size once it's free to.
     pub fn move_resize(&self, r: Rect) -> Result<()> {
-        // SAFETY: plain window call on our own window.
-        let ok = unsafe { SetWindowPos(h(self.hwnd), HWND_TOPMOST, r.x, r.y, r.w.max(1), r.h.max(1), SWP_NOACTIVATE) };
-        anyhow::ensure!(ok != 0, "moving the window");
-        Ok(())
+        let mover = self.mover.get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::channel::<Rect>();
+            let hwnd = self.hwnd;
+            let spawned = std::thread::Builder::new().name("mori-mover".into()).spawn(move || {
+                while let Ok(mut r) = rx.recv() {
+                    // Only the latest of a burst (a drag).
+                    if let Some(last) = rx.try_iter().last() {
+                        r = last;
+                    }
+                    // SAFETY: plain window call; from this thread it's
+                    // posted to the window's own (`SWP_ASYNCWINDOWPOS`).
+                    unsafe {
+                        SetWindowPos(h(hwnd), HWND_TOPMOST, r.x, r.y, r.w.max(1), r.h.max(1), SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+                    }
+                }
+            });
+            if let Err(e) = spawned {
+                eprintln!("[mori] window mover: {e}");
+            }
+            tx
+        });
+        mover.send(r).map_err(|_| anyhow::anyhow!("moving the window"))
     }
 
     /// Only these rectangles (window pixels) take mouse input; clicks
@@ -248,7 +300,7 @@ mod tests {
 
     #[test]
     fn there_is_always_a_monitor() {
-        let w = Win32 { hwnd: 0, input: Arc::default(), watcher: None };
+        let w = Win32 { hwnd: 0, input: Arc::default(), watcher: None, mover: OnceLock::new() };
         assert!(!w.monitors().is_empty());
     }
 }

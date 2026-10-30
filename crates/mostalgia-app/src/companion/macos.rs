@@ -34,6 +34,8 @@ pub struct MacWindow {
     input: Rc<RefCell<Option<Vec<Rect>>>>,
     /// Switches click-through as the pointer moves (macOS has no input shapes).
     timer: RefCell<Option<Retained<NSTimer>>>,
+    /// The frame `move_resize` asked for, until the run loop sets it.
+    pending: Rc<RefCell<Option<NSRect>>>,
 }
 
 impl Drop for MacWindow {
@@ -77,11 +79,12 @@ impl MacWindow {
         let view: &NSView = unsafe { &*(view as *const NSView) };
         let window = view.window().context("the view has no window")?;
         let scale = window.backingScaleFactor();
-        Ok(Self { window, mtm, scale, input: Rc::default(), timer: RefCell::default() })
+        Ok(Self { window, mtm, scale, input: Rc::default(), timer: RefCell::default(), pending: Rc::default() })
     }
 
-    /// Floats above other windows on every Space, without title bar
-    /// buttons, shadow or Dock icon (this process is only her window).
+    /// Floats above other windows on every Space, without title bar,
+    /// frame, shadow or Dock icon (this process is only her window). A
+    /// titled window keeps a thin light outline even when it's transparent.
     pub fn setup_window(&self) -> Result<()> {
         NSApplication::sharedApplication(self.mtm).setActivationPolicy(NSApplicationActivationPolicy::Accessory);
         let w = &self.window;
@@ -90,6 +93,9 @@ impl MacWindow {
             NSWindowCollectionBehavior::CanJoinAllSpaces | NSWindowCollectionBehavior::FullScreenAuxiliary | NSWindowCollectionBehavior::IgnoresCycle,
         );
         w.setHidesOnDeactivate(false);
+        // (A panel keeps being one: `NonactivatingPanel` stays.)
+        let frame = NSWindowStyleMask::Titled | NSWindowStyleMask::Closable | NSWindowStyleMask::Miniaturizable | NSWindowStyleMask::FullSizeContentView;
+        w.setStyleMask(w.styleMask() & !frame);
         w.setHasShadow(false);
         w.setTitleVisibility(NSWindowTitleVisibility::Hidden);
         w.setTitlebarAppearsTransparent(true);
@@ -130,8 +136,23 @@ impl MacWindow {
         Ok(())
     }
 
+    /// Moves the window once the run loop gets to it: resized in the middle
+    /// of a GPUI frame (where this is called from), GPUI drops the resize
+    /// (the app is busy) and keeps laying the window out at its old size.
     pub fn move_resize(&self, r: Rect) -> Result<()> {
-        self.window.setFrame_display(from_rect(r, primary_height(self.mtm), self.scale), true);
+        let frame = from_rect(r, primary_height(self.mtm), self.scale);
+        if self.pending.borrow_mut().replace(frame).is_some() {
+            // Already on its way; it takes the latest frame.
+            return Ok(());
+        }
+        let (window, pending) = (self.window.clone(), self.pending.clone());
+        let block = RcBlock::new(move |_timer: std::ptr::NonNull<NSTimer>| {
+            if let Some(frame) = pending.borrow_mut().take() {
+                window.setFrame_display(frame, true);
+            }
+        });
+        // (The run loop keeps the timer until it fires.)
+        let _ = unsafe { NSTimer::scheduledTimerWithTimeInterval_repeats_block(0.0, false, &block) };
         Ok(())
     }
 
