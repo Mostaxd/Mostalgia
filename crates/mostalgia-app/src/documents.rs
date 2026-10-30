@@ -667,7 +667,7 @@ impl DocumentsView {
                         .min_w_0()
                         .gap_1p5()
                         .when(!on, |el| el.opacity(0.55))
-                        .child(div().text_sm().font_semibold().truncate().child(name.clone()))
+                        .child(div().min_w_0().text_sm().font_semibold().child(name.clone()))
                         .child(div().flex_none().text_xs().text_color(theme.muted_foreground).child(count)),
                 )
             })
@@ -763,7 +763,7 @@ impl DocumentsView {
                     .flex_1()
                     .min_w_0()
                     .when(!d.used, |el| el.opacity(0.55))
-                    .child(div().text_sm().font_medium().truncate().child(d.title.clone()))
+                    .child(div().text_sm().font_medium().child(d.title.clone()))
                     .child(
                             h_flex()
                             .gap_1()
@@ -827,7 +827,7 @@ impl DocumentsView {
                     .max_w(px(420.))
                     .gap_0p5()
                     .text_sm()
-                    .children(titles.into_iter().take(12).map(|t| h_flex().gap_1p5().child(Icon::new(IconName::FileText).xsmall().text_color(theme.muted_foreground)).child(div().truncate().child(t)))),
+                    .children(titles.into_iter().take(12).map(|t| h_flex().gap_1p5().items_start().child(Icon::new(IconName::FileText).xsmall().flex_none().mt(px(2.)).text_color(theme.muted_foreground)).child(div().min_w_0().child(t)))),
             )
             .child(
                 Button::new("doc-collection-ask")
@@ -869,7 +869,7 @@ impl DocumentsView {
                 h_flex()
                     .gap_2()
                     .child(Self::kind_badge(doc.kind, cx))
-                    .child(div().flex_1().min_w_0().text_lg().font_semibold().truncate().child(doc.title.clone()))
+                    .child(div().flex_1().min_w_0().text_lg().font_semibold().child(doc.title.clone()))
                     .child(
                         h_flex()
                             .gap_1p5()
