@@ -3,14 +3,11 @@
 //! stay above other windows and sit anywhere on any monitor). The app
 //! starts this process and talks to it over stdin / stdout (see `ipc`).
 //!
-//! The window has room beside her for the chat bubble (at its largest)
-//! and above / below her for the point cards, towards the middle of her
-//! monitor. It keeps that size while they open and close: resizing an X11
-//! window shows a frame of black and moves her for a frame. While she's
-//! dragged it's just big enough for her (the window manager keeps a window's
-//! top on the screen, so a tall one couldn't go up far). Only her, the
-//! bubble and the cards take mouse input; clicks on the transparent rest
-//! go to the windows below.
+//! The window is just big enough for her, and grows towards the middle of
+//! her monitor while the chat bubble or point cards are shown, so she
+//! stays where she was put (X11 bit gravity keeps her pixels in place
+//! while it resizes). Only her and those cards take mouse input; clicks
+//! on the transparent rest go to the windows below.
 
 use std::io::{BufRead, Write};
 use std::time::{Duration, Instant};
@@ -27,21 +24,15 @@ use crate::{AppAssets, load_fonts, ui};
 
 /// Room around her in the small window (logical px).
 pub(super) const PAD: f32 = 16.;
-/// Extra width for the chat bubble / cards beside her (the bubble at its widest).
-pub(super) const SIDE_W: f32 = super::bubble::BUBBLE_MAX_W + 4.;
-/// Minimum height of the window (the bubble at its tallest).
-pub(super) const MIN_H: f32 = super::bubble::BUBBLE_MAX_H + 60.;
+/// Extra width beside her for the chat bubble / cards, besides the bubble's.
+const SIDE_EXTRA_W: f32 = 4.;
+/// Extra height of the grown window, besides the bubble's.
+const GROWN_EXTRA_H: f32 = 60.;
 /// Room for the cards above or below her without a known work area.
 pub(super) const CARDS_H: f32 = 300.;
 /// The most room the cards' list takes above or below her (it scrolls).
 pub(super) const CARDS_MAX_H: f32 = 560.;
 /// The sizes above at the app's text size (the bubble and cards grow with it).
-fn side_w() -> f32 {
-    SIDE_W * ui::ui_scale()
-}
-fn min_h() -> f32 {
-    MIN_H * ui::ui_scale()
-}
 fn cards_h() -> f32 {
     CARDS_H * ui::ui_scale()
 }
@@ -68,8 +59,10 @@ pub(crate) struct Placement {
     /// A drag in progress: pointer and window position when it began, and
     /// whether the window manager took over the move.
     pub drag: Option<DesktopDrag>,
-    /// The window is just big enough for her (while she's dragged).
-    pub small: bool,
+    /// The chat bubble's size at its tallest (logical px), which the grown
+    /// window makes room for.
+    pub bubble: (f32, f32),
+    gravity: Option<(bool, bool)>,
 }
 
 #[derive(Clone, Copy)]
@@ -77,14 +70,12 @@ pub(crate) struct DesktopDrag {
     pub pointer: (i32, i32),
     pub window: (i32, i32),
     pub wm_move: bool,
-    /// The window is being made small before the window manager moves it.
-    pub shrinking: bool,
     pub since: Instant,
 }
 
 impl Placement {
     pub fn new(x: X11, scale: f32) -> Self {
-        Self { x, scale, mori: (0, 0), right: true, bottom: false, work: None, applied: None, applied_input: Vec::new(), drag: None, small: false }
+        Self { x, scale, mori: (0, 0), right: true, bottom: false, work: None, applied: None, applied_input: Vec::new(), drag: None, bubble: (400., 520.), gravity: None }
     }
 
     /// Room (logical px) for the cards' stack above her (`bottom`) or
@@ -95,15 +86,15 @@ impl Placement {
         (space as f32 / self.scale - super::points::STACK_GAP - super::points::STACK_EDGE).clamp(CARDS_MIN_H, cards_max_h())
     }
 
-    /// The window size and her top-left in it (logical px): room beside
-    /// her for the bubble and above / below her for the cards (as much as
-    /// her monitor has, up to `CARDS_MAX_H`).
-    pub fn layout(&self, (w, h): (f32, f32)) -> ((f32, f32), (f32, f32)) {
-        if self.small {
+    /// The window size and her top-left in it (logical px), small or grown.
+    /// Grown, it has room beside her for the bubble and above / below her
+    /// for the cards (as much as her monitor has, up to `CARDS_MAX_H`).
+    pub fn layout(&self, (w, h): (f32, f32), grown: bool) -> ((f32, f32), (f32, f32)) {
+        if !grown {
             return ((w + 2. * PAD, h + 2. * PAD), (PAD, PAD));
         }
         let cards = PAD + h + super::points::STACK_GAP + self.cards_room((w, h)) + super::points::STACK_EDGE;
-        let size = (w + 2. * PAD + side_w(), cards.max(min_h()));
+        let size = (w + 2. * PAD + self.bubble.0 + SIDE_EXTRA_W, cards.max(self.bubble.1 + GROWN_EXTRA_H * ui::ui_scale()));
         let ox = if self.right { size.0 - w - PAD } else { PAD };
         let oy = if self.bottom { size.1 - h - PAD } else { PAD };
         (size, (ox, oy))
@@ -114,18 +105,28 @@ impl Placement {
     }
 
     /// Her monitor's work area in window coordinates (logical px), where
-    /// the bubble has to stay (the window reaches past it).
-    pub fn work_in_window(&self, mori_size: (f32, f32)) -> Option<(f32, f32, f32, f32)> {
+    /// the bubble has to stay (the grown window can reach past it).
+    pub fn work_in_window(&self, mori_size: (f32, f32), grown: bool) -> Option<(f32, f32, f32, f32)> {
         let m = self.work?;
-        let (_, o) = self.layout(mori_size);
+        let (_, o) = self.layout(mori_size, grown);
         let (wx, wy) = (self.mori.0 as f32 / self.scale - o.0, self.mori.1 as f32 / self.scale - o.1);
         Some((m.x as f32 / self.scale - wx, m.y as f32 / self.scale - wy, m.w as f32 / self.scale, m.h as f32 / self.scale))
     }
 
     /// Moves / resizes the window so she stays at `self.mori`.
-    pub fn apply_window(&mut self, mori_size: (f32, f32)) {
-        let (size, o) = self.layout(mori_size);
+    pub fn apply_window(&mut self, mori_size: (f32, f32), grown: bool) {
+        let (size, o) = self.layout(mori_size, grown);
         let rect = Rect { x: self.mori.0 - self.px(o.0), y: self.mori.1 - self.px(o.1), w: self.px(size.0), h: self.px(size.1) };
+        // She's at the window's right / bottom edge when it grows to the
+        // left / upwards: the X server keeps its contents there while it
+        // resizes, so she doesn't jump for a frame before it's redrawn.
+        let gravity = (self.right, self.bottom);
+        if self.gravity != Some(gravity) {
+            if let Err(e) = self.x.set_gravity(gravity.0, gravity.1) {
+                eprintln!("[mori] window gravity: {e:#}");
+            }
+            self.gravity = Some(gravity);
+        }
         if self.applied != Some(rect) {
             if let Err(e) = self.x.move_resize(rect) {
                 eprintln!("[mori] moving the window: {e:#}");
@@ -136,8 +137,8 @@ impl Placement {
 
     /// `apply_window`, and only `input` (window rectangles, logical px)
     /// takes the mouse.
-    pub fn apply(&mut self, mori_size: (f32, f32), input: &[(f32, f32, f32, f32)]) {
-        self.apply_window(mori_size);
+    pub fn apply(&mut self, mori_size: (f32, f32), grown: bool, input: &[(f32, f32, f32, f32)]) {
+        self.apply_window(mori_size, grown);
         let input: Vec<Rect> = input
             .iter()
             .map(|&(x, y, w, h)| Rect { x: self.px(x), y: self.px(y), w: self.px(w), h: self.px(h) })
@@ -150,14 +151,9 @@ impl Placement {
         }
     }
 
-    /// The window has the small size by now (the window manager applied it).
-    pub fn is_small_now(&self) -> bool {
-        self.small && self.applied.is_some_and(|r| self.x.size().is_ok_and(|s| s == (r.w, r.h)))
-    }
-
     /// Her top-left from where the window is now (after a move).
-    pub fn read_back(&mut self, mori_size: (f32, f32)) {
-        let (_, o) = self.layout(mori_size);
+    pub fn read_back(&mut self, mori_size: (f32, f32), grown: bool) {
+        let (_, o) = self.layout(mori_size, grown);
         if let Ok((x, y)) = self.x.position() {
             self.mori = (x + self.px(o.0), y + self.px(o.1));
             self.applied = None;

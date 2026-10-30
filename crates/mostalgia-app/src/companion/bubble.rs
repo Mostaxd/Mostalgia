@@ -519,6 +519,11 @@ impl Companion {
         cx.notify();
     }
 
+    /// The room the bubble takes (logical px) at its tallest.
+    pub(super) fn bubble_room(&self) -> (f32, f32) {
+        bubble_size(self.bubble.size)
+    }
+
     /// The bubble shows the Notes tab.
     fn bubble_notes(&self) -> bool {
         self.ctl.notes_tab
@@ -539,7 +544,7 @@ impl Companion {
         // work area (her window reaches past it).
         let size = self.size();
         let (ax, ay, aw, ah) = match &self.desktop {
-            Some(p) => p.work_in_window(size).and_then(|(x, y, w, h)| {
+            Some(p) => p.work_in_window(size, self.grown()).and_then(|(x, y, w, h)| {
                 let (x0, y0) = (x.max(0.), y.max(0.));
                 let (x1, y1) = ((x + w).min(vw), (y + h).min(vh));
                 (x1 - x0 > 100. && y1 - y0 > 100.).then_some((x0, y0, x1 - x0, y1 - y0))

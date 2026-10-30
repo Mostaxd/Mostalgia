@@ -475,10 +475,15 @@ impl Companion {
         ((self.viewport.0 - w - 2. * MARGIN).max(0.), (self.viewport.1 - h - 2. * MARGIN).max(0.))
     }
 
+    /// On the desktop: whether her window is grown for the bubble or cards.
+    fn grown(&self) -> bool {
+        self.open || self.expanded || self.error.is_some() || self.ctl.menu.is_some() || !self.visible_points().is_empty()
+    }
+
     /// Her top-left in window coordinates.
     fn origin(&self) -> Point2 {
         if let Some(p) = &self.desktop {
-            let (_, (x, y)) = p.layout(self.size());
+            let (_, (x, y)) = p.layout(self.size(), self.grown());
             return Point2 { x, y };
         }
         let (rx, ry) = self.room();
@@ -507,7 +512,7 @@ impl Companion {
         let o = self.origin();
         if let Some(p) = &mut self.desktop {
             let pointer = p.x.pointer().map(|(x, y, _)| (x, y)).unwrap_or_default();
-            p.drag = Some(desktop::DesktopDrag { pointer, window: p.mori, wm_move: false, shrinking: false, since: Instant::now() });
+            p.drag = Some(desktop::DesktopDrag { pointer, window: p.mori, wm_move: false, since: Instant::now() });
         }
         self.drag = Some(Drag {
             mouse: Point2 { x: ev.position.x.into(), y: ev.position.y.into() },
@@ -519,7 +524,6 @@ impl Companion {
     }
 
     fn mouse_move(&mut self, ev: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let size = self.size();
         let Some(drag) = &mut self.drag else { return };
         let (x, y): (f32, f32) = (ev.position.x.into(), ev.position.y.into());
         let (dx, dy) = (x - drag.mouse.x, y - drag.mouse.y);
@@ -529,27 +533,12 @@ impl Companion {
         let first = !drag.moved;
         drag.moved = true;
         if let Some(p) = &mut self.desktop {
-            if first {
-                // Just her while she moves (the window manager won't take a
-                // tall window's top off the screen).
-                p.small = true;
-                p.apply_window(size);
-            }
-            let shrunk = !first && p.drag.is_some_and(|d| d.shrinking) && p.is_small_now();
             let Some(d) = &mut p.drag else { return };
             if first {
-                // We move her until the window manager has made the window
-                // small (it'd keep the big one's top on the screen).
-                d.shrinking = true;
-                d.since = Instant::now();
-            } else if d.shrinking && (shrunk || d.since.elapsed() > Duration::from_millis(400)) {
                 // The window manager moves the window (across monitors,
                 // with its snapping); `tick` notices when it's dropped.
-                d.shrinking = false;
                 d.wm_move = true;
                 d.since = Instant::now();
-                d.pointer = p.x.pointer().map(|(x, y, _)| (x, y)).unwrap_or(d.pointer);
-                d.window = p.mori;
                 window.start_window_move();
             } else if d.wm_move && d.since.elapsed() > Duration::from_millis(250) && ev.pressed_button == Some(MouseButton::Left) {
                 // Still getting the motion: the window manager didn't take
@@ -560,7 +549,10 @@ impl Companion {
                 let d = *d;
                 if let Ok((px_, py_, _)) = p.x.pointer() {
                     p.mori = (d.window.0 + px_ - d.pointer.0, d.window.1 + py_ - d.pointer.1);
-                    p.apply_window(size);
+                    let (size, grown) = (self.size(), self.grown());
+                    if let Some(p) = &mut self.desktop {
+                        p.apply_window(size, grown);
+                    }
                 }
             }
             return;
@@ -614,13 +606,11 @@ impl Companion {
     /// A drag of her desktop window ended: where is she now? Keeps her on
     /// a monitor, turns the bubble towards its middle and remembers it.
     fn end_desktop_drag(&mut self, wm_moved: bool) {
-        let size = self.size();
+        let (size, grown) = (self.size(), self.grown());
         let Some(p) = &mut self.desktop else { return };
         if wm_moved {
-            p.read_back(size);
+            p.read_back(size, grown);
         }
-        // Full size again (`render` applies it).
-        p.small = false;
         p.drag = None;
         p.settle(size);
         p.save();
@@ -631,10 +621,15 @@ impl Companion {
     /// place, and lets only her, the bubble and the cards take the mouse.
     fn place_desktop_window(&mut self, o: Point2) {
         let (w, h) = self.size();
+        let grown = self.grown();
+        let bubble = self.bubble_room();
         let cards = self.expanded || self.error.is_some() || !self.visible_points().is_empty();
         let open = self.open;
+        if let Some(p) = &mut self.desktop {
+            p.bubble = bubble;
+        }
         let Some(p) = &self.desktop else { return };
-        let ((vw, vh), _) = p.layout((w, h));
+        let ((vw, vh), _) = p.layout((w, h), grown);
         self.viewport = (vw, vh);
         let menu = self.menu_rect(o);
         // While the window manager moves the window, leave it alone.
@@ -677,7 +672,7 @@ impl Companion {
             input.push(rect);
         }
         if let Some(p) = &mut self.desktop {
-            p.apply((w, h), &input);
+            p.apply((w, h), grown, &input);
         }
     }
 

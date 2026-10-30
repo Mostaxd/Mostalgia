@@ -13,7 +13,7 @@ use x11rb::protocol::randr::ConnectionExt as _;
 #[cfg(target_os = "linux")]
 use x11rb::protocol::shape::{self, ConnectionExt as _};
 #[cfg(target_os = "linux")]
-use x11rb::protocol::xproto::{self, AtomEnum, ClientMessageEvent, ConfigureWindowAux, ConnectionExt as _, EventMask, PropMode};
+use x11rb::protocol::xproto::{self, AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConfigureWindowAux, ConnectionExt as _, EventMask, Gravity, PropMode};
 #[cfg(target_os = "linux")]
 use x11rb::rust_connection::RustConnection;
 #[cfg(target_os = "linux")]
@@ -128,10 +128,19 @@ impl X11 {
         Ok((r.dst_x as i32, r.dst_y as i32))
     }
 
-    /// The window's size now.
-    pub fn size(&self) -> Result<(i32, i32)> {
-        let g = self.conn.get_geometry(self.window)?.reply()?;
-        Ok((g.width as i32, g.height as i32))
+    /// Where the window's contents stay when it's resized: the right /
+    /// bottom edge, else the left / top one. No background either, so the
+    /// X server paints nothing (black) into the new part before we do.
+    pub fn set_gravity(&self, right: bool, bottom: bool) -> Result<()> {
+        let gravity = match (right, bottom) {
+            (false, false) => Gravity::NORTH_WEST,
+            (true, false) => Gravity::NORTH_EAST,
+            (false, true) => Gravity::SOUTH_WEST,
+            (true, true) => Gravity::SOUTH_EAST,
+        };
+        self.conn.change_window_attributes(self.window, &ChangeWindowAttributesAux::new().bit_gravity(gravity).background_pixmap(x11rb::NONE))?;
+        self.conn.flush()?;
+        Ok(())
     }
 
     pub fn move_resize(&self, r: Rect) -> Result<()> {
@@ -212,7 +221,7 @@ impl X11 {
     pub fn position(&self) -> anyhow::Result<(i32, i32)> {
         match self.never {}
     }
-    pub fn size(&self) -> anyhow::Result<(i32, i32)> {
+    pub fn set_gravity(&self, _right: bool, _bottom: bool) -> anyhow::Result<()> {
         match self.never {}
     }
     pub fn move_resize(&self, _r: Rect) -> anyhow::Result<()> {
