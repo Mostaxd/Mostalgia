@@ -62,6 +62,10 @@ pub(crate) struct Placement {
     /// The chat bubble's size at its tallest (logical px), which the grown
     /// window makes room for.
     pub bubble: (f32, f32),
+    /// Just her while she's dragged with the bubble or cards open (the
+    /// window manager keeps a window's top on the screen, so a grown one
+    /// couldn't go up far).
+    pub small: bool,
     gravity: Option<(bool, bool)>,
 }
 
@@ -75,7 +79,7 @@ pub(crate) struct DesktopDrag {
 
 impl Placement {
     pub fn new(x: X11, scale: f32) -> Self {
-        Self { x, scale, mori: (0, 0), right: true, bottom: false, work: None, applied: None, applied_input: Vec::new(), drag: None, bubble: (400., 520.), gravity: None }
+        Self { x, scale, mori: (0, 0), right: true, bottom: false, work: None, applied: None, applied_input: Vec::new(), drag: None, bubble: (400., 520.), small: false, gravity: None }
     }
 
     /// Room (logical px) for the cards' stack above her (`bottom`) or
@@ -90,7 +94,7 @@ impl Placement {
     /// Grown, it has room beside her for the bubble and above / below her
     /// for the cards (as much as her monitor has, up to `CARDS_MAX_H`).
     pub fn layout(&self, (w, h): (f32, f32), grown: bool) -> ((f32, f32), (f32, f32)) {
-        if !grown {
+        if !grown || self.small {
             return ((w + 2. * PAD, h + 2. * PAD), (PAD, PAD));
         }
         let cards = PAD + h + super::points::STACK_GAP + self.cards_room((w, h)) + super::points::STACK_EDGE;
