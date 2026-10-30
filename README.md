@@ -106,8 +106,6 @@ guessing. During a call, it can even suggest answers from past meetings and docu
 
 ## A companion that takes notes with you
 
-<img src="docs/screenshots/mori/writing.gif" alt="Mori writing notes" height="160" align="right">
-
 Turn on an animated note-taker who writes along while people talk, pins up
 decisions, action items and numbers every ninety seconds, and answers
 questions about the meeting that is still running. Keep them in the corner of
@@ -115,6 +113,7 @@ the app or floating above your call on the desktop.
 
 | Mori | Tsumugi | Hoshi | Kaito | Jin |
 |:---:|:---:|:---:|:---:|:---:|
+| <img src="docs/screenshots/mori/writing.gif" alt="Mori writing" width="120"> | <img src="docs/screenshots/companion-tsumugi.gif" alt="Tsumugi weaving" width="120"> | <img src="docs/screenshots/companion-hoshi.gif" alt="Hoshi charting" width="120"> | <img src="docs/screenshots/companion-kaito.gif" alt="Kaito serving tea" width="120"> | <img src="docs/screenshots/companion-jin.gif" alt="Jin cutting paper" width="120"> |
 | takes notes on a notepad | weaves them into her scarf | charts them as constellations | serves each note like tea | cuts each note onto paper |
 
 <p align="center">
