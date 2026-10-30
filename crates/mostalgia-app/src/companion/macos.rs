@@ -123,6 +123,13 @@ impl MacWindow {
         Ok((r.x, r.y))
     }
 
+    /// X11 keeps her pixels in place while the window resizes (bit
+    /// gravity); `setFrame:display:` moves and resizes in one go and
+    /// redraws, so there's nothing to set.
+    pub fn set_gravity(&self, _right: bool, _bottom: bool) -> Result<()> {
+        Ok(())
+    }
+
     pub fn move_resize(&self, r: Rect) -> Result<()> {
         self.window.setFrame_display(from_rect(r, primary_height(self.mtm), self.scale), true);
         Ok(())
