@@ -12,6 +12,8 @@
 <p align="center">
   <a href="https://github.com/Mostaxd/Mostalgia/releases/latest/download/Mostalgia-x86_64.AppImage"><img alt="Download for Linux" src="https://img.shields.io/badge/Download-Linux_AppImage-B8472A?style=for-the-badge&logo=linux&logoColor=white"></a>
   &nbsp;
+  <a href="https://github.com/Mostaxd/Mostalgia/releases/latest/download/Mostalgia-macOS-arm64.dmg"><img alt="Download for macOS" src="https://img.shields.io/badge/Download-macOS_DMG-B8472A?style=for-the-badge&logo=apple&logoColor=white"></a>
+  &nbsp;
   <a href="https://mostaxd.github.io/Mostalgia"><img alt="Website" src="https://img.shields.io/badge/Website-Visit-5B2A4E?style=for-the-badge"></a>
 </p>
 
@@ -137,18 +139,46 @@ scene. Or add your own as a JSON file in `~/.config/mostalgia/themes/`.
 
 **1. Download and run**
 
+<details open>
+<summary><b>Linux</b>: <a href="https://github.com/Mostaxd/Mostalgia/releases/latest/download/Mostalgia-x86_64.AppImage">Mostalgia-x86_64.AppImage</a></summary>
+
 ```bash
 chmod +x Mostalgia-x86_64.AppImage
 ./Mostalgia-x86_64.AppImage
 ```
+
+Runs on x86_64 Linux with glibc 2.35+ (Ubuntu 22.04, Debian 12, Fedora 36 or
+later), PipeWire or PulseAudio and a Vulkan driver. The AppImage updates itself.
+
+</details>
+
+<details open>
+<summary><b>macOS</b>: <a href="https://github.com/Mostaxd/Mostalgia/releases/latest/download/Mostalgia-macOS-arm64.dmg">Mostalgia-macOS-arm64.dmg</a></summary>
+
+<br>
+
+Open the disk image and drag **Mostalgia** into **Applications**. Needs a Mac
+with Apple Silicon (M1 or newer) and macOS 13 or later; Whisper runs on the GPU
+through Metal.
+
+The app isn't signed by Apple yet, so macOS blocks the first start. Open it
+once, then click **Open Anyway** in *System Settings → Privacy & Security*. If
+macOS says the app is damaged, run this once and open it again:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Mostalgia.app
+```
+
+When you record, allow **Microphone** and **Screen & System Audio Recording**
+access so it hears both sides of the call.
+
+</details>
 
 **2. Download the speech models** when asked on first launch (~2.1 GB, once).
 
 **3. Connect an AI** under *Settings → AI & transcription*: Ollama for a local
 model, or a cloud provider with your own key.
 
-Runs on x86_64 Linux with glibc 2.35+ (Ubuntu 22.04, Debian 12, Fedora 36 or
-later), PipeWire or PulseAudio and a Vulkan driver. The AppImage updates itself.
 Prefer to build it yourself? See [CONTRIBUTING.md](CONTRIBUTING.md#building).
 
 ## You choose where your data goes
@@ -161,8 +191,9 @@ Prefer to build it yourself? See [CONTRIBUTING.md](CONTRIBUTING.md#building).
 
 Every connection is labelled *local* or *cloud*. If a provider fails, you see
 which one and why; Mostalgia never switches behind your back. Recordings and
-the search index always stay in `~/.local/share/mostalgia`, and API keys in the
-GNOME keyring.
+the search index always stay on your disk (`~/.local/share/mostalgia` on Linux,
+`~/Library/Application Support/mostalgia` on macOS), and API keys in the GNOME
+keyring or the macOS Keychain.
 
 <details>
 <summary><b>For developers: architecture, performance and CLI</b></summary>
