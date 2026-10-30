@@ -6,7 +6,9 @@
 //! The window has room beside her for the chat bubble (at its largest)
 //! and above / below her for the point cards, towards the middle of her
 //! monitor. It keeps that size while they open and close: resizing an X11
-//! window shows a frame of black and moves her for a frame. Only her, the
+//! window shows a frame of black and moves her for a frame. While she's
+//! dragged it's just big enough for her (the window manager keeps a window's
+//! top on the screen, so a tall one couldn't go up far). Only her, the
 //! bubble and the cards take mouse input; clicks on the transparent rest
 //! go to the windows below.
 
@@ -66,6 +68,8 @@ pub(crate) struct Placement {
     /// A drag in progress: pointer and window position when it began, and
     /// whether the window manager took over the move.
     pub drag: Option<DesktopDrag>,
+    /// The window is just big enough for her (while she's dragged).
+    pub small: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -78,7 +82,7 @@ pub(crate) struct DesktopDrag {
 
 impl Placement {
     pub fn new(x: X11, scale: f32) -> Self {
-        Self { x, scale, mori: (0, 0), right: true, bottom: false, work: None, applied: None, applied_input: Vec::new(), drag: None }
+        Self { x, scale, mori: (0, 0), right: true, bottom: false, work: None, applied: None, applied_input: Vec::new(), drag: None, small: false }
     }
 
     /// Room (logical px) for the cards' stack above her (`bottom`) or
@@ -93,6 +97,9 @@ impl Placement {
     /// her for the bubble and above / below her for the cards (as much as
     /// her monitor has, up to `CARDS_MAX_H`).
     pub fn layout(&self, (w, h): (f32, f32)) -> ((f32, f32), (f32, f32)) {
+        if self.small {
+            return ((w + 2. * PAD, h + 2. * PAD), (PAD, PAD));
+        }
         let cards = PAD + h + super::points::STACK_GAP + self.cards_room((w, h)) + super::points::STACK_EDGE;
         let size = (w + 2. * PAD + side_w(), cards.max(min_h()));
         let ox = if self.right { size.0 - w - PAD } else { PAD };

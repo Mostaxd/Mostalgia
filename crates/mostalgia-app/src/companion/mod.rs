@@ -519,6 +519,7 @@ impl Companion {
     }
 
     fn mouse_move(&mut self, ev: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let size = self.size();
         let Some(drag) = &mut self.drag else { return };
         let (x, y): (f32, f32) = (ev.position.x.into(), ev.position.y.into());
         let (dx, dy) = (x - drag.mouse.x, y - drag.mouse.y);
@@ -528,6 +529,12 @@ impl Companion {
         let first = !drag.moved;
         drag.moved = true;
         if let Some(p) = &mut self.desktop {
+            if first {
+                // Just her while she moves (the window manager won't take a
+                // tall window's top off the screen).
+                p.small = true;
+                p.apply_window(size);
+            }
             let Some(d) = &mut p.drag else { return };
             if first {
                 // The window manager moves the window (across monitors,
@@ -544,10 +551,7 @@ impl Companion {
                 let d = *d;
                 if let Ok((px_, py_, _)) = p.x.pointer() {
                     p.mori = (d.window.0 + px_ - d.pointer.0, d.window.1 + py_ - d.pointer.1);
-                    let size = self.size();
-                    if let Some(p) = &mut self.desktop {
-                        p.apply_window(size);
-                    }
+                    p.apply_window(size);
                 }
             }
             return;
@@ -606,6 +610,8 @@ impl Companion {
         if wm_moved {
             p.read_back(size);
         }
+        // Full size again (`render` applies it).
+        p.small = false;
         p.drag = None;
         p.settle(size);
         p.save();
