@@ -77,6 +77,8 @@ pub(crate) struct DesktopDrag {
     pub pointer: (i32, i32),
     pub window: (i32, i32),
     pub wm_move: bool,
+    /// The window is being made small before the window manager moves it.
+    pub shrinking: bool,
     pub since: Instant,
 }
 
@@ -146,6 +148,11 @@ impl Placement {
             }
             self.applied_input = input;
         }
+    }
+
+    /// The window has the small size by now (the window manager applied it).
+    pub fn is_small_now(&self) -> bool {
+        self.small && self.applied.is_some_and(|r| self.x.size().is_ok_and(|s| s == (r.w, r.h)))
     }
 
     /// Her top-left from where the window is now (after a move).

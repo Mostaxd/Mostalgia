@@ -507,7 +507,7 @@ impl Companion {
         let o = self.origin();
         if let Some(p) = &mut self.desktop {
             let pointer = p.x.pointer().map(|(x, y, _)| (x, y)).unwrap_or_default();
-            p.drag = Some(desktop::DesktopDrag { pointer, window: p.mori, wm_move: false, since: Instant::now() });
+            p.drag = Some(desktop::DesktopDrag { pointer, window: p.mori, wm_move: false, shrinking: false, since: Instant::now() });
         }
         self.drag = Some(Drag {
             mouse: Point2 { x: ev.position.x.into(), y: ev.position.y.into() },
@@ -535,12 +535,21 @@ impl Companion {
                 p.small = true;
                 p.apply_window(size);
             }
+            let shrunk = !first && p.drag.is_some_and(|d| d.shrinking) && p.is_small_now();
             let Some(d) = &mut p.drag else { return };
             if first {
+                // We move her until the window manager has made the window
+                // small (it'd keep the big one's top on the screen).
+                d.shrinking = true;
+                d.since = Instant::now();
+            } else if d.shrinking && (shrunk || d.since.elapsed() > Duration::from_millis(400)) {
                 // The window manager moves the window (across monitors,
                 // with its snapping); `tick` notices when it's dropped.
+                d.shrinking = false;
                 d.wm_move = true;
                 d.since = Instant::now();
+                d.pointer = p.x.pointer().map(|(x, y, _)| (x, y)).unwrap_or(d.pointer);
+                d.window = p.mori;
                 window.start_window_move();
             } else if d.wm_move && d.since.elapsed() > Duration::from_millis(250) && ev.pressed_button == Some(MouseButton::Left) {
                 // Still getting the motion: the window manager didn't take

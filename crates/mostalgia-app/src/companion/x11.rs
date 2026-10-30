@@ -128,6 +128,12 @@ impl X11 {
         Ok((r.dst_x as i32, r.dst_y as i32))
     }
 
+    /// The window's size now.
+    pub fn size(&self) -> Result<(i32, i32)> {
+        let g = self.conn.get_geometry(self.window)?.reply()?;
+        Ok((g.width as i32, g.height as i32))
+    }
+
     pub fn move_resize(&self, r: Rect) -> Result<()> {
         self.conn.configure_window(
             self.window,
@@ -204,6 +210,9 @@ impl X11 {
         match self.never {}
     }
     pub fn position(&self) -> anyhow::Result<(i32, i32)> {
+        match self.never {}
+    }
+    pub fn size(&self) -> anyhow::Result<(i32, i32)> {
         match self.never {}
     }
     pub fn move_resize(&self, _r: Rect) -> anyhow::Result<()> {
