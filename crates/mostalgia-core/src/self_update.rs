@@ -13,6 +13,13 @@
 //! renamed, so each old file becomes `<name>.old` (removed on the next
 //! start, see [`cleanup`]) and the new one takes its place. The folder
 //! stays the same, so shortcuts keep working.
+//!
+//! On macOS the app runs from `Mostalgia.app`. There the update downloads
+//! the release's disk image, checks it against its `.sha256`, copies the
+//! app out of it next to the running bundle and swaps the two bundles by
+//! renaming (the running app keeps its open files). Nothing inside the
+//! bundle is changed, so its signature stays valid; a download made by the
+//! app itself carries no quarantine flag, so macOS doesn't ask again.
 
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -31,6 +38,8 @@ const WIN_ASSET: &str = "Mostalgia-windows-x86_64.zip";
 const WIN_MARKER: &str = "build-variant.txt";
 /// Written after an update: the SHA-256 of the zip it came from.
 const WIN_INSTALLED: &str = "release.sha256";
+/// The app in the macOS disk image.
+const MAC_APP: &str = "Mostalgia.app";
 
 /// A release whose AppImage differs from the running one.
 #[derive(Clone, Debug)]
@@ -66,9 +75,40 @@ pub fn running_install() -> Option<PathBuf> {
     dir.join(WIN_MARKER).is_file().then_some(dir)
 }
 
-/// Whether this copy can update itself (an AppImage, or the Windows zip).
+/// The `Mostalgia.app` this process runs from on macOS (not a dev build
+/// started from `target/`).
+pub fn running_bundle() -> Option<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    bundle_of(&std::env::current_exe().ok()?)
+}
+
+/// `X.app` for `X.app/Contents/MacOS/<binary>`.
+fn bundle_of(exe: &Path) -> Option<PathBuf> {
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    let bundle = contents.parent()?;
+    (macos.file_name()? == "MacOS"
+        && contents.file_name()? == "Contents"
+        && bundle.extension()? == "app"
+        && contents.join("Info.plist").is_file())
+    .then(|| bundle.to_path_buf())
+}
+
+/// The release's disk image for this Mac ("Mostalgia-macOS-arm64.dmg").
+fn mac_asset() -> String {
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        other => other,
+    };
+    format!("Mostalgia-macOS-{arch}.dmg")
+}
+
+/// Whether this copy can update itself (an AppImage, the Windows zip or
+/// the Mac app).
 pub fn updatable() -> bool {
-    running_appimage().is_some() || running_install().is_some()
+    running_appimage().is_some() || running_install().is_some() || running_bundle().is_some()
 }
 
 fn client(timeout: Option<Duration>) -> Result<reqwest::blocking::Client> {
@@ -99,8 +139,11 @@ pub fn check() -> Result<Option<Update>> {
     if let Some(appimage) = running_appimage() {
         return check_appimage(&appimage);
     }
-    match running_install() {
-        Some(dir) => check_zip(&dir),
+    if let Some(dir) = running_install() {
+        return check_zip(&dir);
+    }
+    match running_bundle() {
+        Some(_) => check_dmg(),
         None => Ok(None),
     }
 }
@@ -141,6 +184,24 @@ fn check_zip(dir: &Path) -> Result<Option<Update>> {
         return Ok(None);
     }
     Ok(Some(Update { tag: release.tag_name, url: zip.browser_download_url.clone(), digest: Digest::Sha256(sha256), size: zip.size }))
+}
+
+/// A newer release's disk image. The bundle itself can't record which
+/// image it came from (that would break its signature), so this goes by
+/// version: only a release newer than the running app is offered.
+fn check_dmg() -> Result<Option<Update>> {
+    let client = client(Some(Duration::from_secs(30)))?;
+    let release: Release = client.get(LATEST).send()?.error_for_status()?.json()?;
+    let name = mac_asset();
+    let Some(dmg) = release.assets.iter().find(|a| a.name == name) else { return Ok(None) };
+    if !is_older(env!("CARGO_PKG_VERSION"), &release.tag_name) {
+        return Ok(None);
+    }
+    let sha256 = match release.assets.iter().find(|a| a.name == format!("{name}.sha256")) {
+        Some(a) => Some(parse_sha256(&client.get(&a.browser_download_url).send()?.error_for_status()?.text()?).context("unreadable .sha256")?),
+        None => None,
+    };
+    Ok(Some(Update { tag: release.tag_name, url: dmg.browser_download_url.clone(), digest: Digest::Sha256(sha256), size: dmg.size }))
 }
 
 /// Whether the release's zip is something new for this install: a
@@ -193,13 +254,16 @@ fn sha1_of(reader: &mut impl Read) -> Result<String> {
 }
 
 /// Downloads the update and puts it in place of the running AppImage (or
-/// the running Windows install), calling `progress` with bytes done.
-/// Blocks; `cancel` stops it.
+/// the running Windows install or Mac app), calling `progress` with bytes
+/// done. Blocks; `cancel` stops it.
 pub fn install(update: &Update, cancel: &AtomicBool, mut progress: impl FnMut(u64)) -> Result<()> {
-    if running_appimage().is_none()
-        && let Some(dir) = running_install()
-    {
-        return install_zip(update, &dir, cancel, &mut progress);
+    if running_appimage().is_none() {
+        if let Some(dir) = running_install() {
+            return install_zip(update, &dir, cancel, &mut progress);
+        }
+        if let Some(bundle) = running_bundle() {
+            return install_dmg(update, &bundle, cancel, &mut progress);
+        }
     }
     let target = running_appimage().context("not running from an AppImage")?;
     let dir = target.parent().context("AppImage has no folder")?;
@@ -274,6 +338,58 @@ fn install_zip(update: &Update, dir: &Path, cancel: &AtomicBool, progress: &mut 
     result
 }
 
+/// The staged new app and the old one set aside, next to `bundle` (the same
+/// volume, so swapping them is a rename).
+fn bundle_side(bundle: &Path, what: &str) -> PathBuf {
+    let name = bundle.file_name().unwrap_or_default().to_string_lossy().to_string();
+    bundle.with_file_name(format!(".{name}.{what}"))
+}
+
+fn install_dmg(update: &Update, bundle: &Path, cancel: &AtomicBool, progress: &mut impl FnMut(u64)) -> Result<()> {
+    let work = std::env::temp_dir().join(format!("mostalgia-update-{}", std::process::id()));
+    let dmg = work.join("update.dmg");
+    let mount = work.join("mnt");
+    let staged = bundle_side(bundle, "update");
+    let result = (|| {
+        fs::create_dir_all(&mount)?;
+        download(update, &dmg, cancel, progress)?;
+        let attached = std::process::Command::new("hdiutil")
+            .args(["attach", "-nobrowse", "-readonly", "-noautoopen", "-mountpoint"])
+            .arg(&mount)
+            .arg(&dmg)
+            .output()
+            .context("hdiutil")?;
+        if !attached.status.success() {
+            bail!("opening the disk image: {}", String::from_utf8_lossy(&attached.stderr).trim());
+        }
+        // ditto keeps the bundle's signature, permissions and links intact.
+        fs::remove_dir_all(&staged).ok();
+        let copied = std::process::Command::new("ditto").arg(mount.join(MAC_APP)).arg(&staged).status();
+        std::process::Command::new("hdiutil").args(["detach", "-quiet", "-force"]).arg(&mount).status().ok();
+        if !copied.context("ditto")?.success() {
+            bail!("copying {MAC_APP} next to {}", bundle.display());
+        }
+        swap_bundle(&staged, bundle)
+    })();
+    fs::remove_dir_all(&staged).ok();
+    fs::remove_dir_all(&work).ok();
+    result
+}
+
+/// Puts the bundle `new` in place of `bundle`; the old one is removed
+/// (a running app keeps its open files). On an error the old one stays.
+fn swap_bundle(new: &Path, bundle: &Path) -> Result<()> {
+    let old = bundle_side(bundle, "old");
+    fs::remove_dir_all(&old).ok();
+    fs::rename(bundle, &old).with_context(|| format!("replacing {}", bundle.display()))?;
+    if let Err(e) = fs::rename(new, bundle) {
+        fs::rename(&old, bundle).ok();
+        return Err(e).with_context(|| format!("placing {}", bundle.display()));
+    }
+    fs::remove_dir_all(&old).ok();
+    Ok(())
+}
+
 /// Unpacks a zip into `to` (only plain relative paths).
 fn unpack(zip_path: &Path, to: &Path) -> Result<()> {
     let mut archive = zip::ZipArchive::new(File::open(zip_path)?).context("reading the update")?;
@@ -343,11 +459,16 @@ fn old_name(target: &Path) -> PathBuf {
     target.with_file_name(format!("{name}.old-{}", std::process::id()))
 }
 
-/// Removes what an update on Windows left behind (`*.old` files of the
-/// previous version). Call at startup; files still in use stay for next time.
+/// Removes what an update left behind: on Windows the `*.old` files of
+/// the previous version (files still in use stay for next time), on macOS
+/// a half-staged or set-aside bundle. Call at startup.
 pub fn cleanup() {
     if let Some(dir) = running_install() {
         cleanup_dir(&dir);
+    }
+    if let Some(bundle) = running_bundle() {
+        fs::remove_dir_all(bundle_side(&bundle, "update")).ok();
+        fs::remove_dir_all(bundle_side(&bundle, "old")).ok();
     }
 }
 
@@ -368,12 +489,24 @@ fn replace(part: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Starts the (new) AppImage or Windows app; the caller quits right after.
+/// Starts the (new) AppImage, Windows or Mac app; the caller quits right after.
 pub fn restart() -> Result<()> {
     if running_appimage().is_none()
         && let Some(dir) = running_install()
     {
         std::process::Command::new(dir.join("mostalgia-app.exe")).current_dir(&dir).spawn()?;
+        return Ok(());
+    }
+    if running_appimage().is_none()
+        && let Some(bundle) = running_bundle()
+    {
+        // `open` would only bring this (old) app forward, so it waits
+        // until this process has quit.
+        std::process::Command::new("/bin/sh")
+            .args(["-c", "while kill -0 \"$0\" 2>/dev/null; do sleep 0.2; done; exec open \"$1\""])
+            .arg(std::process::id().to_string())
+            .arg(&bundle)
+            .spawn()?;
         return Ok(());
     }
     let appimage = running_appimage().context("not running from an AppImage")?;
@@ -467,6 +600,44 @@ mod tests {
         assert!(!root.join("evil.txt").exists());
         fs::remove_dir_all(&root)?;
         Ok(())
+    }
+
+    #[test]
+    fn finds_the_app_bundle() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("mostalgia-bundle-{}", std::process::id()));
+        let app = root.join("Applications/Mostalgia.app");
+        fs::create_dir_all(app.join("Contents/MacOS"))?;
+        fs::write(app.join("Contents/Info.plist"), "plist")?;
+        assert_eq!(bundle_of(&app.join("Contents/MacOS/mostalgia-app")), Some(app.clone()));
+        assert_eq!(bundle_of(&root.join("target/release/mostalgia-app")), None, "a dev build");
+        fs::remove_dir_all(&root)?;
+        Ok(())
+    }
+
+    /// The new bundle takes the old one's place; nothing is left beside it.
+    #[test]
+    fn bundles_swap() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("mostalgia-bswap-{}", std::process::id()));
+        let app = root.join("Mostalgia.app");
+        let staged = bundle_side(&app, "update");
+        fs::create_dir_all(app.join("Contents"))?;
+        fs::create_dir_all(staged.join("Contents"))?;
+        fs::write(app.join("Contents/v"), "1")?;
+        fs::write(staged.join("Contents/v"), "2")?;
+        swap_bundle(&staged, &app)?;
+        assert_eq!(fs::read_to_string(app.join("Contents/v"))?, "2");
+        assert!(!staged.exists() && !bundle_side(&app, "old").exists());
+        // Nothing staged: the old app stays.
+        assert!(swap_bundle(&staged, &app).is_err());
+        assert_eq!(fs::read_to_string(app.join("Contents/v"))?, "2");
+        fs::remove_dir_all(&root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn names_the_mac_disk_image() {
+        assert!(mac_asset().starts_with("Mostalgia-macOS-") && mac_asset().ends_with(".dmg"));
+        assert!(!mac_asset().contains("aarch64"));
     }
 
     #[test]

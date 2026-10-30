@@ -143,16 +143,23 @@ jobs:
           dmg=$(ls dist/*.dmg)
           xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$PASSWORD" --wait
           xcrun stapler staple "$dmg"
+      # The app's updater checks the download against this.
+      - name: Checksum
+        run: cd dist && for f in *.dmg; do shasum -a 256 "$f" > "$f.sha256"; done && cat *.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: Mostalgia-macOS-arm64.dmg
-          path: dist/*.dmg
+          path: |
+            dist/*.dmg
+            dist/*.dmg.sha256
       - name: Attach to the release
         if: startsWith(github.ref, 'refs/tags/v') || inputs.release != ''
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release || github.ref_name }}
-          files: dist/*.dmg
+          files: |
+            dist/*.dmg
+            dist/*.dmg.sha256
 
   windows:
     runs-on: windows-latest

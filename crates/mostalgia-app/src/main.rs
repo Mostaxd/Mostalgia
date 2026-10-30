@@ -24,7 +24,7 @@ fn main() {
         mostalgia_app::companion::captions::run(std::env::args().any(|a| a == "--demo"));
         return;
     }
-    // What an update on Windows left behind (no-op elsewhere).
+    // What an update on Windows or macOS left behind (no-op elsewhere).
     mostalgia_core::self_update::cleanup();
     // The Start Menu entry toasts are shown under (installed copies only,
     // not development builds).
