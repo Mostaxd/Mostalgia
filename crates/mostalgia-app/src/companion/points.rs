@@ -421,7 +421,7 @@ impl Companion {
     /// open they all fold into the counter (and their time starts when
     /// they're first shown).
     pub(super) fn visible_points(&self) -> Vec<usize> {
-        if self.open {
+        if self.open || self.points_hidden {
             return Vec::new();
         }
         let now = Instant::now();
@@ -476,6 +476,13 @@ impl Companion {
         cx.notify();
     }
 
+    /// Hides the cards, pinned ones too; they all stay behind the counter.
+    fn hide_points(&mut self, cx: &mut Context<Self>) {
+        self.points_hidden = true;
+        self.expanded = false;
+        cx.notify();
+    }
+
     fn scroll_points_to_end(&mut self, cx: &mut Context<Self>) {
         self.points_follow = true;
         self.points_unseen = 0;
@@ -486,6 +493,7 @@ impl Companion {
     /// Shows the full list ("N more" on her notepad).
     pub(super) fn expand_points(&mut self, cx: &mut Context<Self>) {
         self.expanded = true;
+        self.points_hidden = false;
         self.open = false;
         self.scroll_points_to_end(cx);
     }
@@ -788,7 +796,7 @@ impl Companion {
         let theme = cx.theme().clone();
         let total = self.points.iter().filter(|p| !p.dismissed).count();
         let clearable = self.points.iter().any(|p| !p.dismissed && !p.pinned);
-        let header = (self.expanded || visible.len() >= 2).then(|| {
+        let header = (self.expanded || !visible.is_empty()).then(|| {
             h_flex()
                 .flex_shrink_0()
                 .h(px(header_h() - 4.))
@@ -814,6 +822,14 @@ impl Companion {
                             .on_click(cx.listener(|this, _, _, cx| this.clear_points(cx))),
                     )
                 })
+                .child(
+                    Button::new("mori-hide-points")
+                        .xsmall()
+                        .ghost()
+                        .label(tr("Ausblenden"))
+                        .tooltip(tr("Blendet die Karten aus – der Zähler an der Figur zeigt sie wieder"))
+                        .on_click(cx.listener(|this, _, _, cx| this.hide_points(cx))),
+                )
                 .when(self.expanded, |el| {
                     el.child(Button::new("mori-collapse").xsmall().ghost().label(tr("Einklappen")).on_click(cx.listener(|this, _, _, cx| {
                         this.expanded = false;
