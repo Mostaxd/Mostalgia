@@ -931,9 +931,9 @@ impl SettingsView {
             .child(row(
                 tr("Textgröße der App"),
                 Some(if cfg!(target_os = "macos") {
-                    tr("Gilt überall, auch für die Begleiterin. Tastenkürzel: ⌘ + = größer, ⌘ + − kleiner, ⌘ + 0 zurücksetzen.")
+                    tr("Gilt überall, auch für die Begleiterin. Tastenkürzel: ⌘ + = größer, ⌘ + − kleiner, ⌘ + 0 zurücksetzen, ⌘ + Mausrad.")
                 } else {
-                    tr("Gilt überall, auch für die Begleiterin. Tastenkürzel: Strg + = größer, Strg + − kleiner, Strg + 0 zurücksetzen.")
+                    tr("Gilt überall, auch für die Begleiterin. Tastenkürzel: Strg + = größer, Strg + − kleiner, Strg + 0 zurücksetzen, Strg + Mausrad.")
                 }),
                 h_flex().flex_wrap().gap_1().children(presets).into_any_element(),
             ))
@@ -4387,7 +4387,7 @@ impl SettingsView {
                 .gap_2()
                 .text_xs()
                 .child(div().flex_none().text_color(theme.muted_foreground).child(when))
-                .child(div().flex_1().min_w_0().truncate().child(m.title.clone()))
+                .child(div().flex_1().min_w_0().child(m.title.clone()))
         });
         let more = p.new.len().saturating_sub(5);
         let set = |id: &'static str, label: String, on: bool, apply: fn(&mut mostalgia_core::library::ImportOptions, bool)| {

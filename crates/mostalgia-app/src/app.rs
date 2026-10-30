@@ -35,6 +35,9 @@ enum Screen {
     TextImport(Entity<crate::text_import::TextImportView>),
 }
 
+/// Touchpad scrolling per zoom step with Ctrl held.
+const WHEEL_ZOOM_PX: f32 = 60.;
+
 pub struct MostalgiaApp {
     engine: SharedEngine,
     recording: Entity<RecordingView>,
@@ -81,6 +84,8 @@ pub struct MostalgiaApp {
     companion: Entity<Companion>,
     /// Mori on the desktop (her own process), when she's put there.
     mori_host: crate::companion::host::DesktopHost,
+    /// Ctrl+wheel on a touchpad: pixels scrolled toward the next zoom step.
+    wheel_zoom: f32,
     /// The open meeting as last told to Mori (for her "This meeting" scope).
     mori_open_meeting: Option<Option<(i64, String)>>,
     /// The NVIDIA card Whisper can't use, until dismissed.
@@ -234,6 +239,7 @@ impl MostalgiaApp {
             library_scroll: ScrollHandle::new(),
             companion,
             mori_host: Default::default(),
+            wheel_zoom: 0.,
             mori_open_meeting: None,
             update: None,
             gpu_problem: None,
@@ -1188,6 +1194,22 @@ impl MostalgiaApp {
         cx.notify();
     }
 
+    /// Ctrl+wheel (Cmd on macOS): up bigger, down smaller. A mouse wheel
+    /// steps once per notch; a touchpad once per [`WHEEL_ZOOM_PX`].
+    fn wheel_zoom(&mut self, ev: &ScrollEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let up = match ev.delta {
+            ScrollDelta::Lines(d) => (d.y != 0.).then_some(d.y > 0.),
+            ScrollDelta::Pixels(d) => {
+                self.wheel_zoom += f32::from(d.y);
+                (self.wheel_zoom.abs() >= WHEEL_ZOOM_PX).then_some(self.wheel_zoom > 0.)
+            }
+        };
+        if let Some(up) = up {
+            self.wheel_zoom = 0.;
+            self.zoom(Some(up), window, cx);
+        }
+    }
+
     /// The zoom keys while nothing has focus (they reach no view then).
     pub fn zoom_unfocused(up: Option<bool>, cx: &mut App) {
         let Some(handle) = cx.active_window().or_else(|| cx.windows().first().copied()) else { return };
@@ -1952,7 +1974,7 @@ impl MostalgiaApp {
                         .cursor_pointer()
                         .when(on_record_screen, |el| el.bg(theme.sidebar_accent).text_color(theme.sidebar_accent_foreground))
                         .when(!on_record_screen, |el| el.hover(|s| s.bg(theme.sidebar_accent.opacity(0.6))))
-                        .child(div().w_full().text_sm().font_medium().truncate().child(job.title.clone()))
+                        .child(div().w_full().text_sm().font_medium().child(job.title.clone()))
                         .child(
                             h_flex()
                                 .gap_1p5()
@@ -2013,8 +2035,7 @@ impl MostalgiaApp {
                                 .w_full()
                                 .text_sm()
                                 .font_medium()
-                                .when(!ui::is_rtl(&m.title), |el| el.truncate().child(m.title.clone()))
-                                .when(ui::is_rtl(&m.title), |el| el.child(ui::bidi_text(m.title.clone(), false)))
+                                .child(ui::bidi_text(m.title.clone(), true))
                                 .into_any_element(),
                         })
                         .when_some(crate::processing::for_meeting(id), |el, (_, job)| {
@@ -2295,5 +2316,20 @@ impl Render for MostalgiaApp {
             .children(cleanup_dialog)
             .children(import_dialog)
             .children(models_dialog)
+            // Ctrl+wheel zooms instead of scrolling, wherever the mouse is.
+            .child({
+                let this = cx.entity().downgrade();
+                canvas(|_, _, _| {}, move |_, _, window, _| {
+                    let this = this.clone();
+                    window.on_mouse_event(move |ev: &ScrollEvent, phase, window, cx| {
+                        if phase == DispatchPhase::Capture && ev.modifiers.secondary(cx) {
+                            this.update(cx, |this, cx| this.wheel_zoom(ev, window, cx)).ok();
+                            cx.stop_propagation();
+                        }
+                    });
+                })
+                .absolute()
+                .size_full()
+            })
     }
 }
