@@ -69,6 +69,9 @@ pub(crate) struct Placement {
     /// window manager keeps a window's top on the screen, so a grown one
     /// couldn't go up far).
     pub small: bool,
+    /// The empty room above her head in her artwork (logical px): she may
+    /// go that far above where the window manager lets her window go.
+    pub headroom: f32,
     gravity: Option<(bool, bool)>,
 }
 
@@ -76,13 +79,11 @@ pub(crate) struct Placement {
 pub(crate) struct DesktopDrag {
     pub pointer: (i32, i32),
     pub window: (i32, i32),
-    pub wm_move: bool,
-    pub since: Instant,
 }
 
 impl Placement {
     pub fn new(x: X11, scale: f32) -> Self {
-        Self { x, scale, mori: (0, 0), right: true, bottom: false, work: None, applied: None, applied_input: Vec::new(), drag: None, bubble: (400., 520.), small: false, gravity: None }
+        Self { x, scale, mori: (0, 0), right: true, bottom: false, work: None, applied: None, applied_input: Vec::new(), drag: None, bubble: (400., 520.), small: false, headroom: 0., gravity: None }
     }
 
     /// Room (logical px) for the cards' stack above her (`bottom`) or
@@ -93,17 +94,28 @@ impl Placement {
         (space as f32 / self.scale - super::points::STACK_GAP - super::points::STACK_EDGE).clamp(CARDS_MIN_H, cards_max_h())
     }
 
+    /// How far (logical px) she's drawn above the top of her window's usual
+    /// place: the window manager keeps the window below the top bar, so
+    /// closer to it she moves up inside the window instead, over the empty
+    /// room above her head.
+    fn lift(&self, top: f32) -> f32 {
+        let Some(work) = self.work else { return 0. };
+        let over = (work.y - (self.mori.1 - self.px(top))) as f32 / self.scale;
+        over.clamp(0., top + self.headroom)
+    }
+
     /// The window size and her top-left in it (logical px), small or grown.
     /// Grown, it has room beside her for the bubble and above / below her
     /// for the cards (as much as her monitor has, up to `CARDS_MAX_H`).
     pub fn layout(&self, (w, h): (f32, f32), grown: bool) -> ((f32, f32), (f32, f32)) {
         if !grown || self.small {
-            return ((w + 2. * PAD, h + PAD + TOP_PAD), (PAD, TOP_PAD));
+            return ((w + 2. * PAD, h + PAD + TOP_PAD), (PAD, TOP_PAD - self.lift(TOP_PAD)));
         }
         let cards = if self.bottom { PAD } else { TOP_PAD } + h + super::points::STACK_GAP + self.cards_room((w, h)) + super::points::STACK_EDGE;
         let size = (w + 2. * PAD + self.bubble.0 + SIDE_EXTRA_W, cards.max(self.bubble.1 + GROWN_EXTRA_H * ui::ui_scale()));
         let ox = if self.right { size.0 - w - PAD } else { PAD };
         let oy = if self.bottom { size.1 - h - PAD } else { TOP_PAD };
+        let oy = oy - self.lift(oy);
         (size, (ox, oy))
     }
 
@@ -159,14 +171,6 @@ impl Placement {
     }
 
     /// Her top-left from where the window is now (after a move).
-    pub fn read_back(&mut self, mori_size: (f32, f32), grown: bool) {
-        let (_, o) = self.layout(mori_size, grown);
-        if let Ok((x, y)) = self.x.position() {
-            self.mori = (x + self.px(o.0), y + self.px(o.1));
-            self.applied = None;
-        }
-    }
-
     /// Keeps her fully on a monitor (the one her middle is on, else the
     /// primary one) and picks the side the bubble opens to.
     pub fn settle(&mut self, (w, h): (f32, f32)) {
@@ -194,7 +198,9 @@ impl Placement {
             self.mori = (m.x + m.w - pw - self.px(48.), m.y + self.px(140.));
         }
         self.mori.0 = self.mori.0.clamp(m.x, (m.x + m.w - pw).max(m.x));
-        self.mori.1 = self.mori.1.clamp(m.y, (m.y + m.h - ph).max(m.y));
+        // (Up to her headroom above the work area's top: see `lift`.)
+        let top = self.work.map_or(m.y, |w| w.y) - self.px(self.headroom);
+        self.mori.1 = self.mori.1.clamp(top, (m.y + m.h - ph).max(top));
         let center = (self.mori.0 + pw / 2, self.mori.1 + ph / 2);
         self.right = center.0 > m.x + m.w / 2;
         self.bottom = center.1 > m.y + m.h / 2;

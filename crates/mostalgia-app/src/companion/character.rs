@@ -78,6 +78,18 @@ pub fn frame_svg(c: Character, pose: Pose, frame: usize) -> String {
     }
 }
 
+/// The empty room above her head while she stands idle, as a share of
+/// the frame height (measured from the artwork).
+pub fn headroom(c: Character) -> f32 {
+    let top = match c {
+        Character::Mori => 23.,
+        Character::Tsumugi => 30.,
+        Character::Hoshi | Character::Jin => 52.,
+        Character::Kaito => 59.,
+    };
+    top / art::FRAME_H
+}
+
 /// Animation speed her frames are drawn for.
 pub fn fps(c: Character) -> u32 {
     match c {
