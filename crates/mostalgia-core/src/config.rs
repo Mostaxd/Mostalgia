@@ -134,6 +134,9 @@ pub struct Config {
     /// On the desktop: her top-left in X11 root-window pixels (`None` =
     /// top right of the primary monitor).
     pub companion_desktop_pos: Option<(i32, i32)>,
+    /// The size Mori's chat bubble was resized to (logical px at text size
+    /// 100 %; `None` = the default size, as tall as its content).
+    pub companion_bubble_size: Option<(f32, f32)>,
     /// Mori's figure is hidden: only a small bar (record controls, notes,
     /// the chat) stays where she stood.
     pub companion_hidden: bool,
@@ -358,6 +361,7 @@ impl Default for Config {
             companion_clear_button: true,
             companion_desktop: false,
             companion_desktop_pos: None,
+            companion_bubble_size: None,
             companion_hidden: false,
             companion_bar_indicator: "sparkles".into(),
             ui_scale: 1.0,

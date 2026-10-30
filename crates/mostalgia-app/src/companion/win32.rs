@@ -123,6 +123,13 @@ impl Win32 {
         Ok((r.x, r.y))
     }
 
+    /// X11 keeps her pixels in place while the window resizes (bit
+    /// gravity); Windows redraws the composited window as one frame, so
+    /// there's nothing to set.
+    pub fn set_gravity(&self, _right: bool, _bottom: bool) -> Result<()> {
+        Ok(())
+    }
+
     pub fn move_resize(&self, r: Rect) -> Result<()> {
         // SAFETY: plain window call on our own window.
         let ok = unsafe { SetWindowPos(h(self.hwnd), HWND_TOPMOST, r.x, r.y, r.w.max(1), r.h.max(1), SWP_NOACTIVATE) };
