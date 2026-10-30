@@ -12,7 +12,9 @@
 //! running programs and loaded DLLs can't be overwritten but can be
 //! renamed, so each old file becomes `<name>.old` (removed on the next
 //! start, see [`cleanup`]) and the new one takes its place. The folder
-//! stays the same, so shortcuts keep working.
+//! stays the same, so shortcuts keep working. Until the restart the old
+//! app keeps starting its helper windows from its own (renamed) program,
+//! see [`own_exe`].
 //!
 //! On macOS the app runs from `Mostalgia.app`. There the update downloads
 //! the release's disk image, checks it against its `.sha256`, copies the
@@ -24,6 +26,7 @@
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -103,6 +106,19 @@ fn mac_asset() -> String {
         other => other,
     };
     format!("Mostalgia-macOS-{arch}.dmg")
+}
+
+/// Where the running program was moved to by an update (Windows, macOS).
+static MOVED_EXE: OnceLock<PathBuf> = OnceLock::new();
+
+/// The program this process runs, for starting more of it (Mori, the
+/// captions): after an update on Windows that's the renamed old one, so
+/// the app doesn't talk to a newer version of itself before its restart.
+pub fn own_exe() -> std::io::Result<PathBuf> {
+    match MOVED_EXE.get() {
+        Some(old) if old.is_file() => Ok(old.clone()),
+        _ => std::env::current_exe(),
+    }
 }
 
 /// Whether this copy can update itself (an AppImage, the Windows zip or
@@ -376,8 +392,8 @@ fn install_dmg(update: &Update, bundle: &Path, cancel: &AtomicBool, progress: &m
     result
 }
 
-/// Puts the bundle `new` in place of `bundle`; the old one is removed
-/// (a running app keeps its open files). On an error the old one stays.
+/// Puts the bundle `new` in place of `bundle`; the old one is set aside
+/// until the next start. On an error the old one stays where it was.
 fn swap_bundle(new: &Path, bundle: &Path) -> Result<()> {
     let old = bundle_side(bundle, "old");
     fs::remove_dir_all(&old).ok();
@@ -386,7 +402,11 @@ fn swap_bundle(new: &Path, bundle: &Path) -> Result<()> {
         fs::rename(&old, bundle).ok();
         return Err(e).with_context(|| format!("placing {}", bundle.display()));
     }
-    fs::remove_dir_all(&old).ok();
+    // The running app keeps starting its helper windows from the old
+    // bundle until it restarts (see [`own_exe`]); [`cleanup`] removes it.
+    if let Some(rel) = std::env::current_exe().ok().and_then(|exe| exe.strip_prefix(bundle).ok().map(Path::to_path_buf)) {
+        MOVED_EXE.set(old.join(rel)).ok();
+    }
     Ok(())
 }
 
@@ -409,30 +429,13 @@ fn unpack(zip_path: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Moves every file of `new` into `dir`, renaming a file it replaces to
-/// `<name>.old` first (which works for a running program). On an error
-/// everything moved so far is put back.
+/// Moves every file of `new` (and its subfolders) into `dir`, renaming a
+/// file it replaces to `<name>.old` first (which works for a running
+/// program). On an error everything moved so far is put back.
 fn swap_in(new: &Path, dir: &Path) -> Result<()> {
+    let me = std::env::current_exe().ok();
     let mut done: Vec<(PathBuf, Option<PathBuf>)> = Vec::new();
-    let result = (|| -> Result<()> {
-        for entry in fs::read_dir(new)? {
-            let entry = entry?;
-            if !entry.file_type()?.is_file() {
-                continue;
-            }
-            let target = dir.join(entry.file_name());
-            let old = if target.exists() {
-                let old = old_name(&target);
-                fs::rename(&target, &old).with_context(|| format!("replacing {}", target.display()))?;
-                Some(old)
-            } else {
-                None
-            };
-            done.push((target.clone(), old));
-            fs::rename(entry.path(), &target).with_context(|| format!("placing {}", target.display()))?;
-        }
-        Ok(())
-    })();
+    let result = swap_files(new, dir, me.as_deref(), &mut done);
     if result.is_err() {
         for (target, old) in done.into_iter().rev() {
             if let Some(old) = old {
@@ -444,6 +447,31 @@ fn swap_in(new: &Path, dir: &Path) -> Result<()> {
         }
     }
     result
+}
+
+fn swap_files(new: &Path, dir: &Path, me: Option<&Path>, done: &mut Vec<(PathBuf, Option<PathBuf>)>) -> Result<()> {
+    for entry in fs::read_dir(new)? {
+        let entry = entry?;
+        let target = dir.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            fs::create_dir_all(&target)?;
+            swap_files(&entry.path(), &target, me, done)?;
+            continue;
+        }
+        let old = if target.exists() {
+            let old = old_name(&target);
+            fs::rename(&target, &old).with_context(|| format!("replacing {}", target.display()))?;
+            if me == Some(target.as_path()) {
+                MOVED_EXE.set(old.clone()).ok();
+            }
+            Some(old)
+        } else {
+            None
+        };
+        done.push((target.clone(), old));
+        fs::rename(entry.path(), &target).with_context(|| format!("placing {}", target.display()))?;
+    }
+    Ok(())
 }
 
 /// A free `<name>.old` (`.old2`, … if an earlier one is still in use).
@@ -460,11 +488,22 @@ fn old_name(target: &Path) -> PathBuf {
 }
 
 /// Removes what an update left behind: on Windows the `*.old` files of
-/// the previous version (files still in use stay for next time), on macOS
-/// a half-staged or set-aside bundle. Call at startup.
+/// the previous version, on macOS a half-staged or set-aside bundle. Call
+/// at startup. Right after an update's restart on Windows the old app is
+/// still quitting and holds its files, so they're tried again for a minute
+/// in the background; what's still in use stays for next time.
 pub fn cleanup() {
-    if let Some(dir) = running_install() {
-        cleanup_dir(&dir);
+    if let Some(dir) = running_install()
+        && !cleanup_dir(&dir)
+    {
+        std::thread::spawn(move || {
+            for _ in 0..12 {
+                std::thread::sleep(Duration::from_secs(5));
+                if cleanup_dir(&dir) {
+                    return;
+                }
+            }
+        });
     }
     if let Some(bundle) = running_bundle() {
         fs::remove_dir_all(bundle_side(&bundle, "update")).ok();
@@ -472,14 +511,21 @@ pub fn cleanup() {
     }
 }
 
-fn cleanup_dir(dir: &Path) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+/// Removes the `*.old` files in `dir` and its subfolders; whether all went.
+fn cleanup_dir(dir: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else { return true };
+    let mut all = true;
     for entry in entries.flatten() {
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            all &= cleanup_dir(&entry.path());
+            continue;
+        }
         let name = entry.file_name().to_string_lossy().to_string();
         if name.contains(".old") && (name.ends_with(".old") || name.rsplit(".old").next().is_some_and(|s| s.chars().all(|c| c.is_ascii_digit() || c == '-'))) {
-            fs::remove_file(entry.path()).ok();
+            all &= fs::remove_file(entry.path()).is_ok();
         }
     }
+    all
 }
 
 fn replace(part: &Path, target: &Path) -> Result<()> {
@@ -567,15 +613,49 @@ mod tests {
         fs::write(dir.join("keep.txt"), "mine")?;
         fs::write(new.join("mostalgia-app.exe"), "v2")?;
         fs::write(new.join("added.dll"), "dll")?;
+        fs::create_dir_all(dir.join("res"))?;
+        fs::write(dir.join("res/a.txt"), "a1")?;
+        fs::create_dir_all(new.join("res"))?;
+        fs::write(new.join("res/a.txt"), "a2")?;
         swap_in(&new, &dir)?;
+        assert_eq!(fs::read_to_string(dir.join("res/a.txt"))?, "a2");
         assert_eq!(fs::read_to_string(dir.join("mostalgia-app.exe"))?, "v2");
         assert_eq!(fs::read_to_string(dir.join("mostalgia-app.exe.old"))?, "v1");
         assert_eq!(fs::read_to_string(dir.join("added.dll"))?, "dll");
         assert_eq!(fs::read_to_string(dir.join("keep.txt"))?, "mine");
-        cleanup_dir(&dir);
+        assert!(cleanup_dir(&dir));
         assert!(!dir.join("mostalgia-app.exe.old").exists());
+        assert!(!dir.join("res/a.txt.old").exists());
         assert!(dir.join("keep.txt").exists());
 
+        fs::remove_dir_all(&root)?;
+        Ok(())
+    }
+
+    /// What the update relies on: Windows lets a running program be
+    /// renamed (not deleted), so the new one can take its place.
+    #[cfg(windows)]
+    #[test]
+    fn a_running_program_is_replaced() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("mostalgia-running-{}", std::process::id()));
+        let (dir, new) = (root.join("app"), root.join("new"));
+        fs::create_dir_all(&dir)?;
+        fs::create_dir_all(&new)?;
+        let system = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| "C:\\Windows".into());
+        fs::copy(system.join("System32\\PING.EXE"), dir.join("ping.exe"))?;
+        let mut running = std::process::Command::new(dir.join("ping.exe"))
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()?;
+        fs::write(new.join("ping.exe"), "v2")?;
+        let swapped = swap_in(&new, &dir);
+        let in_use = !cleanup_dir(&dir);
+        running.kill().ok();
+        running.wait().ok();
+        swapped?;
+        assert_eq!(fs::read_to_string(dir.join("ping.exe"))?, "v2");
+        assert!(in_use, "the running program's .old can't go yet");
+        assert!(cleanup_dir(&dir), "but once it quit");
         fs::remove_dir_all(&root)?;
         Ok(())
     }
@@ -614,7 +694,7 @@ mod tests {
         Ok(())
     }
 
-    /// The new bundle takes the old one's place; nothing is left beside it.
+    /// The new bundle takes the old one's place; the old one waits beside it.
     #[test]
     fn bundles_swap() -> Result<()> {
         let root = std::env::temp_dir().join(format!("mostalgia-bswap-{}", std::process::id()));
@@ -626,7 +706,8 @@ mod tests {
         fs::write(staged.join("Contents/v"), "2")?;
         swap_bundle(&staged, &app)?;
         assert_eq!(fs::read_to_string(app.join("Contents/v"))?, "2");
-        assert!(!staged.exists() && !bundle_side(&app, "old").exists());
+        assert!(!staged.exists());
+        assert_eq!(fs::read_to_string(bundle_side(&app, "old").join("Contents/v"))?, "1");
         // Nothing staged: the old app stays.
         assert!(swap_bundle(&staged, &app).is_err());
         assert_eq!(fs::read_to_string(app.join("Contents/v"))?, "2");
