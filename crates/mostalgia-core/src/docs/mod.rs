@@ -197,8 +197,10 @@ pub fn chunk(sections: &[extract::Section]) -> Vec<extract::Section> {
 
 /// What gets embedded for a chunk: e5's passage prefix, the document and
 /// heading, then the text.
-fn embed_text(title: &str, c: &extract::Section) -> String {
-    if c.heading.is_empty() { format!("passage: {title}\n{}", c.text) } else { format!("passage: {title} — {}\n{}", c.heading, c.text) }
+/// What a chunk is embedded as: the document's title (and the heading)
+/// before its text.
+pub(crate) fn embed_text(title: &str, heading: &str, text: &str) -> String {
+    if heading.is_empty() { format!("{title}\n{text}") } else { format!("{title} — {heading}\n{text}") }
 }
 
 /// Adds a file to the drive: copies it into the data directory and
@@ -235,6 +237,45 @@ pub fn add(path: &Path) -> Result<(i64, bool)> {
     Ok((id, true))
 }
 
+/// Puts a Markdown text the app wrote (a meeting's summary and notes) into
+/// the drive as `file_name`, titled `title`. A document of the same file
+/// name made this way before is replaced, so saving again updates it.
+/// Returns its id and whether it is new; it still needs [`index`].
+pub fn put_markdown(title: &str, file_name: &str, text: &str) -> Result<(i64, bool)> {
+    let bytes = text.as_bytes();
+    let h = hash(bytes);
+    let store = Store::open(&paths::database())?;
+    let conn = store.conn();
+    let existing: Option<(i64, String)> = conn
+        .query_row("SELECT id, path FROM documents WHERE file_name = ?1 AND kind = ?2 ORDER BY id DESC LIMIT 1", params![file_name, Kind::Markdown.id()], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .optional()?;
+    if let Some((id, path)) = existing.filter(|(_, p)| Path::new(p).starts_with(dir())) {
+        std::fs::write(&path, bytes).with_context(|| trf("{} konnte nicht gespeichert werden", &[&path]))?;
+        conn.execute(
+            "UPDATE documents SET title = ?2, size_bytes = ?3, hash = ?4, indexed_at = NULL, error = NULL WHERE id = ?1",
+            params![id, title, bytes.len() as i64, h],
+        )?;
+        invalidate_cache();
+        return Ok((id, false));
+    }
+    conn.execute(
+        "INSERT INTO documents (title, file_name, path, kind, size_bytes, hash, added_at) VALUES (?1, ?2, '', ?3, ?4, ?5, ?6)",
+        params![title, file_name, Kind::Markdown.id(), bytes.len() as i64, h, Local::now().timestamp()],
+    )?;
+    let id = conn.last_insert_rowid();
+    let safe: String = file_name.chars().map(|c| if c.is_alphanumeric() || ".-_ ".contains(c) { c } else { '_' }).collect();
+    let dest = dir().join(format!("{id}-{safe}"));
+    if let Err(e) = std::fs::create_dir_all(dir()).and_then(|_| std::fs::write(&dest, bytes)) {
+        conn.execute("DELETE FROM documents WHERE id = ?1", [id])?;
+        return Err(e).with_context(|| trf("{} konnte nicht gespeichert werden", &[&dest.display()]));
+    }
+    conn.execute("UPDATE documents SET path = ?2 WHERE id = ?1", params![id, dest.to_string_lossy()])?;
+    invalidate_cache();
+    Ok((id, true))
+}
+
 /// Reads, chunks and embeds a document (again). A file that can't be read
 /// keeps its entry with the error. Returns the number of chunks.
 pub fn index(id: i64) -> Result<usize> {
@@ -255,8 +296,13 @@ pub fn index(id: i64) -> Result<usize> {
     let chunks = chunk(&sections);
     let all: String = sections.iter().map(|s| s.text.as_str()).take(40).collect::<Vec<_>>().join("\n");
     let language = guess_language(&all);
-    let texts: Vec<String> = chunks.iter().map(|c| embed_text(&doc.title, c)).collect();
-    let vectors = embed::embed(&texts)?;
+    let texts: Vec<String> = chunks.iter().map(|c| embed_text(&doc.title, &c.heading, &c.text)).collect();
+    // Without vectors (offline, no key) the chunks are found by keywords
+    // and get vectors later (see `index_pending`).
+    let vectors = crate::ask::reembed::active_model(conn)?.passages(&texts).unwrap_or_else(|e| {
+        eprintln!("[mostalgia] document {id}: {e:#}");
+        None
+    });
     let tx = conn.transaction()?;
     tx.execute("DELETE FROM doc_chunks WHERE document_id = ?1", [id])?;
     {
@@ -276,7 +322,7 @@ pub fn index(id: i64) -> Result<usize> {
     Ok(chunks.len())
 }
 
-/// Documents indexed before the embedding model was there get vectors
+/// Documents indexed while the embedding model wasn't there get vectors
 /// (and ones never indexed get indexed). Returns how many.
 pub fn index_pending(cancel: &std::sync::atomic::AtomicBool) -> Result<usize> {
     let store = Store::open(&paths::database())?;
@@ -285,7 +331,7 @@ pub fn index_pending(cancel: &std::sync::atomic::AtomicBool) -> Result<usize> {
             "SELECT d.id FROM documents d WHERE d.indexed_at IS NULL
                 OR (d.error IS NULL AND ?1 AND EXISTS (SELECT 1 FROM doc_chunks c WHERE c.document_id = d.id AND c.embedding IS NULL))",
         )?;
-        stmt.query_map([embed::available()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+        stmt.query_map([crate::ask::reembed::active_model(store.conn())?.ready()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
     };
     drop(store);
     let mut done = 0;
@@ -543,7 +589,11 @@ pub fn search_within(query: &str, within: Within, limit: usize) -> Result<Vec<Do
         bm25 = stmt.query_map(params![q, CANDIDATES as i64], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
     }
     let mut semantic: Vec<i64> = Vec::new();
-    if let Some(qv) = embed::embed(&[format!("query: {query}")])?.and_then(|mut v| v.pop()) {
+    let qv = crate::ask::reembed::active_model(conn)?.query(query).unwrap_or_else(|e| {
+        eprintln!("[mostalgia] documents search: {e:#}");
+        None
+    });
+    if let Some(qv) = qv {
         let mut slot = cache().lock().unwrap_or_else(|e| e.into_inner());
         if slot.is_none() {
             let mut stmt = conn.prepare("SELECT id, embedding FROM doc_chunks WHERE embedding IS NOT NULL")?;
@@ -557,7 +607,7 @@ pub fn search_within(query: &str, within: Within, limit: usize) -> Result<Vec<Do
             .unwrap()
             .iter()
             .filter(|(id, _)| allowed.contains(id))
-            .map(|(id, v)| (*id, v.iter().zip(&qv).map(|(a, b)| a * b).sum()))
+            .map(|(id, v)| (*id, embed::similarity(v, &qv)))
             .collect();
         scored.sort_by(|a, b| b.1.total_cmp(&a.1));
         semantic = scored.into_iter().take(CANDIDATES).map(|(id, _)| id).collect();
@@ -662,6 +712,17 @@ mod tests {
         assert_eq!(search("VPN", None, 5).unwrap().len(), 1);
         assert!(delete(id).unwrap());
         assert!(search("VPN", None, 5).unwrap().is_empty());
+        // A meeting's summary saved into the drive, then saved again.
+        let (m, new) = put_markdown("Weekly", "2026-10-29-Weekly-summary-notes.md", "# Weekly\nThe launch moves to March.").unwrap();
+        assert!(new);
+        index(m).unwrap();
+        assert_eq!(search("launch", None, 5).unwrap().len(), 1);
+        let again = put_markdown("Weekly sync", "2026-10-29-Weekly-summary-notes.md", "# Weekly\nThe launch moves to April.").unwrap();
+        assert_eq!(again, (m, false));
+        index(m).unwrap();
+        let doc = get(m).unwrap().unwrap();
+        assert_eq!(doc.title, "Weekly sync");
+        assert_eq!(sections(m).unwrap()[0].text, "The launch moves to April.");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

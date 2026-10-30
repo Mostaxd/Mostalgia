@@ -1,10 +1,11 @@
-//! "Ask your meetings": a local hybrid search index over transcripts and
+//! "Ask your meetings": a hybrid search index over transcripts and
 //! summaries, and question answering on top of it with cited sources.
 
 pub mod answer;
 pub mod cite;
 pub mod embed;
 pub mod index;
+pub mod reembed;
 pub mod search;
 
 pub use answer::{AskEvent, Citation, Piece, ask, ask_as_mori, ask_within, parse_answer};

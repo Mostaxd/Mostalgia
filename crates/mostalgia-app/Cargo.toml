@@ -3,6 +3,8 @@ name = "mostalgia-app"
 description = "Mostalgia desktop app"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "mostalgia-app"
@@ -13,25 +15,58 @@ anyhow = "1.0.104"
 chrono = "0.4.45"
 crossbeam-channel = "0.5.17"
 gpui-kit = "0.8.1"
-mostalgia-core = { version = "0.2.0", path = "../mostalgia-core" }
+mostalgia-core = { version = "0.3.0", path = "../mostalgia-core" }
 # Only for the screenshots example (offscreen rendering); same versions gpui-kit uses.
 gpui-pre = { version = "=0.3.10", optional = true }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.10", optional = true }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 schemars = "1.2.3"
-ksni = { version = "0.3.7", default-features = false, features = ["blocking", "async-io"] }
-# Desktop notifications with an "Aufnahme starten" button (same zbus as ksni/keyring).
-zbus = { version = "5.19", default-features = false, features = ["blocking-api", "async-io"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
-# Mori's desktop window (XWayland): always on top, placement, input shape.
-# Same x11rb / raw-window-handle as GPUI's Linux backend.
-x11rb = { version = "0.13.2", features = ["shape", "randr"] }
+image = { version = "0.25", default-features = false, features = ["png"] } # LOCAL-ONLY
 raw-window-handle = "0.6"
+
+# The tray icon, notifications and Mori's desktop window on Linux.
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = { version = "0.3.7", default-features = false, features = ["blocking", "async-io"] } # LOCAL-ONLY
+# Desktop notifications with an "Aufnahme starten" button (same zbus as ksni/keyring).
+zbus = { version = "5.19", default-features = false, features = ["blocking-api", "async-io"] } # LOCAL-ONLY
+# Mori's desktop window (XWayland): always on top, placement, input shape.
+# Same x11rb as GPUI's Linux backend.
+x11rb = { version = "0.13.2", features = ["shape", "randr"] }
+
+# The tray icon and notifications everywhere else (Windows, macOS).
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+tray-icon = "0.26"
+notify-rust = "4.18"
+
+# Mori's desktop window and the captions window (always on top, no taskbar
+# entry, click-through), the tray's message loop, and starting with Windows.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse"] }
+winreg = "0.56"
+# The app's identity for toasts and the taskbar: AppUserModelID and its
+# Start Menu shortcut (COM: IShellLink, IPropertyStore).
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Storage_EnhancedStorage", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem"] }
+
+[build-dependencies]
+# The exe's icon on Windows (resource 1, which GPUI also uses for windows).
+winresource = "0.1"
+
+# Mori's desktop window and the live captions on macOS (same objc2 as GPUI's).
+[target.'cfg(target_os = "macos")'.dependencies]
+# Notifications with an "Aufnahme starten" button (what notify-rust uses there).
+mac-notification-sys = "0.6"
+# The recording hotkey (Carbon hotkeys: no accessibility permission needed).
+global-hotkey = "0.7"
+block2 = "0.6"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-core-foundation", "NSApplication", "NSButton", "NSControl", "NSEvent", "NSGraphics", "NSPanel", "NSResponder", "NSRunningApplication", "NSScreen", "NSView", "NSWindow"] } # LOCAL-ONLY
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "NSArray", "NSDate", "NSEnumerator", "NSGeometry", "NSString", "NSTimer"] } # LOCAL-ONLY
 
 [features]
 default = []
 vulkan = ["mostalgia-core/vulkan"]
+metal = ["mostalgia-core/metal"]
 cuda = ["mostalgia-core/cuda"]
 # Offscreen rendering for `cargo run --example screenshots --features screenshots`.
 screenshots = ["dep:gpui-pre", "gpui-pre/test-support", "dep:gpui_platform", "gpui_platform/test-support"]

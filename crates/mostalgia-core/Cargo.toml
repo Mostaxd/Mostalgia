@@ -3,9 +3,13 @@ name = "mostalgia-core"
 description = "Capture, live + final transcription, storage and summaries for Mostalgia"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
+# Unpacking the speaker-segmentation model (shipped as .tar.bz2).
+bzip2 = "0.4"
 candle-core = "0.11"
 candle-nn = "0.11"
 candle-transformers = "0.11"
@@ -15,18 +19,21 @@ dirs = "7.0.0"
 docx-rs = "0.4.22"
 hound = "3.5.1"
 keyring = "4.2.0"
-libpulse-binding = "2.30.1"
-libpulse-simple-binding = "2.29.0"
 pdf-extract = "0.12.1"
 nnnoiseless = { version = "0.5.2", default-features = false }
 reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "json", "multipart", "rustls"] }
 rusqlite = { version = "0.41.0", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+# Comparing the running AppImage with a release (see `self_update`).
+sha1_smol = "1"
+# Checking a downloaded Windows update against the release's .sha256.
+sha2 = "0.10"
 regex = "1"
 symphonia = { version = "0.5", default-features = false, features = ["aac", "adpcm", "alac", "flac", "mp1", "mp2", "mp3", "pcm", "vorbis", "caf", "isomp4", "mkv", "ogg", "aiff", "wav"] }
 sherpa-rs = { version = "0.6.8", default-features = false, features = ["download-binaries"], optional = true }
 sherpa-rs-sys = { version = "0.6.8", default-features = false, features = ["download-binaries"], optional = true }
+tar = "0.4"
 tokenizers = { version = "0.23.2", default-features = false, features = ["onig"] }
 whisper-rs = "0.16.0"
 whisper-rs-sys = "0.15.0"
@@ -34,9 +41,41 @@ whisper-rs-sys = "0.15.0"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 
 
+# PulseAudio / PipeWire: capture, playback and call detection on Linux.
+[target.'cfg(target_os = "linux")'.dependencies]
+libpulse-binding = "2.30.1"
+libpulse-simple-binding = "2.29.0"
+
+# Capture, playback and device lists everywhere else (WASAPI on Windows,
+# CoreAudio on macOS); see `audio_cpal`.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+cpal = "0.18"
+
+# Call detection: who uses the microphone (see `callwatch`).
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+# The GPU check: the NVIDIA card and its driver version (DXGI).
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Dxgi"] }
+
+# Core Audio (system audio tap, call detection) and ScreenCaptureKit (system
+# audio before macOS 14.2) on macOS. Same objc2 generation as GPUI's.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+dispatch2 = "0.3"
+libc = "0.2"
+objc2 = "0.6"
+objc2-core-audio = "0.3"
+objc2-core-audio-types = "0.3"
+objc2-core-foundation = "0.3"
+objc2-core-media = "0.3"
+objc2-foundation = "0.3"
+objc2-screen-capture-kit = "0.3"
+
 [features]
 default = ["diarization"]
 vulkan = ["whisper-rs/vulkan"]
+# Apple GPUs (macOS).
+metal = ["whisper-rs/metal"]
 cuda = ["whisper-rs/cuda"]
 openblas = ["whisper-rs/openblas"]
 # Speaker diarization (sherpa-onnx; its shared libraries are copied next to the binary).

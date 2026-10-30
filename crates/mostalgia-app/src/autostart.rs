@@ -148,6 +148,7 @@ fn notify(summary: &str, body: &str, action: Option<(String, crossbeam_channel::
     });
 }
 
+#[cfg(target_os = "linux")]
 fn send_notification(summary: &str, body: &str, action: Option<(String, crossbeam_channel::Sender<String>)>) -> zbus::Result<()> {
     use std::collections::HashMap;
     let conn = zbus::blocking::Connection::session()?;
@@ -189,6 +190,61 @@ fn send_notification(summary: &str, body: &str, action: Option<(String, crossbea
             }
             _ => {}
         }
+    }
+    Ok(())
+}
+
+/// A toast (Windows) through notify-rust, with the "Aufnahme starten"
+/// button working like on Linux.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn send_notification(summary: &str, body: &str, action: Option<(String, crossbeam_channel::Sender<String>)>) -> anyhow::Result<()> {
+    let mut n = notify_rust::Notification::new();
+    n.appname("Mostalgia").summary(summary).body(body);
+    // Shown as "Mostalgia" with its icon (see `win_identity`).
+    #[cfg(windows)]
+    if let Some(id) = crate::win_identity::toast_app_id() {
+        n.app_id(id);
+    }
+    #[cfg(windows)]
+    if action.is_some() {
+        n.action("start", tr("Aufnahme starten"));
+    }
+    let handle = n.show()?;
+    #[cfg(windows)]
+    if let Some((app, tx)) = action {
+        // Blocks this notification's thread until it's clicked or gone.
+        handle.wait_for_action(|key| {
+            if key == "start" {
+                let _ = tx.send(app);
+            }
+        });
+    }
+    #[cfg(not(windows))]
+    let _ = (handle, action);
+    Ok(())
+}
+
+/// A Notification Center entry (macOS). With `action`, it has an "Aufnahme
+/// starten" button like on Linux; this thread waits for the answer.
+#[cfg(target_os = "macos")]
+fn send_notification(summary: &str, body: &str, action: Option<(String, crossbeam_channel::Sender<String>)>) -> anyhow::Result<()> {
+    use mac_notification_sys::{MainButton, Notification, NotificationResponse};
+    static APP: std::sync::Once = std::sync::Once::new();
+    APP.call_once(|| {
+        // Inside Mostalgia.app the notifications are Mostalgia's; a bare
+        // binary (a source build) keeps the library's default sender.
+        if std::env::current_exe().is_ok_and(|p| p.to_string_lossy().contains(".app/Contents/MacOS/")) {
+            let _ = mac_notification_sys::set_application("io.github.mostaxd.Mostalgia");
+        }
+    });
+    let mut n = Notification::new();
+    n.title(summary).message(body);
+    if action.is_some() {
+        n.main_button(MainButton::SingleAction(tr("Aufnahme starten"))).close_button(tr("Ignorieren")).wait_for_click(true);
+    }
+    let response = n.send().map_err(|e| anyhow::anyhow!("{e}"))?;
+    if let (Some((app, tx)), NotificationResponse::ActionButton(_)) = (action, response) {
+        let _ = tx.send(app);
     }
     Ok(())
 }

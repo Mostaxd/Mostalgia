@@ -3,6 +3,7 @@
 //! ones live in `assets/themes.json`; more can be dropped into
 //! `~/.config/mostalgia/themes/*.json` (same shape, one theme or a list).
 
+use gpui_kit::component::scroll::ScrollbarMode;
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
 use serde::Deserialize;
@@ -243,12 +244,15 @@ pub fn apply(spec: &ThemeSpec, cx: &mut App) {
         c.tab_foreground = muted_fg;
         c.tab_active_foreground = fg;
         c.switch = border;
-        c.scrollbar_thumb = border;
+        c.scrollbar_thumb = muted_fg.opacity(0.4);
         c.scrollbar_thumb_hover = muted_fg;
         c.list_hover = muted;
         c.list_active = primary.opacity(0.15);
         c.list_active_border = primary;
     });
+    // Long views (transcript, settings, …) keep a visible thumb to drag,
+    // not one that only fades in while scrolling.
+    Theme::set_scrollbar_mode(ScrollbarMode::Always, cx);
     cx.set_global(ActiveSpec(spec.clone()));
 }
 

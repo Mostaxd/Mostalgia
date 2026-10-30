@@ -1,13 +1,19 @@
 //! Controlling the running app from outside: a Unix socket for
 //! `mostalgia toggle` (bind it to a GNOME keyboard shortcut — Wayland doesn't
-//! let apps grab global hotkeys) and a tray icon (StatusNotifierItem; GNOME
-//! shows it with the AppIndicator extension Ubuntu ships).
+//! let apps grab global hotkeys; on Windows a token-protected localhost port,
+//! see `mostalgia_core::control_channel`) and a tray icon (StatusNotifierItem
+//! on Linux — GNOME shows it with the AppIndicator extension Ubuntu ships —
+//! and the system tray elsewhere).
 
+#[cfg(unix)]
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc::Sender;
 
+#[cfg(target_os = "linux")]
 use mostalgia_core::i18n::tr;
+#[cfg(unix)]
 use mostalgia_core::paths;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,6 +45,7 @@ impl Command {
 
 /// Listens on the control socket on a background thread. Fails if another
 /// instance already owns it.
+#[cfg(unix)]
 pub fn listen(tx: Sender<Command>) -> std::io::Result<()> {
     let path = paths::control_socket();
     if path.exists() {
@@ -68,8 +75,42 @@ pub fn listen(tx: Sender<Command>) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Listens on a localhost port announced (with a token) in the data
+/// directory. Fails if another instance already listens.
+#[cfg(not(unix))]
+pub fn listen(tx: Sender<Command>) -> std::io::Result<()> {
+    use mostalgia_core::control_channel;
+    let handler = move |line: &str| match Command::parse(line) {
+        Some(cmd) => {
+            let _ = tx.send(cmd);
+            true
+        }
+        None => false,
+    };
+    let file = control_channel::endpoint_file();
+    match control_channel::serve(&file, handler.clone()) {
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            // Right after an update's restart the old app is still
+            // quitting: take over once it's gone.
+            std::thread::spawn(move || {
+                for _ in 0..20 {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    if control_channel::serve(&file, handler.clone()).is_ok() {
+                        return;
+                    }
+                }
+            });
+            Err(e)
+        }
+        r => r,
+    }
+}
+
 pub fn cleanup() {
+    #[cfg(unix)]
     let _ = std::fs::remove_file(paths::control_socket());
+    #[cfg(not(unix))]
+    mostalgia_core::control_channel::cleanup(&mostalgia_core::control_channel::endpoint_file());
 }
 
 pub struct Tray {
@@ -79,6 +120,7 @@ pub struct Tray {
     pub mic_on: bool,
 }
 
+#[cfg(target_os = "linux")]
 impl ksni::Tray for Tray {
     fn id(&self) -> String {
         "mostalgia".into()
@@ -155,5 +197,327 @@ impl ksni::Tray for Tray {
             item(tr("Mostalgia beenden"), "application-exit", Command::Quit),
         ]);
         items
+    }
+}
+
+/// The running tray icon.
+#[cfg(target_os = "linux")]
+pub struct TrayHandle(ksni::blocking::Handle<Tray>);
+
+#[cfg(target_os = "linux")]
+impl TrayHandle {
+    pub fn spawn(tray: Tray) -> anyhow::Result<Self> {
+        use ksni::blocking::TrayMethods;
+        Ok(Self(tray.spawn()?))
+    }
+
+    pub fn set_state(&self, recording: bool, mic_on: bool) {
+        self.0.update(|t| (t.recording, t.mic_on) = (recording, mic_on));
+    }
+}
+
+/// The tray menu for a state: each entry's command and label (`None` is a
+/// separator). The same entries as the Linux tray.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+fn menu_entries(recording: bool, mic_on: bool) -> Vec<Option<(Command, &'static str)>> {
+    let mut items = vec![Some(if recording {
+        (Command::Stop, mostalgia_core::i18n::tr("Aufnahme beenden"))
+    } else {
+        (Command::Start, mostalgia_core::i18n::tr("Aufnahme starten"))
+    })];
+    if recording {
+        items.push(Some(if mic_on {
+            (Command::ToggleMic, mostalgia_core::i18n::tr("Mikrofon ausschalten"))
+        } else {
+            (Command::ToggleMic, mostalgia_core::i18n::tr("Mikrofon einschalten"))
+        }));
+    }
+    items.extend([
+        Some((Command::Show, mostalgia_core::i18n::tr("Fenster anzeigen"))),
+        None,
+        Some((Command::Quit, mostalgia_core::i18n::tr("Mostalgia beenden"))),
+    ]);
+    items
+}
+
+/// The system tray through the `tray-icon` crate (Windows; macOS can use
+/// the same, built on its main thread).
+#[cfg(not(target_os = "linux"))]
+#[cfg_attr(not(windows), allow(dead_code))]
+mod native {
+    use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
+    use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
+
+    use super::Command;
+
+    /// The app icon, with a red record dot while recording.
+    pub fn icon(recording: bool) -> Option<Icon> {
+        let img = image::load_from_memory(crate::ICON_PNG).ok()?;
+        let mut rgba = img.to_rgba8();
+        if recording {
+            let (w, h) = rgba.dimensions();
+            let r = w.min(h) as f32 * 0.22;
+            let (cx, cy) = (w as f32 - r - 1.0, h as f32 - r - 1.0);
+            for (x, y, p) in rgba.enumerate_pixels_mut() {
+                let d = ((x as f32 + 0.5 - cx).powi(2) + (y as f32 + 0.5 - cy).powi(2)).sqrt();
+                if d <= r {
+                    *p = image::Rgba([0xe0, 0x1b, 0x24, 0xff]);
+                } else if d <= r + 1.5 {
+                    *p = image::Rgba([0xff, 0xff, 0xff, 0xff]);
+                }
+            }
+        }
+        let (w, h) = rgba.dimensions();
+        Icon::from_rgba(rgba.into_raw(), w, h).ok()
+    }
+
+    fn tooltip(recording: bool) -> String {
+        if recording { format!("Mostalgia — {}", mostalgia_core::i18n::tr("Aufnahme läuft")) } else { "Mostalgia".into() }
+    }
+
+    pub struct Native {
+        icon: TrayIcon,
+        ids: Vec<(MenuId, Command)>,
+    }
+
+    impl Native {
+        pub fn build(recording: bool, mic_on: bool) -> anyhow::Result<Self> {
+            let (menu, ids) = menu(recording, mic_on)?;
+            let icon = TrayIconBuilder::new()
+                .with_id("mostalgia")
+                .with_tooltip(tooltip(recording))
+                .with_menu(Box::new(menu))
+                .with_menu_on_left_click(false)
+                .with_icon(icon(recording).ok_or_else(|| anyhow::anyhow!("tray icon image"))?)
+                .build()?;
+            Ok(Self { icon, ids })
+        }
+
+        pub fn set_state(&mut self, recording: bool, mic_on: bool) {
+            if let Ok((menu, ids)) = menu(recording, mic_on) {
+                self.icon.set_menu(Some(Box::new(menu)));
+                self.ids = ids;
+            }
+            let _ = self.icon.set_icon(icon(recording));
+            let _ = self.icon.set_tooltip(Some(tooltip(recording)));
+        }
+
+        /// Commands from menu clicks and left clicks on the icon since the
+        /// last call.
+        pub fn commands(&self) -> Vec<Command> {
+            let mut out = Vec::new();
+            while let Ok(e) = MenuEvent::receiver().try_recv() {
+                if let Some((_, cmd)) = self.ids.iter().find(|(id, _)| *id == e.id) {
+                    out.push(*cmd);
+                }
+            }
+            while let Ok(e) = TrayIconEvent::receiver().try_recv() {
+                if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
+                    out.push(Command::Show);
+                }
+            }
+            out
+        }
+    }
+
+    fn menu(recording: bool, mic_on: bool) -> anyhow::Result<(Menu, Vec<(MenuId, Command)>)> {
+        let menu = Menu::new();
+        let mut ids = Vec::new();
+        for (i, entry) in super::menu_entries(recording, mic_on).into_iter().enumerate() {
+            match entry {
+                Some((cmd, label)) => {
+                    let item = MenuItem::with_id(format!("mostalgia-{i}"), label, true, None);
+                    ids.push((item.id().clone(), cmd));
+                    menu.append(&item)?;
+                }
+                None => menu.append(&PredefinedMenuItem::separator())?,
+            }
+        }
+        Ok((menu, ids))
+    }
+}
+
+/// The running tray icon: on Windows it lives on its own thread, which
+/// runs the message loop its hidden window needs.
+#[cfg(windows)]
+pub struct TrayHandle(std::sync::mpsc::Sender<(bool, bool)>);
+
+#[cfg(windows)]
+impl TrayHandle {
+    pub fn spawn(tray: Tray) -> anyhow::Result<Self> {
+        let (state_tx, state_rx) = std::sync::mpsc::channel::<(bool, bool)>();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<anyhow::Result<()>>();
+        std::thread::Builder::new().name("mostalgia-tray".into()).spawn(move || {
+            let mut native = match native::Native::build(tray.recording, tray.mic_on) {
+                Ok(n) => {
+                    let _ = ready_tx.send(Ok(()));
+                    n
+                }
+                Err(e) => {
+                    let _ = ready_tx.send(Err(e));
+                    return;
+                }
+            };
+            // The recording hotkey, delivered to this thread's queue.
+            register_hotkey();
+            loop {
+                if pump_messages() {
+                    let _ = tray.tx.send(Command::Toggle);
+                }
+                loop {
+                    match state_rx.try_recv() {
+                        Ok((recording, mic_on)) => native.set_state(recording, mic_on),
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        // The app dropped the handle: remove the icon.
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+                    }
+                }
+                for cmd in native.commands() {
+                    let _ = tray.tx.send(cmd);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(30));
+            }
+        })?;
+        ready_rx.recv().map_err(|_| anyhow::anyhow!("tray thread ended"))??;
+        Ok(Self(state_tx))
+    }
+
+    pub fn set_state(&self, recording: bool, mic_on: bool) {
+        let _ = self.0.send((recording, mic_on));
+    }
+}
+
+/// Handles the window messages queued for this thread (the tray's);
+/// returns whether the recording hotkey was pressed.
+#[cfg(windows)]
+fn pump_messages() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage, WM_HOTKEY};
+    let mut hotkey = false;
+    // SAFETY: plain Win32 message loop on this thread with a zeroed MSG.
+    unsafe {
+        let mut msg: MSG = std::mem::zeroed();
+        while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+            if msg.message == WM_HOTKEY && msg.wParam == HOTKEY_ID as usize {
+                hotkey = true;
+                continue;
+            }
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+    hotkey
+}
+
+#[cfg(windows)]
+const HOTKEY_ID: i32 = 0x4d53;
+
+/// Ctrl+Alt+Shift+R starts or stops a recording from anywhere (the Linux
+/// app has a GNOME shortcut for that; Win+Shift+R is the Snipping Tool's).
+#[cfg(windows)]
+fn register_hotkey() {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, RegisterHotKey};
+    // SAFETY: registers a thread hotkey (no window); fails if taken.
+    let ok = unsafe { RegisterHotKey(std::ptr::null_mut(), HOTKEY_ID, MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, b'R' as u32) };
+    if ok == 0 {
+        eprintln!("[mostalgia] Ctrl+Alt+Shift+R is taken by another program");
+    }
+}
+
+/// macOS: the menu bar icon. AppKit wants it built and used on the main
+/// thread (where the app runs), so a run-loop timer there passes its
+/// clicks on instead of a thread of its own.
+#[cfg(target_os = "macos")]
+pub struct TrayHandle {
+    native: std::rc::Rc<std::cell::RefCell<native::Native>>,
+    timer: objc2::rc::Retained<objc2_foundation::NSTimer>,
+    /// Keeps the recording hotkey registered.
+    _hotkeys: Option<global_hotkey::GlobalHotKeyManager>,
+}
+
+/// Control+Option+Shift+R starts or stops a recording from anywhere, like
+/// Ctrl+Alt+Shift+R on Windows (Cmd+Shift+R is the browsers' reload).
+#[cfg(target_os = "macos")]
+fn register_hotkey() -> Option<(global_hotkey::GlobalHotKeyManager, u32)> {
+    use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+    let manager = global_hotkey::GlobalHotKeyManager::new().ok()?;
+    let hotkey = HotKey::new(Some(Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT), Code::KeyR);
+    if let Err(e) = manager.register(hotkey) {
+        eprintln!("[mostalgia] the recording hotkey is taken: {e}");
+        return None;
+    }
+    Some((manager, hotkey.id()))
+}
+
+#[cfg(target_os = "macos")]
+impl TrayHandle {
+    pub fn spawn(tray: Tray) -> anyhow::Result<Self> {
+        anyhow::ensure!(objc2::MainThreadMarker::new().is_some(), "the menu bar icon needs the main thread");
+        let native = std::rc::Rc::new(std::cell::RefCell::new(native::Native::build(tray.recording, tray.mic_on)?));
+        let polled = native.clone();
+        let tx = tray.tx;
+        let (hotkeys, hotkey_id) = register_hotkey().unzip();
+        let block = block2::RcBlock::new(move |_timer: std::ptr::NonNull<objc2_foundation::NSTimer>| {
+            while let Ok(e) = global_hotkey::GlobalHotKeyEvent::receiver().try_recv() {
+                if Some(e.id) == hotkey_id && e.state == global_hotkey::HotKeyState::Pressed {
+                    let _ = tx.send(Command::Toggle);
+                }
+            }
+            let Ok(native) = polled.try_borrow() else { return };
+            for cmd in native.commands() {
+                let _ = tx.send(cmd);
+            }
+        });
+        let timer = unsafe { objc2_foundation::NSTimer::scheduledTimerWithTimeInterval_repeats_block(0.1, true, &block) };
+        Ok(Self { native, timer, _hotkeys: hotkeys })
+    }
+
+    pub fn set_state(&self, recording: bool, mic_on: bool) {
+        if let Ok(mut native) = self.native.try_borrow_mut() {
+            native.set_state(recording, mic_on);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for TrayHandle {
+    fn drop(&mut self) {
+        self.timer.invalidate();
+    }
+}
+
+/// No tray icon here yet.
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+pub struct TrayHandle(std::convert::Infallible);
+
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+impl TrayHandle {
+    pub fn spawn(_tray: Tray) -> anyhow::Result<Self> {
+        anyhow::bail!("no tray icon on this system yet")
+    }
+
+    pub fn set_state(&self, _recording: bool, _mic_on: bool) {
+        match self.0 {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tray_menu_follows_the_recording_state() {
+        let cmds = |r, m| menu_entries(r, m).into_iter().map(|e| e.map(|(c, _)| c)).collect::<Vec<_>>();
+        assert_eq!(cmds(false, false), [Some(Command::Start), Some(Command::Show), None, Some(Command::Quit)]);
+        assert_eq!(
+            cmds(true, true),
+            [Some(Command::Stop), Some(Command::ToggleMic), Some(Command::Show), None, Some(Command::Quit)]
+        );
+    }
+
+    #[test]
+    fn commands_parse() {
+        assert_eq!(Command::parse("toggle\n"), Some(Command::Toggle));
+        assert_eq!(Command::parse(" mic "), Some(Command::ToggleMic));
+        assert_eq!(Command::parse("rm -rf"), None);
     }
 }

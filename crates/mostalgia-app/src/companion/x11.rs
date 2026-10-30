@@ -3,15 +3,25 @@
 //! XWayland) can: `_NET_WM_STATE_ABOVE`, ConfigureWindow positions, an
 //! input shape so clicks on her transparent surroundings reach the windows
 //! below. All coordinates here are X11 root-window pixels.
+//!
+//! On Windows `X11` is `win32::Win32`, which does the same with Win32 calls.
 
+#[cfg(target_os = "linux")]
 use anyhow::{Context, Result};
+#[cfg(target_os = "linux")]
 use x11rb::connection::{Connection, RequestConnection};
+#[cfg(target_os = "linux")]
 use x11rb::protocol::randr::ConnectionExt as _;
+#[cfg(target_os = "linux")]
 use x11rb::protocol::shape::{self, ConnectionExt as _};
-use x11rb::protocol::xproto::{self, AtomEnum, ClientMessageEvent, ConfigureWindowAux, ConnectionExt as _, EventMask, PropMode};
+#[cfg(target_os = "linux")]
+use x11rb::protocol::xproto::{self, AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConfigureWindowAux, ConnectionExt as _, EventMask, Gravity, PropMode};
+#[cfg(target_os = "linux")]
 use x11rb::rust_connection::RustConnection;
+#[cfg(target_os = "linux")]
 use x11rb::wrapper::ConnectionExt as _;
 
+#[cfg(target_os = "linux")]
 x11rb::atom_manager! {
     Atoms: AtomsCookie {
         _NET_WM_STATE,
@@ -54,6 +64,7 @@ pub struct Monitor {
     pub primary: bool,
 }
 
+#[cfg(target_os = "linux")]
 pub struct X11 {
     conn: RustConnection,
     root: xproto::Window,
@@ -62,6 +73,7 @@ pub struct X11 {
     shape: bool,
 }
 
+#[cfg(target_os = "linux")]
 impl X11 {
     /// Connects to `$DISPLAY` (the XWayland server Mori's window lives on).
     pub fn connect(window: u32) -> Result<Self> {
@@ -85,8 +97,10 @@ impl X11 {
             AtomEnum::ATOM,
             &[a._NET_WM_WINDOW_TYPE_UTILITY, a._NET_WM_WINDOW_TYPE_NORMAL],
         )?;
-        // No title bar or frame (flags = decorations, decorations = none).
-        self.conn.change_property32(PropMode::REPLACE, self.window, a._MOTIF_WM_HINTS, a._MOTIF_WM_HINTS, &[2, 0, 0, 0, 0])?;
+        // No title bar or frame, and only moving (flags = functions |
+        // decorations, functions = move, decorations = none): dropped at
+        // the screen's top edge it mustn't be maximized.
+        self.conn.change_property32(PropMode::REPLACE, self.window, a._MOTIF_WM_HINTS, a._MOTIF_WM_HINTS, &[3, 4, 0, 0, 0])?;
         // _NET_WM_STATE_ADD, two properties per message.
         for pair in [
             [a._NET_WM_STATE_ABOVE, a._NET_WM_STATE_STICKY],
@@ -116,6 +130,21 @@ impl X11 {
     pub fn position(&self) -> Result<(i32, i32)> {
         let r = self.conn.translate_coordinates(self.window, self.root, 0, 0)?.reply()?;
         Ok((r.dst_x as i32, r.dst_y as i32))
+    }
+
+    /// Where the window's contents stay when it's resized: the right /
+    /// bottom edge, else the left / top one. No background either, so the
+    /// X server paints nothing (black) into the new part before we do.
+    pub fn set_gravity(&self, right: bool, bottom: bool) -> Result<()> {
+        let gravity = match (right, bottom) {
+            (false, false) => Gravity::NORTH_WEST,
+            (true, false) => Gravity::NORTH_EAST,
+            (false, true) => Gravity::SOUTH_WEST,
+            (true, true) => Gravity::SOUTH_EAST,
+        };
+        self.conn.change_window_attributes(self.window, &ChangeWindowAttributesAux::new().bit_gravity(gravity).background_pixmap(x11rb::NONE))?;
+        self.conn.flush()?;
+        Ok(())
     }
 
     pub fn move_resize(&self, r: Rect) -> Result<()> {
@@ -148,9 +177,15 @@ impl X11 {
         Ok((r.root_x as i32, r.root_y as i32, r.mask.contains(xproto::KeyButMask::BUTTON1)))
     }
 
+    /// The work area (without panels) on monitor `m`: `_NET_WORKAREA`
+    /// clipped to it, or all of it if the window manager doesn't say.
+    pub fn work_area_on(&self, m: &Rect) -> Rect {
+        self.work_area().and_then(|w| w.intersect(m)).unwrap_or(*m)
+    }
+
     /// The desktop's work area (without panels), if the window manager
     /// says (`_NET_WORKAREA` of the current workspace).
-    pub fn work_area(&self) -> Option<Rect> {
+    fn work_area(&self) -> Option<Rect> {
         let reply = self.conn.get_property(false, self.root, self.atoms._NET_WORKAREA, AtomEnum::CARDINAL, 0, 4).ok()?.reply().ok()?;
         let v: Vec<u32> = reply.value32()?.collect();
         (v.len() >= 4 && v[2] > 0 && v[3] > 0).then(|| Rect { x: v[0] as i32, y: v[1] as i32, w: v[2] as i32, h: v[3] as i32 })
@@ -171,5 +206,54 @@ impl X11 {
             out.push(Monitor { rect: Rect { x: 0, y: 0, w: s.width_in_pixels as i32, h: s.height_in_pixels as i32 }, primary: true });
         }
         out
+    }
+}
+
+#[cfg(windows)]
+pub use super::win32::Win32 as X11;
+
+/// macOS: the same interface on the NSWindow (`macos.rs`).
+#[cfg(target_os = "macos")]
+pub use super::macos::MacWindow as X11;
+
+/// No X11 here: `connect` always fails, so callers take their "not an X11
+/// window" path (the window stays an ordinary one).
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+pub struct X11 {
+    never: std::convert::Infallible,
+}
+
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+#[allow(clippy::unused_self)]
+impl X11 {
+    pub fn connect(_window: super::desktop::NativeWindow) -> anyhow::Result<Self> {
+        anyhow::bail!("X11 is not available on this system")
+    }
+    pub fn setup_window(&self) -> anyhow::Result<()> {
+        match self.never {}
+    }
+    pub fn no_input_focus(&self) -> anyhow::Result<()> {
+        match self.never {}
+    }
+    pub fn position(&self) -> anyhow::Result<(i32, i32)> {
+        match self.never {}
+    }
+    pub fn set_gravity(&self, _right: bool, _bottom: bool) -> anyhow::Result<()> {
+        match self.never {}
+    }
+    pub fn move_resize(&self, _r: Rect) -> anyhow::Result<()> {
+        match self.never {}
+    }
+    pub fn set_input_rects(&self, _rects: &[Rect]) -> anyhow::Result<()> {
+        match self.never {}
+    }
+    pub fn pointer(&self) -> anyhow::Result<(i32, i32, bool)> {
+        match self.never {}
+    }
+    pub fn work_area_on(&self, _m: &Rect) -> Rect {
+        match self.never {}
+    }
+    pub fn monitors(&self) -> Vec<Monitor> {
+        match self.never {}
     }
 }

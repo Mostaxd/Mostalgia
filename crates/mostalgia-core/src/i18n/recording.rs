@@ -15,7 +15,7 @@ pub const EN: &[(&str, &str)] = &[
     ("Sprecher", "Speakers"),
     ("Aufnahme starten", "Start recording"),
     ("Mikrofon oder Desktop-Audio einschalten.", "Turn on the microphone or desktop audio."),
-    ("Whisper-Modell nicht gefunden: {} — scripts/download-model.sh ausführen", "Whisper model not found: {} — run scripts/download-model.sh"),
+    ("Whisper-Modell nicht gefunden: {} — unter Einstellungen → System herunterladen", "Whisper model not found: {} — download in Settings → System"),
     ("Modell nicht geladen", "Model not loaded"),
     // Busy
     ("Erinnerungen werden geladen …", "Loading memories …"),
@@ -106,8 +106,16 @@ pub const EN: &[(&str, &str)] = &[
     ("Audio wird gelesen … {} %", "Reading audio … {} %"),
     ("Audio wird gelesen …", "Reading audio …"),
     ("{} lässt sich nicht lesen ({}). Für dieses Format (z. B. Opus) wird ffmpeg gebraucht – installieren (sudo apt install ffmpeg) und erneut importieren.", "Can't read {} ({}). This format (e.g. Opus) needs ffmpeg – install it (sudo apt install ffmpeg) and import again."),
+    ("{} lässt sich nicht lesen ({}). Für dieses Format (z. B. Opus) wird ffmpeg gebraucht – installieren (brew install ffmpeg) und erneut importieren.", "Can't read {} ({}). This format (e.g. Opus) needs ffmpeg – install it (brew install ffmpeg) and import again."),
     ("{} lässt sich auch mit ffmpeg nicht lesen", "ffmpeg can't read {} either"),
     ("unbekanntes Format", "unknown format"),
     ("keine Tonspur", "no audio track"),
     ("Ton-Codec wird nicht unterstützt", "audio codec not supported"),
+    // Live translation
+    ("Übersetzung fehlgeschlagen: {}", "Translation failed: {}"),
+    ("Übersetzung nicht möglich: {}", "Can't translate: {}"),
+    ("Übersetzt → {}", "Translating → {}"),
+    ("Übersetzen", "Translate"),
+    ("Live-Übersetzung ausschalten", "Turn off live translation"),
+    ("Fertige Zeilen live übersetzen — nur Text geht an die gewählte KI, nie Audio", "Translate finished lines live — only text goes to the chosen AI, never audio"),
 ];

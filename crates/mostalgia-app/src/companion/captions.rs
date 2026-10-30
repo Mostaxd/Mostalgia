@@ -45,7 +45,10 @@ pub fn next_opacity(now: f32) -> f32 {
 
 /// Entry point of `mostalgia-app --captions [--demo]`.
 pub fn run(demo: bool) {
+    #[cfg(target_os = "linux")]
     let env = GraphicalEnvironment { wayland_display: None, ..GraphicalEnvironment::detect() };
+    #[cfg(not(target_os = "linux"))]
+    let env = GraphicalEnvironment::detect();
     let rx = spawn_stdin_reader(demo);
     gpui_kit::application().with_assets(AppAssets).with_windowing(WindowingRequest::Windowed(env)).run(move |cx: &mut App| {
         gpui_kit::init(cx);
@@ -58,7 +61,9 @@ pub fn run(demo: bool) {
             titlebar: None,
             focus: false,
             show: true,
-            kind: WindowKind::Normal,
+            // macOS: a non-activating panel, so clicking it leaves the call
+            // app in front with the keyboard.
+            kind: if cfg!(target_os = "macos") { WindowKind::PopUp } else { WindowKind::Normal },
             is_movable: true,
             is_resizable: true,
             is_minimizable: false,
@@ -88,6 +93,8 @@ pub struct Captions {
     session: Option<u64>,
     lines: Vec<WireLine>,
     interim: Vec<WireLine>,
+    /// Live translations (line start, text), when translation is on.
+    translations: Vec<(f64, String)>,
     /// Times of the lines flagged here.
     flagged: Vec<f64>,
     stalled: Option<u64>,
@@ -110,13 +117,15 @@ impl Captions {
                 if let Err(e) = x.setup_window().and_then(|_| x.no_input_focus()) {
                     eprintln!("[captions] window setup: {e:#}");
                 }
+                #[cfg(target_os = "macos")]
+                x.allow_resize();
                 let scale = window.scale_factor();
                 let (w, h) = config.live_captions_size.unwrap_or(DEFAULT_SIZE);
                 let size = ((w * scale) as i32, (h * scale) as i32);
                 let origin = config.live_captions_pos.unwrap_or_else(|| {
                     let monitors = x.monitors();
                     let m = monitors.iter().find(|m| m.primary).or(monitors.first()).map(|m| m.rect).unwrap_or(Rect { x: 0, y: 0, w: 1920, h: 1080 });
-                    default_origin(x.work_area().and_then(|w| w.intersect(&m)).unwrap_or(m), size)
+                    default_origin(x.work_area_on(&m), size)
                 });
                 let _ = x.move_resize(Rect { x: origin.0, y: origin.1, w: size.0, h: size.1 });
             }
@@ -140,6 +149,7 @@ impl Captions {
             session: None,
             lines: Vec::new(),
             interim: Vec::new(),
+            translations: Vec::new(),
             flagged: Vec::new(),
             stalled: None,
             scroll: ScrollHandle::new(),
@@ -175,6 +185,7 @@ impl Captions {
                         self.session = live.as_ref().map(|l| l.session);
                         self.lines.clear();
                         self.flagged.clear();
+                        self.translations.clear();
                     }
                     self.live = live;
                 }
@@ -186,6 +197,12 @@ impl Captions {
                     }
                 }
                 ToMori::Stalled { secs } => self.stalled = secs,
+                ToMori::Translations { session, from, items } => {
+                    if Some(session) == self.session && from <= self.translations.len() {
+                        self.translations.truncate(from);
+                        self.translations.extend(items);
+                    }
+                }
                 ToMori::ReloadConfig => {
                     let config = Config::load();
                     mostalgia_core::i18n::set_lang(mostalgia_core::i18n::resolve(&config.ui_language));
@@ -286,6 +303,7 @@ impl Captions {
         let theme = cx.theme().clone();
         let at = l.at;
         let flagged = self.flagged.iter().any(|f| (*f - at).abs() < 0.01);
+        let translation = if interim { None } else { self.translations.iter().rev().find(|(t, _)| (*t - at).abs() < 0.01).map(|(_, t)| t.clone()) };
         let group = SharedString::from(format!("caption-line-{ix}"));
         h_flex()
             .id(("caption", ix))
@@ -311,7 +329,10 @@ impl Captions {
                     .min_w_0()
                     .text_size(ui::transcript_rems(0.95))
                     .when(interim, |el| el.text_color(theme.muted_foreground).italic())
-                    .child(ui::bidi_text(l.text.clone(), true)),
+                    .child(ui::bidi_text(l.text.clone(), true))
+                    .when_some(translation, |el, t| {
+                        el.child(ui::bidi_text(t, true).italic().text_color(theme.muted_foreground).text_size(ui::transcript_rems(0.9)))
+                    }),
             )
             .when(!interim, |el| {
                 el.child(

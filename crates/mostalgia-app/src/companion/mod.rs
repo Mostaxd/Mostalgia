@@ -18,7 +18,11 @@ pub mod desktop;
 pub mod feed;
 pub mod host;
 pub mod ipc;
+#[cfg(windows)]
+mod win32;
 mod x11;
+#[cfg(target_os = "macos")]
+mod macos;
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -267,6 +271,8 @@ pub struct Companion {
     /// The compact card under the mouse (shown in full).
     hovered_point: Option<usize>,
     expanded: bool,
+    /// The cards are hidden (the counter on her notepad brings them back).
+    points_hidden: bool,
     /// Cards shown and how many of them compact, at the last tick.
     visible_seen: (usize, usize),
     /// Screenshots: a fixed pose.
@@ -387,6 +393,7 @@ impl Companion {
             notes: Default::default(),
             hovered_point: None,
             expanded: false,
+            points_hidden: false,
             visible_seen: (0, 0),
             demo_pose: None,
             hidden: false,
@@ -423,12 +430,13 @@ impl Companion {
             // Her name in the placeholders.
             self.lang_seen = None;
         }
-        let size = self.size();
+        let (size, headroom) = (self.size(), self.headroom());
         if let Some(p) = &mut self.desktop
             && p.drag.is_none()
         {
             // No position yet (or reset): `settle` puts her top right.
             p.mori = config.companion_desktop_pos.unwrap_or((i32::MIN / 2, i32::MIN / 2));
+            p.headroom = headroom;
             p.settle(size);
         }
         self.reduce_motion = config.reduce_motion;
@@ -467,6 +475,11 @@ impl Companion {
         }
         let h = BASE_HEIGHT * self.scale;
         (h * art::FRAME_W / art::FRAME_H, h)
+    }
+
+    /// The empty room above her head (logical px; none for the bar).
+    fn headroom(&self) -> f32 {
+        if self.hidden { 0. } else { character::headroom(self.character) * self.size().1 }
     }
 
     /// Free room for her top-left corner inside the window.
@@ -512,7 +525,7 @@ impl Companion {
         let o = self.origin();
         if let Some(p) = &mut self.desktop {
             let pointer = p.x.pointer().map(|(x, y, _)| (x, y)).unwrap_or_default();
-            p.drag = Some(desktop::DesktopDrag { pointer, window: p.mori, wm_move: false, since: Instant::now() });
+            p.drag = Some(desktop::DesktopDrag { pointer, window: p.mori });
         }
         self.drag = Some(Drag {
             mouse: Point2 { x: ev.position.x.into(), y: ev.position.y.into() },
@@ -523,7 +536,8 @@ impl Companion {
         cx.notify();
     }
 
-    fn mouse_move(&mut self, ev: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn mouse_move(&mut self, ev: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let (size, grown) = (self.size(), self.desktop.is_some() && self.grown());
         let Some(drag) = &mut self.drag else { return };
         let (x, y): (f32, f32) = (ev.position.x.into(), ev.position.y.into());
         let (dx, dy) = (x - drag.mouse.x, y - drag.mouse.y);
@@ -533,27 +547,20 @@ impl Companion {
         let first = !drag.moved;
         drag.moved = true;
         if let Some(p) = &mut self.desktop {
-            let Some(d) = &mut p.drag else { return };
-            if first {
-                // The window manager moves the window (across monitors,
-                // with its snapping); `tick` notices when it's dropped.
-                d.wm_move = true;
-                d.since = Instant::now();
-                window.start_window_move();
-            } else if d.wm_move && d.since.elapsed() > Duration::from_millis(250) && ev.pressed_button == Some(MouseButton::Left) {
-                // Still getting the motion: the window manager didn't take
-                // over, so move the window ourselves.
-                d.wm_move = false;
+            if first && grown {
+                // The bubble or cards are open: just her while she moves,
+                // and we move her ourselves (the window manager would
+                // start with the big window and keep its top on the screen).
+                p.small = true;
+                p.apply_window(size, grown);
             }
-            if !d.wm_move {
-                let d = *d;
-                if let Ok((px_, py_, _)) = p.x.pointer() {
-                    p.mori = (d.window.0 + px_ - d.pointer.0, d.window.1 + py_ - d.pointer.1);
-                    let (size, grown) = (self.size(), self.grown());
-                    if let Some(p) = &mut self.desktop {
-                        p.apply_window(size, grown);
-                    }
-                }
+            // We move the window ourselves, not the window manager: it keeps
+            // a window below the top bar, and she may go a little higher
+            // than her window (see `Placement::lift`).
+            let Some(d) = p.drag else { return };
+            if let Ok((px_, py_, _)) = p.x.pointer() {
+                p.mori = (d.window.0 + px_ - d.pointer.0, d.window.1 + py_ - d.pointer.1);
+                p.apply_window(size, grown);
             }
             return;
         }
@@ -583,7 +590,7 @@ impl Companion {
         let Some(drag) = self.drag.take() else { return };
         if self.desktop.is_some() {
             if drag.moved {
-                self.end_desktop_drag(false);
+                self.end_desktop_drag();
             } else {
                 if let Some(p) = &mut self.desktop {
                     p.drag = None;
@@ -605,13 +612,13 @@ impl Companion {
 
     /// A drag of her desktop window ended: where is she now? Keeps her on
     /// a monitor, turns the bubble towards its middle and remembers it.
-    fn end_desktop_drag(&mut self, wm_moved: bool) {
-        let (size, grown) = (self.size(), self.grown());
+    fn end_desktop_drag(&mut self) {
+        let (size, headroom) = (self.size(), self.headroom());
         let Some(p) = &mut self.desktop else { return };
-        if wm_moved {
-            p.read_back(size, grown);
-        }
+        // Grown again, if it was (`render` applies it).
+        p.small = false;
         p.drag = None;
+        p.headroom = headroom;
         p.settle(size);
         p.save();
         self.drag = None;
@@ -622,25 +629,36 @@ impl Companion {
     fn place_desktop_window(&mut self, o: Point2) {
         let (w, h) = self.size();
         let grown = self.grown();
+        let (bubble, headroom) = (self.bubble_room(), self.headroom());
         let cards = self.expanded || self.error.is_some() || !self.visible_points().is_empty();
         let open = self.open;
+        if let Some(p) = &mut self.desktop {
+            p.bubble = bubble;
+            p.headroom = headroom;
+        }
         let Some(p) = &self.desktop else { return };
         let ((vw, vh), _) = p.layout((w, h), grown);
         self.viewport = (vw, vh);
         let menu = self.menu_rect(o);
-        // While the window manager moves the window, leave it alone.
-        if p.drag.is_some_and(|d| d.wm_move) && self.drag.as_ref().is_some_and(|d| d.moved) {
-            return;
-        }
         // (The bar takes the mouse only on itself.)
         let pad = if self.hidden { 2. } else { desktop::PAD };
         let mut input = vec![(o.x - pad, o.y - pad, w + 2. * pad, h + 2. * pad)];
         if let Some(m) = menu {
             input.push(m);
         }
-        if open {
-            // The bubble's side, full height.
-            input.push(if p.right { (0., 0., (o.x - 4.).max(0.), vh) } else { (o.x + w + 4., 0., vw - (o.x + w + 4.), vh) });
+        if self.bubble.resizing() {
+            // The whole window, so the mouse isn't lost while resizing.
+            input.push((0., 0., vw, vh));
+        } else if open {
+            // The bubble as painted last (a frame behind: `tick` re-renders
+            // when it changes), else its whole side.
+            let b = self.bubble.bounds.get();
+            self.bubble.applied = b;
+            input.push(match b {
+                Some(b) => (f32::from(b.origin.x) - 2., f32::from(b.origin.y) - 2., f32::from(b.size.width) + 4., f32::from(b.size.height) + 4.),
+                None if p.right => (0., 0., (o.x - 4.).max(0.), vh),
+                None => (o.x + w + 4., 0., vw - (o.x + w + 4.), vh),
+            });
         }
         if cards {
             // The stack as painted last (a frame behind: `tick` re-renders
@@ -788,6 +806,7 @@ impl Companion {
             self.points_follow = true;
             self.points_unseen = 0;
             self.expanded = false;
+            self.points_hidden = false;
             self.answers.reset();
             reset = true;
         }
@@ -824,10 +843,10 @@ impl Companion {
         if ended {
             self.final_points(cx);
         }
-        // The window manager dropped her window somewhere.
-        let wm_moving = self.drag.as_ref().is_some_and(|d| d.moved) && self.desktop.as_ref().and_then(|p| p.drag).is_some_and(|d| d.wm_move);
-        if wm_moving && self.desktop.as_ref().and_then(|p| p.x.pointer().ok()).is_some_and(|(_, _, down)| !down) {
-            self.end_desktop_drag(true);
+        // The button came up without us seeing it (outside her window).
+        let desktop_drag = self.drag.as_ref().is_some_and(|d| d.moved) && self.desktop.as_ref().is_some_and(|p| p.drag.is_some());
+        if desktop_drag && self.desktop.as_ref().and_then(|p| p.x.pointer().ok()).is_some_and(|(_, _, down)| !down) {
+            self.end_desktop_drag();
             self.idle_since = Instant::now();
             cx.notify();
         }
@@ -847,7 +866,7 @@ impl Companion {
         changed |= visible != self.visible_seen;
         self.visible_seen = visible;
         // The stack's size changed: her window's input region follows.
-        if self.desktop.is_some() && self.stack_bounds.get() != self.stack_applied {
+        if self.desktop.is_some() && (self.stack_bounds.get() != self.stack_applied || self.bubble.bounds.get() != self.bubble.applied) {
             changed = true;
         }
 
@@ -923,6 +942,7 @@ impl Companion {
         }
         self.points.clear();
         self.expanded = false;
+        self.points_hidden = false;
         self.points_unseen = 0;
         // (The app saves them before it opens the meeting; on the desktop it
         // waits to hear it to reload the meeting.)
@@ -977,6 +997,7 @@ impl Companion {
         self.turns.clear();
         self.points.clear();
         self.expanded = false;
+        self.points_hidden = false;
         self.points_follow = true;
         self.points_unseen = 0;
         self.scope_choice = None;
@@ -1113,6 +1134,32 @@ impl Render for Companion {
             .children(badge)
             .children(bubble)
             .children(menu)
+            // While resizing the bubble, a layer over everything follows the
+            // mouse wherever it goes.
+            .when(self.bubble.resizing(), |el| {
+                let this = cx.entity().downgrade();
+                el.child(
+                    div()
+                        .id("mori-bubble-resizing")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .child(canvas(|_, _, _| {}, move |_, _, window, _| {
+                            let (moved, up) = (this.clone(), this.clone());
+                            window.on_mouse_event(move |ev: &MouseMoveEvent, phase, _, cx| {
+                                if phase == DispatchPhase::Capture {
+                                    moved.update(cx, |this, cx| this.resize_move(ev, cx)).ok();
+                                }
+                            });
+                            window.on_mouse_event(move |ev: &MouseUpEvent, phase, _, cx| {
+                                if phase == DispatchPhase::Capture && ev.button == MouseButton::Left {
+                                    up.update(cx, |this, cx| this.resize_end(cx)).ok();
+                                }
+                            });
+                        }).absolute().size_full()),
+                )
+            })
             // While dragging, a layer over everything keeps the mouse even
             // when it outruns her.
             .when(self.drag.is_some(), |el| {

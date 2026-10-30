@@ -66,6 +66,9 @@ pub enum ToMori {
     StartFailed { message: String },
     /// The live transcriber is stuck for `secs` (`None`: working).
     Stalled { secs: Option<u64> },
+    /// Live translations `from..` of the current session (line start,
+    /// text), for the floating captions.
+    Translations { session: u64, from: usize, items: Vec<(f64, String)> },
     Quit,
 }
 

@@ -1,0 +1,3 @@
+/* German permission texts of Mostalgia.app. */
+NSMicrophoneUsageDescription = "Mostalgia nimmt deine Seite von Besprechungen über das Mikrofon auf und transkribiert sie auf diesem Mac.";
+NSAudioCaptureUsageDescription = "Mostalgia nimmt auf, was die anderen Teilnehmenden eines Anrufs sagen (die Tonausgabe des Macs), und transkribiert es auf diesem Mac.";

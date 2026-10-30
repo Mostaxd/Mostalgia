@@ -31,6 +31,10 @@ pub struct Config {
     pub speaker_labels: bool,
     /// Tell several remote speakers apart ("Sprecher 1", "Sprecher 2", …).
     pub diarize: bool,
+    /// Name speakers whose voice is known from earlier meetings. Off, they
+    /// stay "Sprecher 1", "Sprecher 2", … until renamed by hand, and
+    /// renaming doesn't learn the voice.
+    pub recognize_voices: bool,
     /// Noise suppression (RNNoise) on the mic for transcription.
     pub denoise: bool,
     /// Show provisional text while someone is still speaking.
@@ -77,6 +81,10 @@ pub struct Config {
     pub live_engine: SttChoice,
     /// Speech-to-text for the final pass after a recording.
     pub final_engine: SttChoice,
+    /// Embeddings for meaning search over meetings and documents: the
+    /// local e5 model (`connection` empty) or a cloud model. Changing it
+    /// re-embeds the library (see `ask::reembed`).
+    pub embedding: SttChoice,
     /// Show the note-taking companion (Mori or one of the others).
     pub companion: bool,
     /// Which companion: "mori", "tsumugi" or "hoshi" (unknown → Mori).
@@ -126,6 +134,9 @@ pub struct Config {
     /// On the desktop: her top-left in X11 root-window pixels (`None` =
     /// top right of the primary monitor).
     pub companion_desktop_pos: Option<(i32, i32)>,
+    /// The size Mori's chat bubble was resized to (logical px at text size
+    /// 100 %; `None` = the default size, as tall as its content).
+    pub companion_bubble_size: Option<(f32, f32)>,
     /// Mori's figure is hidden: only a small bar (record controls, notes,
     /// the chat) stays where she stood.
     pub companion_hidden: bool,
@@ -157,6 +168,16 @@ pub struct Config {
     /// would delete any).
     pub audio_cleanup_confirmed: bool,
 
+    // ── Models ──
+    /// "Not now" on the first-launch offer to download the models (it
+    /// isn't asked again; Settings → System still offers it).
+    pub models_prompt_dismissed: bool,
+
+    // ── Updates ──
+    /// The AppImage asks GitHub for a newer release at startup and offers
+    /// it (nothing is downloaded without a click).
+    pub check_updates: bool,
+
     // ── Decision log ──
     /// The decision log (its page in the sidebar, decisions collected from
     /// each new summary). Off by default.
@@ -173,6 +194,18 @@ pub struct Config {
     pub live_captions_size: Option<(f32, f32)>,
     /// Its background opacity, 0.4–1.0.
     pub live_captions_opacity: f32,
+
+    // ── Live translation ──
+    /// Translate finished lines while recording (text only, by the
+    /// translation connection). Off by default.
+    pub live_translation: bool,
+    /// Language to translate into (a code like "en").
+    pub translation_language: String,
+    /// Connection for live translation ("" = the one for live notes).
+    pub translation_provider: String,
+    /// Model for live translation ("" = that connection's live-notes or
+    /// default model).
+    pub translation_model: String,
 }
 
 /// When Mori looks for live notes during a recording.
@@ -232,8 +265,8 @@ fn clamp_or(v: f32, (lo, hi): (f32, f32), default: f32) -> f32 {
     if v.is_finite() && v > 0. { v.clamp(lo, hi) } else { default }
 }
 
-/// Which speech-to-text engine to use: local Whisper (`connection` empty)
-/// or a cloud model on one of the configured connections.
+/// Which engine to use for speech-to-text (or embeddings): the local model
+/// (`connection` empty) or a cloud model on one of the configured connections.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SttChoice {
@@ -256,7 +289,8 @@ impl SttChoice {
 pub enum Mode {
     /// Transcription and AI run on this machine (or the local network).
     Local,
-    /// Transcription local, summaries/answers from a cloud model.
+    /// Transcription local, summaries/answers (or search embeddings) from
+    /// a cloud model.
     Hybrid,
     /// Transcription in the cloud too.
     Cloud,
@@ -286,6 +320,7 @@ impl Default for Config {
             vad_threshold: vad::DEFAULT_THRESHOLD,
             speaker_labels: true,
             diarize: false,
+            recognize_voices: true,
             denoise: false,
             interim_text: true,
             diarize_threshold: 0.5,
@@ -308,6 +343,7 @@ impl Default for Config {
             ask_model: String::new(),
             live_engine: SttChoice::local(),
             final_engine: SttChoice::local(),
+            embedding: SttChoice::local(),
             companion: false,
             companion_character: "mori".into(),
             companion_scale: 1.0,
@@ -325,6 +361,7 @@ impl Default for Config {
             companion_clear_button: true,
             companion_desktop: false,
             companion_desktop_pos: None,
+            companion_bubble_size: None,
             companion_hidden: false,
             companion_bar_indicator: "sparkles".into(),
             ui_scale: 1.0,
@@ -333,12 +370,18 @@ impl Default for Config {
             companion_answer_sources: crate::assist::Sources::Both.id().into(),
             audio_keep_days: 7,
             audio_cleanup_confirmed: false,
+            models_prompt_dismissed: false,
+            check_updates: true,
             decision_log: false,
             decision_log_built: false,
             live_captions: false,
             live_captions_pos: None,
             live_captions_size: None,
             live_captions_opacity: 0.92,
+            live_translation: false,
+            translation_language: String::new(),
+            translation_provider: String::new(),
+            translation_model: String::new(),
         }
     }
 }
@@ -489,6 +532,43 @@ impl Config {
         Ok(req)
     }
 
+    /// Connection and model for live translation: its own when chosen,
+    /// else the live-notes ones (fast and cheap, like translation needs).
+    pub fn translation_request(&self) -> Result<crate::summary::SummaryRequest> {
+        if self.translation_provider.is_empty() {
+            return self.notes_request();
+        }
+        let connection = self
+            .connection(&self.translation_provider)
+            .cloned()
+            .with_context(|| crate::i18n::trf("KI-Verbindung \"{}\" gibt es nicht mehr — in den Einstellungen wählen", &[&self.translation_provider]))?;
+        let model = if !self.translation_model.is_empty() {
+            self.translation_model.clone()
+        } else {
+            match self.notes_request() {
+                Ok(n) if n.connection.id == connection.id => n.model,
+                _ => {
+                    let default = connection.preset().default_model;
+                    if default.is_empty() { connection.models.first().cloned().unwrap_or_default() } else { default.to_string() }
+                }
+            }
+        };
+        anyhow::ensure!(!model.is_empty(), "{}", crate::i18n::trf("{}: kein Modell für Live-Übersetzung gewählt", &[&connection.name]));
+        Ok(crate::summary::SummaryRequest { connection, model, language: None, effort: None })
+    }
+
+    /// The language live translation writes in: the chosen one, else the
+    /// app's language.
+    pub fn translation_target(&self) -> String {
+        if !self.translation_language.is_empty() {
+            return self.translation_language.clone();
+        }
+        match crate::i18n::resolve(&self.ui_language) {
+            crate::i18n::Lang::De => "de".into(),
+            crate::i18n::Lang::En => "en".into(),
+        }
+    }
+
     /// Where the live answer helper looks (unknown values: both).
     pub fn answer_sources(&self) -> crate::assist::Sources {
         crate::assist::Sources::parse(&self.companion_answer_sources).unwrap_or_default()
@@ -512,11 +592,21 @@ impl Config {
         if stt_cloud(&self.live_engine) || stt_cloud(&self.final_engine) {
             return Mode::Cloud;
         }
-        let ai_local = [self.summary_provider.as_str(), self.ask_provider.as_str()]
+        let ai_local = [self.summary_provider.as_str(), self.ask_provider.as_str(), self.embedding.connection.as_str()]
             .iter()
             .filter(|id| !id.is_empty())
             .all(|id| self.connection(id).is_some_and(|c| c.is_local()));
         if ai_local { Mode::Local } else { Mode::Hybrid }
+    }
+
+    /// Display name of the embedding choice: "multilingual-e5-small (lokal)"
+    /// or "OpenAI · text-embedding-3-small".
+    pub fn embedding_label(&self) -> String {
+        if self.embedding.is_local() {
+            return crate::i18n::tr("multilingual-e5-small (lokal)").to_string();
+        }
+        let name = self.connection(&self.embedding.connection).map_or(self.embedding.connection.as_str(), |c| c.name.as_str());
+        format!("{name} · {}", self.embedding.model)
     }
 
     /// Display name of an engine choice: "Whisper (lokal)" or "OpenAI · gpt-4o-transcribe".
@@ -686,6 +776,19 @@ mod tests {
     }
 
     #[test]
+    fn cloud_embeddings_make_local_ai_hybrid() {
+        let mut c = Config::default();
+        c.connections.push(crate::connections::Connection::from_preset(crate::connections::preset("ollama"), "ollama"));
+        c.summary_provider = "ollama".into();
+        assert_eq!(c.mode(), Mode::Local);
+        c.embedding = SttChoice { connection: "ollama".into(), model: "bge-m3".into() };
+        assert_eq!(c.mode(), Mode::Local);
+        c.embedding = SttChoice { connection: "openai".into(), model: "text-embedding-3-small".into() };
+        assert_eq!(c.mode(), Mode::Hybrid);
+        assert_eq!(c.embedding_label(), "OpenAI · text-embedding-3-small");
+    }
+
+    #[test]
     fn notes_mode_migrates_the_old_interval() {
         let with = |interval: u32, mode: &str| Config { companion_points_interval_secs: interval, companion_notes_mode: mode.into(), ..Config::default() };
         assert_eq!(Config::default().notes_mode(), NotesMode::Live);
@@ -743,5 +846,24 @@ mod tests {
         assert_eq!(c.notes_request().unwrap().model, "claude-haiku-5-5");
         c.companion_notes_provider = "gone".into();
         assert!(c.notes_request().is_err());
+    }
+    #[test]
+    fn translation_uses_the_live_notes_model_unless_chosen() {
+        let mut c = Config { summary_provider: "deepseek".into(), summary_model: "deepseek-chat".into(), ..Config::default() };
+        c.companion_notes_provider = "claude".into();
+        c.companion_notes_model = "claude-haiku-5-5".into();
+        let r = c.translation_request().unwrap();
+        assert_eq!((r.connection.id.as_str(), r.model.as_str()), ("claude", "claude-haiku-5-5"));
+        c.translation_provider = "deepseek".into();
+        assert_eq!(c.translation_request().unwrap().connection.id, "deepseek");
+        c.translation_model = "deepseek-other".into();
+        assert_eq!(c.translation_request().unwrap().model, "deepseek-other");
+        c.translation_provider = "gone".into();
+        assert!(c.translation_request().is_err());
+
+        c.ui_language = "de".into();
+        assert_eq!(c.translation_target(), "de");
+        c.translation_language = "ar".into();
+        assert_eq!(c.translation_target(), "ar");
     }
 }

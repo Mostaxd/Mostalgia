@@ -164,6 +164,10 @@ enum Command {
         /// library and summary
         #[arg(long)]
         no_final: bool,
+        /// Translate live lines into this language ("en", "de", …) with the
+        /// AI connection set for live translation (text only, never audio)
+        #[arg(long)]
+        translate: Option<String>,
     },
     /// Turn recordings a crash, kill or power loss left unfinished into
     /// meetings (the app does this on its own when it starts)
@@ -265,6 +269,9 @@ enum Command {
         /// Output file [default: <date>-<title>.<ext> in the current directory]
         #[arg(long, short)]
         output: Option<PathBuf>,
+        /// Export only the companion's notes or only the summary
+        #[arg(long, value_parser = ["notes", "summary"])]
+        only: Option<String>,
     },
     /// Export the whole library into one .mostalgia archive (a backup, or to
     /// move it to another computer)
@@ -361,6 +368,13 @@ enum Command {
     },
     /// List capture devices (for --mic-device / --system-device)
     Devices,
+    /// Download the Whisper, voice-activity, speaker and search models
+    /// (~2.1 GB) that aren't there yet
+    DownloadModels {
+        /// Only show which models are there and where they come from
+        #[arg(long)]
+        list: bool,
+    },
     /// Transcribe a 16 kHz mono WAV file
     Transcribe {
         /// WAV file to transcribe
@@ -517,7 +531,7 @@ impl ModelArgs {
         anyhow::ensure!(
             model.exists(),
             "{}",
-            trf("Modell nicht gefunden: {} — zuerst scripts/download-model.sh ausführen oder --model angeben", &[&model.display()])
+            trf("Modell nicht gefunden: {} — zuerst mostalgia download-models ausführen oder --model angeben", &[&model.display()])
         );
         eprintln!("[mostalgia] {}", trf("Lade Modell {} …", &[&model.display()]));
         let mut engine = Engine::load(&model, &self.language())?;
@@ -545,6 +559,7 @@ fn main() -> Result<()> {
             mic_device,
             system_device,
             no_final,
+            translate,
         } => {
             let source = match (no_mic, no_system) {
                 (true, _) => SourceChoice::System,
@@ -567,7 +582,7 @@ fn main() -> Result<()> {
             if !orphans.is_empty() {
                 eprintln!("[mostalgia] {}", trf("{} unterbrochene Aufnahme(n) gefunden – `mostalgia recover` macht Besprechungen daraus", &[&orphans.len()]));
             }
-            start(&models, &summary, cfg, speakers, no_final)
+            start(&models, &summary, cfg, speakers, no_final, translate)
         }
         Command::Import { dir, models, summary } if dir.is_file() => import_media(&dir, &models, &summary),
         Command::Import { dir, models, summary } => import(&dir, &models, &summary),
@@ -585,7 +600,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Command::Notes { id, focus, style } => regenerate_notes(id, focus, style),
-        Command::Export { id, format, output } => export(id, format.as_deref(), output),
+        Command::Export { id, format, output, only } => export(id, format.as_deref(), output, only.as_deref()),
         Command::ExportLibrary { output, audio, documents, voices } => export_library(output, audio, documents, voices),
         Command::ImportLibrary { file, dry_run, no_audio, no_documents, no_voices } => {
             import_library(&file, dry_run, mostalgia_core::library::ImportOptions { audio: !no_audio, documents: !no_documents, voices: !no_voices })
@@ -610,6 +625,7 @@ fn main() -> Result<()> {
         Command::Docs { action } => docs_cmd(action.unwrap_or(DocsAction::List)),
         Command::Suggest { sources, question } => suggest(&question.join(" "), sources.as_deref()),
         Command::Devices => list_devices(),
+        Command::DownloadModels { list } => download_models(list),
         Command::Transcribe { file, models } => transcribe_file(&file, &models),
     }
 }
@@ -647,12 +663,21 @@ fn open_store() -> Result<Store> {
     Store::open(&paths::database())
 }
 
-fn start(models: &ModelArgs, sum: &SummaryArgs, cfg: RecordConfig, speakers: bool, no_final: bool) -> Result<()> {
+fn start(models: &ModelArgs, sum: &SummaryArgs, cfg: RecordConfig, speakers: bool, no_final: bool, translate: Option<String>) -> Result<()> {
     // Set up the engines first so a bad model path or a missing key fails
     // before anything is recorded.
     let (live_choice, final_choice) = (models.live_choice()?, models.final_choice()?);
     let engine = models.build_engine(&live_choice)?;
     let mut final_engine = if no_final || final_choice == live_choice { None } else { Some(models.build_engine(&final_choice)?) };
+    // Fails before recording when the translation connection isn't set up.
+    let translator = match &translate {
+        Some(target) => {
+            let req = mostalgia_core::config::Config::load().translation_request()?;
+            eprintln!("[mostalgia] {}", trf("Übersetze live in {} mit {} · {}", &[&mostalgia_core::summary::language_name(target), &req.connection.name, &req.model]));
+            Some(mostalgia_core::translate::LiveTranslator::start(req, target, Vec::new()))
+        }
+        None => None,
+    };
     let (tx, rx) = crossbeam_channel::unbounded();
     let recorder = Recorder::start(cfg, engine, tx)?;
 
@@ -686,7 +711,27 @@ fn start(models: &ModelArgs, sum: &SummaryArgs, cfg: RecordConfig, speakers: boo
             *shown = false;
         }
     };
-    for event in rx {
+    // Lines in order, so a translation can say which line it belongs to.
+    let mut line_starts: Vec<f64> = Vec::new();
+    loop {
+        let event = match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+            Ok(event) => Some(event),
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => None,
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+        };
+        for outcome in translator.as_ref().map(|t| t.poll()).unwrap_or_default() {
+            match outcome {
+                mostalgia_core::translate::Outcome::Done { id, text: Some(text) } => {
+                    clear_interim(&mut interim_shown);
+                    let ts = line_starts.get(id).map(|s| format_ts(*s)).unwrap_or_default();
+                    println!("         ↳ [{ts}] {text}");
+                }
+                mostalgia_core::translate::Outcome::Done { text: None, .. } => {}
+                mostalgia_core::translate::Outcome::Failed(e) => eprintln!("[mostalgia] {}", trf("Übersetzung fehlgeschlagen: {}", &[&e])),
+                mostalgia_core::translate::Outcome::Recovered => {}
+            }
+        }
+        let Some(event) = event else { continue };
         match event {
             Event::Interim { source, start_secs, text } => {
                 if debug && !text.is_empty() {
@@ -713,12 +758,16 @@ fn start(models: &ModelArgs, sum: &SummaryArgs, cfg: RecordConfig, speakers: boo
                     eprintln!("[timing] final  at {:6.2}s (speech from {start_secs:.2}s) {}: {text}", t0.elapsed().as_secs_f64(), source.as_str());
                 }
                 let ts = format_ts(start_secs);
+                let who = i18n::speaker(speaker.as_deref().unwrap_or(source.speaker_label()));
                 if speakers {
-                    let who = speaker.as_deref().unwrap_or(source.speaker_label());
-                    println!("[{ts}] {}: {text}", i18n::speaker(who));
+                    println!("[{ts}] {who}: {text}");
                 } else {
                     println!("[{ts}] {text}");
                 }
+                if let Some(t) = &translator {
+                    t.push(line_starts.len(), &who, &text);
+                }
+                line_starts.push(start_secs);
             }
             Event::Chunk { audio_secs, millis, .. } => {
                 eprintln!("[mostalgia] {}", trf("{} s Abschnitt in {} ms transkribiert", &[&format!("{audio_secs:.1}"), &millis]));
@@ -1116,8 +1165,9 @@ fn search(query: &str, limit: usize) -> Result<()> {
     Ok(())
 }
 
-fn export(id: i64, format: Option<&str>, output: Option<PathBuf>) -> Result<()> {
-    use mostalgia_core::export::{self, Format};
+fn export(id: i64, format: Option<&str>, output: Option<PathBuf>, only: Option<&str>) -> Result<()> {
+    use mostalgia_core::export::{self, Format, Parts};
+    let parts = only.map_or(Parts::ALL, Parts::parse);
     let m = open_store()?.get(id)?.with_context(|| trf("Keine Besprechung #{}", &[&id]))?;
     let format = match format {
         Some(f) => Format::from_extension(f).with_context(|| trf("Unbekanntes Format {} (md, txt, srt, docx)", &[&format!("{f:?}")]))?,
@@ -1127,8 +1177,8 @@ fn export(id: i64, format: Option<&str>, output: Option<PathBuf>) -> Result<()> 
             .and_then(Format::from_extension)
             .unwrap_or(Format::Markdown),
     };
-    let path = output.unwrap_or_else(|| PathBuf::from(export::suggested_name(&m, format)));
-    export::write(&m, format, &path)?;
+    let path = output.unwrap_or_else(|| PathBuf::from(export::suggested_name_of(&m, parts, format)));
+    export::write_parts(&m, parts, format, &path)?;
     println!("{}", trf("Besprechung #{} exportiert nach {}", &[&id, &path.display()]));
     Ok(())
 }
@@ -1183,25 +1233,38 @@ fn import_library(file: &Path, dry_run: bool, opts: mostalgia_core::library::Imp
 
 /// Sends a command to the running app, or launches it.
 fn control(cmd: &str, launch_args: &[&str]) -> Result<()> {
-    use std::io::{Read, Write};
-    let socket = paths::control_socket();
-    if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&socket) {
+    #[cfg(unix)]
+    if let Ok(mut stream) = std::os::unix::net::UnixStream::connect(paths::control_socket()) {
+        use std::io::{Read, Write};
         stream.write_all(format!("{cmd}\n").as_bytes())?;
         let mut reply = String::new();
         let _ = stream.read_to_string(&mut reply);
         anyhow::ensure!(reply.trim() == "ok", "mostalgia-app: {}", reply.trim());
         return Ok(());
     }
+    // Windows: a localhost port announced in the data directory.
+    #[cfg(not(unix))]
+    if let Ok(reply) = mostalgia_core::control_channel::send(&mostalgia_core::control_channel::endpoint_file(), cmd) {
+        anyhow::ensure!(reply == "ok", "mostalgia-app: {reply}");
+        return Ok(());
+    }
     // Not running: start the app (next to this binary, else from PATH).
-    let beside = std::env::current_exe()?.with_file_name("mostalgia-app");
+    let beside = std::env::current_exe()?.with_file_name(format!("mostalgia-app{}", std::env::consts::EXE_SUFFIX));
     let app = if beside.exists() { beside } else { PathBuf::from("mostalgia-app") };
-    std::process::Command::new(&app)
+    let mut command = std::process::Command::new(&app);
+    command
         .args(launch_args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .with_context(|| trf("{} konnte nicht gestartet werden", &[&app.display()]))?;
+        .stderr(std::process::Stdio::null());
+    let failed = || trf("{} konnte nicht gestartet werden", &[&app.display()]);
+    // In an AppImage our files go away when this process exits, so stay
+    // with the app until it quits.
+    if std::env::var_os("APPIMAGE").is_some() {
+        command.status().with_context(failed)?;
+    } else {
+        command.spawn().with_context(failed)?;
+    }
     Ok(())
 }
 
@@ -1216,9 +1279,7 @@ fn index_for_ask(id: i64) {
 
 fn reindex(all: bool) -> Result<()> {
     use mostalgia_core::ask;
-    if !ask::embed::available() {
-        eprintln!("[mostalgia] {}", tr("Bedeutungsmodell fehlt (scripts/download-model.sh) — nur Stichwortsuche"));
-    }
+    warn_no_embeddings();
     let t = std::time::Instant::now();
     let n = if all {
         let ids: Vec<i64> = open_store()?.list(100_000)?.into_iter().map(|m| m.id).collect();
@@ -1230,7 +1291,30 @@ fn reindex(all: bool) -> Result<()> {
         ask::index_pending()?
     };
     println!("{}", trf("{} Besprechung(en) in {} s indexiert.", &[&n, &format!("{:.2}", t.elapsed().as_secs_f64())]));
+    // Finish a switch to another embedding model (see Settings → AI).
+    if ask::reembed::pending()? {
+        println!("{}", trf("Bibliothek wird neu eingebettet ({}) …", &[&Config::load().embedding_label()]));
+        let mut shown = 0;
+        let switched = ask::reembed::run(&std::sync::atomic::AtomicBool::new(false), |done, total| {
+            if done > shown && (done == total || done >= shown + 500) {
+                eprintln!("  {done} / {total}");
+                shown = done;
+            }
+        })?;
+        if switched {
+            println!("{}", tr("Fertig: die Suche nutzt jetzt das neue Modell."));
+        }
+    }
     Ok(())
+}
+
+/// Warns when searches can't embed (only keywords then).
+fn warn_no_embeddings() {
+    if let Ok(model) = mostalgia_core::ask::reembed::active()
+        && !model.ready()
+    {
+        eprintln!("[mostalgia] {} — {}", model.not_ready_reason(), tr("nur Stichwortsuche"));
+    }
 }
 
 fn docs_cmd(action: DocsAction) -> Result<()> {
@@ -1261,9 +1345,7 @@ fn docs_cmd(action: DocsAction) -> Result<()> {
             }
         }
         DocsAction::Add { files, collection } => {
-            if !mostalgia_core::ask::embed::available() {
-                eprintln!("[mostalgia] {}", tr("Bedeutungsmodell fehlt (scripts/download-model.sh) — nur Stichwortsuche"));
-            }
+            warn_no_embeddings();
             let collection = collection.map(|n| docs::create_collection(&n)).transpose()?;
             for f in files {
                 let added = docs::add(&f);
@@ -1440,6 +1522,9 @@ fn connections_cmd(action: Option<ConnectionsAction>) -> Result<()> {
                 if [&config.live_engine, &config.final_engine].iter().any(|e| e.connection == c.id) {
                     u.push(tr("Transkription"));
                 }
+                if config.embedding.connection == c.id {
+                    u.push(tr("Suche"));
+                }
                 u.join(", ")
             };
             for c in &config.connections {
@@ -1462,6 +1547,7 @@ fn connections_cmd(action: Option<ConnectionsAction>) -> Result<()> {
             println!("\n{}: {}", tr("Modus"), config.mode().label());
             println!("{}: {}", tr("Live-Transkription"), config.engine_label(&config.live_engine));
             println!("{}: {}", tr("Feinschliff"), config.engine_label(&config.final_engine));
+            println!("{}: {}", tr("Bedeutungssuche"), config.embedding_label());
             Ok(())
         }
         ConnectionsAction::Add { preset, name, url, models, key } => {
@@ -1500,7 +1586,8 @@ fn connections_cmd(action: Option<ConnectionsAction>) -> Result<()> {
             let in_use = config.summary_provider == id
                 || config.ask_provider == id
                 || config.live_engine.connection == id
-                || config.final_engine.connection == id;
+                || config.final_engine.connection == id
+                || config.embedding.connection == id;
             anyhow::ensure!(!in_use, "{}", trf("{} ist noch in Gebrauch — erst in den Einstellungen etwas anderes wählen", &[&conn.name]));
             conn.delete_api_key()?;
             config.connections.retain(|c| c.id != id);
@@ -1523,6 +1610,40 @@ fn list_devices() -> Result<()> {
         println!();
     }
     println!("{}", tr("* = wird standardmäßig verwendet"));
+    Ok(())
+}
+
+fn download_models(list: bool) -> Result<()> {
+    use mostalgia_core::models;
+    if list {
+        for m in models::MODELS {
+            let mark = if m.present() { "✓" } else { " " };
+            println!("{mark} {:<40} {:>9}  {}", m.file, mostalgia_core::cleanup::human(m.size), m.url);
+        }
+        println!("\n{}", trf("Ordner: {}", &[&models::dir().display()]));
+        return Ok(());
+    }
+    let missing = models::missing();
+    if missing.is_empty() {
+        println!("{}", trf("Alle Modelle sind da ({}).", &[&models::dir().display()]));
+        return Ok(());
+    }
+    println!(
+        "{}",
+        trf("Lade {} Dateien ({}) nach {} …", &[&missing.len(), &mostalgia_core::cleanup::human(models::total_size(&missing)), &models::dir().display()])
+    );
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let mut shown = String::new();
+    let result = models::download(&missing, &cancel, |p| {
+        let line = format!("{:>3} %  {}", (p.fraction() * 100.0) as u32, p.file);
+        if line != shown {
+            eprint!("\r\x1b[2K{line}");
+            shown = line;
+        }
+    });
+    eprintln!();
+    result?;
+    println!("{}", tr("Fertig."));
     Ok(())
 }
 

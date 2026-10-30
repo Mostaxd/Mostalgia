@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Ask a question
+    url: https://github.com/Mostaxd/Mostalgia/discussions/categories/q-a
+    about: Help with setup, providers or anything else. Please ask in Discussions instead of opening an issue.
+  - name: Share an idea
+    url: https://github.com/Mostaxd/Mostalgia/discussions/categories/ideas
+    about: Feature ideas you'd like to talk through before they become an issue.
+  - name: Report a security vulnerability
+    url: https://github.com/Mostaxd/Mostalgia/security/advisories/new
+    about: Please report security problems privately, not as a public issue.

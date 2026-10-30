@@ -207,6 +207,21 @@ mod tests {
         Scratch { root, recordings, store }
     }
 
+    fn set_dir_modified(dir: &Path, t: std::time::SystemTime) {
+        // Windows opens a folder only with backup semantics, and needs the
+        // right to write its attributes to change the time.
+        #[cfg(windows)]
+        let f = {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_WRITE_ATTRIBUTES: u32 = 0x100;
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+            std::fs::OpenOptions::new().access_mode(FILE_WRITE_ATTRIBUTES).custom_flags(FILE_FLAG_BACKUP_SEMANTICS).open(dir).unwrap()
+        };
+        #[cfg(not(windows))]
+        let f = std::fs::File::open(dir).unwrap();
+        f.set_modified(t).unwrap();
+    }
+
     fn meeting(s: &mut Scratch, name: &str, days_ago: i64, dir: Option<PathBuf>) -> (i64, PathBuf) {
         let dir = dir.unwrap_or_else(|| s.recordings.join(name));
         std::fs::create_dir_all(&dir).unwrap();
@@ -217,7 +232,7 @@ mod tests {
         let id = s.store.insert_meeting(&NewMeeting { title: name, started_at, duration_secs: 3600.0, language: "de", dir: &dir }, &[]).unwrap();
         // The folder as old as the recording.
         let then = std::time::SystemTime::now() - std::time::Duration::from_secs(days_ago as u64 * 86_400);
-        std::fs::File::open(&dir).unwrap().set_modified(then).unwrap();
+        set_dir_modified(&dir, then);
         (id, dir)
     }
 

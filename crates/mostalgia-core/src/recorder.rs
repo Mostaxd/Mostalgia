@@ -227,7 +227,7 @@ impl Recorder {
         let sys_live = cfg.system.then(|| load(Source::System)).transpose()?;
         if !cfg.vad_model.exists() {
             let _ = events.send(Event::Warning(crate::i18n::trf(
-                "Sprachfilter-Modell {} fehlt — erkenne Sprache nur an der Lautstärke (scripts/download-model.sh)",
+                "Sprachfilter-Modell {} fehlt — erkenne Sprache nur an der Lautstärke",
                 &[&cfg.vad_model.display()],
             )));
         }

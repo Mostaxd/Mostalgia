@@ -26,6 +26,8 @@ struct Running {
     rx: Receiver<FromMori>,
     /// Finalized lines of the current session she has.
     sent_lines: usize,
+    /// Live translations passed on so far.
+    sent_translations: usize,
     session: Option<u64>,
     last_live: Option<Option<LiveKey>>,
     last_interim: Vec<(f64, String)>,
@@ -72,7 +74,7 @@ impl DesktopHost {
         if self.running.is_some() || self.problem.is_some() {
             return;
         }
-        if std::env::var_os("DISPLAY").is_none_or(|d| d.is_empty()) {
+        if cfg!(target_os = "linux") && std::env::var_os("DISPLAY").is_none_or(|d| d.is_empty()) {
             self.problem = Some(trf("{} kann nicht auf den Desktop: XWayland ist nicht verfügbar (DISPLAY ist nicht gesetzt).", &[&self.who()]));
             return;
         }
@@ -156,6 +158,7 @@ impl DesktopHost {
             if r.session != Some(l.session) {
                 r.session = Some(l.session);
                 r.sent_lines = 0;
+                r.sent_translations = 0;
                 r.last_interim.clear();
             }
             if now - r.transcript_at >= TRANSCRIPT_EVERY {
@@ -172,6 +175,11 @@ impl DesktopHost {
                     r.sent_lines = total;
                     r.last_interim = interim_key;
                 }
+                let (items, total) = recording.translations_delta(r.sent_translations);
+                if !items.is_empty() {
+                    out.push(ToMori::Translations { session: l.session, from: r.sent_translations, items });
+                    r.sent_translations = total;
+                }
             }
         }
         for msg in out {
@@ -187,7 +195,14 @@ impl Drop for DesktopHost {
 }
 
 fn spawn(arg: &str) -> anyhow::Result<Running> {
-    let exe = std::env::current_exe()?;
+    // After an update on Windows: the old program (renamed), not the new one.
+    let exe = mostalgia_core::self_update::own_exe()?;
+    // Only the app itself knows `--mori` / `--captions`: started from an
+    // example (the screenshot tool), the child would be another screenshot
+    // run, which starts her again, and so on.
+    if exe.file_name().and_then(|n| n.to_str()).and_then(|n| n.split('.').next()) != Some("mostalgia-app") {
+        anyhow::bail!("not running as mostalgia-app");
+    }
     let mut child = Command::new(exe)
         .arg(arg)
         // GPUI takes Wayland when it can; she needs X11 (XWayland).
@@ -218,6 +233,7 @@ fn spawn(arg: &str) -> anyhow::Result<Running> {
         stdin,
         rx,
         sent_lines: 0,
+        sent_translations: 0,
         session: None,
         last_live: None,
         last_interim: Vec::new(),

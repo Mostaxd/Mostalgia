@@ -4,14 +4,15 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{Datelike, Local};
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
-use gpui_kit::component::{ActiveTheme, Icon, Selectable, Sizable, StyledExt, TitleBar, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, Disableable, Icon, Selectable, Sizable, StyledExt, TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use mostalgia_core::i18n::{self, tr, trf};
-use mostalgia_core::paths;
+use mostalgia_core::{gpu_check, models, paths, self_update};
 use mostalgia_core::store::{MeetingSummary, SearchHit, Store};
 
 use crate::companion::{Companion, MoriEvent};
@@ -43,7 +44,7 @@ pub struct MostalgiaApp {
     query: String,
     hits: Vec<SearchHit>,
     error: Option<SharedString>,
-    tray: Option<ksni::blocking::Handle<control::Tray>>,
+    tray: Option<control::TrayHandle>,
     /// "Fragen" screen, kept so the conversation survives switching away.
     ask_view: Option<Entity<crate::ask_view::AskView>>,
     /// "Dokumente" screen, kept like the ask view.
@@ -66,22 +67,56 @@ pub struct MostalgiaApp {
     captions_stalled: Option<Option<u64>>,
     /// "Import recording…": the file, its title and date being edited.
     import: Option<ImportDialog>,
+    /// The offer to download missing models (first launch, or from
+    /// Settings), and the download once it runs.
+    model_offer: Option<ModelOffer>,
     /// The `audio_keep_days` the last cleanup ran with.
     cleanup_days: Option<u32>,
     delete_audio: bool,
     /// Meeting being renamed inline in the sidebar.
     rename: Option<(i64, Entity<InputState>)>,
     library_focus: FocusHandle,
+    library_scroll: ScrollHandle,
     /// Mori, drawn over the content when turned on.
     companion: Entity<Companion>,
     /// Mori on the desktop (her own process), when she's put there.
     mori_host: crate::companion::host::DesktopHost,
     /// The open meeting as last told to Mori (for her "This meeting" scope).
     mori_open_meeting: Option<Option<(i64, String)>>,
+    /// The NVIDIA card Whisper can't use, until dismissed.
+    gpu_problem: Option<GpuBanner>,
+    /// A newer AppImage release, offered until "Later".
+    update: Option<UpdateOffer>,
     _subscriptions: Vec<Subscription>,
 }
 
 actions!(library, [DeleteSelected]);
+
+struct ModelOffer {
+    missing: Vec<models::Model>,
+    /// While downloading: how far it got, and the switch that stops it.
+    running: Option<(Arc<Mutex<models::Progress>>, Arc<std::sync::atomic::AtomicBool>)>,
+    error: Option<SharedString>,
+}
+
+/// The bar offering a newer release of the AppImage.
+struct UpdateOffer {
+    update: self_update::Update,
+    /// While downloading: bytes so far, and the switch that stops it.
+    running: Option<(Arc<std::sync::atomic::AtomicU64>, Arc<std::sync::atomic::AtomicBool>)>,
+    /// Installed; takes effect on restart.
+    installed: bool,
+    error: Option<SharedString>,
+}
+
+/// The bar saying transcription can't use the NVIDIA card, and why.
+struct GpuBanner {
+    problem: gpu_check::GpuProblem,
+    /// "Fix it" is running (pkexec, then apt).
+    fixing: bool,
+    /// How "Fix it" ended: Ok means restart now.
+    fixed: Option<Result<(), SharedString>>,
+}
 
 /// The import dialog for an audio or video file.
 struct ImportDialog {
@@ -191,16 +226,26 @@ impl MostalgiaApp {
             caption_host: crate::companion::host::DesktopHost::captions(),
             captions_stalled: None,
             import: None,
+            model_offer: None,
             cleanup_days: None,
             delete_audio: true,
             rename: None,
             library_focus: cx.focus_handle(),
+            library_scroll: ScrollHandle::new(),
             companion,
             mori_host: Default::default(),
             mori_open_meeting: None,
+            update: None,
+            gpu_problem: None,
             _subscriptions: subs,
         };
         this.reload(cx);
+        this.check_gpu(cx);
+        this.check_for_update(cx);
+        // A fresh install (AppImage, installer) has no models yet.
+        if !mostalgia_core::config::Config::load().models_prompt_dismissed {
+            this.offer_models(cx);
+        }
         this.sync_mori(false);
         // Recordings a crash left unfinished become meetings now.
         this.recording.update(cx, |r, cx| r.recover_orphans(cx));
@@ -260,9 +305,15 @@ impl MostalgiaApp {
         })
         .detach();
         this.start_control(window, cx);
-        // Bring the "ask your meetings" index up to date in the background.
-        // It's cancelled and joined on quit: exiting while the embedding
-        // model is mid-run crashes in native teardown.
+        this.start_backfill(cx);
+        this
+    }
+
+    /// Brings the "ask your meetings" index up to date in the background
+    /// (at start, and again once the search model is downloaded). It's
+    /// cancelled and joined on quit: exiting while the embedding model is
+    /// mid-run crashes in native teardown.
+    fn start_backfill(&mut self, cx: &mut Context<Self>) {
         if std::env::var_os("MOSTALGIA_NO_BACKFILL").is_none() {
             let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let worker = {
@@ -275,6 +326,10 @@ impl MostalgiaApp {
                     if let Err(e) = mostalgia_core::docs::index_pending(&cancel) {
                         eprintln!("[mostalgia] documents index: {e:#}");
                     }
+                    // Finish a switch to another embedding model.
+                    if !cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                        mostalgia_core::ask::reembed::start();
+                    }
                 })
             };
             let worker = Mutex::new(Some(worker));
@@ -283,11 +338,11 @@ impl MostalgiaApp {
                 if let Some(w) = worker.lock().unwrap().take() {
                     let _ = w.join();
                 }
+                mostalgia_core::ask::reembed::stop();
                 async {}
             })
             .detach();
         }
-        this
     }
 
     #[doc(hidden)]
@@ -398,12 +453,11 @@ impl MostalgiaApp {
 
     /// The control socket (`mostalgia toggle`) and the tray icon.
     fn start_control(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use ksni::blocking::TrayMethods;
         let (tx, rx) = std::sync::mpsc::channel();
         if let Err(e) = control::listen(tx.clone()) {
             eprintln!("[mostalgia] control socket: {e}");
         }
-        match (control::Tray { tx, recording: false, mic_on: false }).spawn() {
+        match control::TrayHandle::spawn(control::Tray { tx, recording: false, mic_on: false }) {
             Ok(handle) => self.tray = Some(handle),
             Err(e) => eprintln!("[mostalgia] tray icon unavailable: {e}"),
         }
@@ -425,7 +479,7 @@ impl MostalgiaApp {
                         if state != was_recording {
                             was_recording = state;
                             if let Some(tray) = &this.tray {
-                                tray.update(|t| (t.recording, t.mic_on) = state);
+                                tray.set_state(state.0, state.1);
                             }
                         }
                     })
@@ -676,6 +730,287 @@ impl MostalgiaApp {
         )
     }
 
+    /// Asks GitHub for a newer AppImage or Windows zip (when running as one, and the
+    /// setting is on). Offline or rate-limited: nothing to show.
+    fn check_for_update(&mut self, cx: &mut Context<Self>) {
+        if !mostalgia_core::config::Config::load().check_updates || !self_update::updatable() {
+            return;
+        }
+        let task = cx.background_spawn(async move { self_update::check() });
+        cx.spawn(async move |this, cx| {
+            let found = task.await;
+            this.update(cx, |this, cx| {
+                match found {
+                    Ok(Some(update)) => this.update = Some(UpdateOffer { update, running: None, installed: false, error: None }),
+                    Ok(None) => {}
+                    Err(e) => eprintln!("[mostalgia] update check: {e:#}"),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn start_update(&mut self, cx: &mut Context<Self>) {
+        let Some(offer) = self.update.as_mut().filter(|o| o.running.is_none() && !o.installed) else { return };
+        let done = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        offer.running = Some((done.clone(), cancel.clone()));
+        offer.error = None;
+        let update = offer.update.clone();
+        let task = cx.background_spawn(async move {
+            self_update::install(&update, &cancel, |n| done.store(n, std::sync::atomic::Ordering::Relaxed))
+        });
+        // Redraw the progress while it runs.
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(std::time::Duration::from_millis(200)).await;
+                let running = this.update(cx, |this, cx| {
+                    cx.notify();
+                    this.update.as_ref().is_some_and(|o| o.running.is_some())
+                });
+                if !running.unwrap_or(false) {
+                    break;
+                }
+            }
+        })
+        .detach();
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                if let Some(offer) = this.update.as_mut() {
+                    let cancelled = offer.running.take().is_some_and(|(_, c)| c.load(std::sync::atomic::Ordering::Relaxed));
+                    match result {
+                        Ok(()) => offer.installed = true,
+                        Err(_) if cancelled => {}
+                        Err(e) => offer.error = Some(trf("Update fehlgeschlagen: {}", &[&format!("{e:#}")]).into()),
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// "Mostalgia v0.2.2 ist da" bar above the content.
+    fn render_update_bar(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let offer = self.update.as_ref()?;
+        let recording = self.recording.read(cx).is_recording();
+        let theme = cx.theme();
+        let size = mostalgia_core::cleanup::human(offer.update.size);
+        let text: SharedString = if offer.installed {
+            tr("Update installiert – nach einem Neustart läuft die neue Version.").into()
+        } else if let Some((done, _)) = &offer.running {
+            let done = done.load(std::sync::atomic::Ordering::Relaxed);
+            let pct = (done as f64 / offer.update.size.max(1) as f64 * 100.0).min(100.0) as u32;
+            trf("Lade Mostalgia {} … {} %", &[&offer.update.tag, &pct]).into()
+        } else {
+            trf("Mostalgia {} ist verfügbar.", &[&offer.update.tag]).into()
+        };
+        let mut bar = h_flex()
+            .px_4()
+            .py_2()
+            .gap_3()
+            .bg(theme.primary.opacity(0.12))
+            .border_b_1()
+            .border_color(theme.border)
+            .child(Icon::new(IconName::Download).small().text_color(theme.primary))
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .text_sm()
+                    .child(text)
+                    .when_some(offer.error.clone(), |el, e| el.child(div().text_xs().text_color(theme.danger).child(e))),
+            );
+        if offer.installed {
+            bar = bar.child(
+                Button::new("update-restart")
+                    .small()
+                    .primary()
+                    .label(tr("Jetzt neu starten"))
+                    .disabled(recording)
+                    .when(recording, |b| b.tooltip(tr("Erst die Aufnahme beenden")))
+                    .on_click(cx.listener(|this, _, _, cx| match self_update::restart() {
+                        Ok(()) => cx.quit(),
+                        Err(e) => {
+                            if let Some(offer) = this.update.as_mut() {
+                                offer.error = Some(format!("{e:#}").into());
+                            }
+                            cx.notify();
+                        }
+                    })),
+            );
+        } else if let Some((_, cancel)) = &offer.running {
+            let cancel = cancel.clone();
+            bar = bar.child(
+                Button::new("update-cancel")
+                    .small()
+                    .ghost()
+                    .label(tr("Abbrechen"))
+                    .on_click(move |_, _, _| cancel.store(true, std::sync::atomic::Ordering::Relaxed)),
+            );
+        } else {
+            bar = bar.child(
+                Button::new("update-start")
+                    .small()
+                    .primary()
+                    .label(trf("Aktualisieren ({})", &[&size]))
+                    .on_click(cx.listener(|this, _, _, cx| this.start_update(cx))),
+            );
+        }
+        if offer.running.is_none() {
+            bar = bar.child(Button::new("update-later").small().ghost().label(tr("Später")).on_click(cx.listener(|this, _, _, cx| {
+                this.update = None;
+                cx.notify();
+            })));
+        }
+        Some(bar.into_any_element())
+    }
+
+    /// Looks for an NVIDIA card the GPU backend can't see (off the UI thread:
+    /// it probes Vulkan).
+    fn check_gpu(&mut self, cx: &mut Context<Self>) {
+        let task = cx.background_spawn(async move { gpu_check::check() });
+        cx.spawn(async move |this, cx| {
+            let problem = task.await;
+            this.update(cx, |this, cx| {
+                this.gpu_problem = problem.map(|problem| GpuBanner { problem, fixing: false, fixed: None });
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// "Fix it": runs the fix through pkexec (it asks for the password).
+    fn fix_gpu(&mut self, cx: &mut Context<Self>) {
+        let Some(banner) = self.gpu_problem.as_mut().filter(|b| !b.fixing) else { return };
+        let Some(fix) = banner.problem.fix.clone() else { return };
+        banner.fixing = true;
+        banner.fixed = None;
+        let task = cx.background_spawn(async move { fix.run() });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                if let Some(banner) = this.gpu_problem.as_mut() {
+                    banner.fixing = false;
+                    banner.fixed = Some(result.map_err(|e| format!("{e:#}").into()));
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Bar above the content when transcription can't use the NVIDIA card.
+    fn render_gpu_banner(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let banner = self.gpu_problem.as_ref()?;
+        let theme = cx.theme();
+        let why: SharedString = match &banner.problem.cause {
+            gpu_check::Cause::ModuleMissing { kernel } => trf(
+                "Der NVIDIA-Treiber fehlt für den laufenden Kernel {} – meist nach einem Kernel-Update. Whisper läuft deshalb langsam ohne Grafikkarte.",
+                &[kernel],
+            )
+            .into(),
+            gpu_check::Cause::RestartNeeded => {
+                tr("Der NVIDIA-Treiber ist installiert, aber noch nicht geladen. Starte den Computer neu, damit Whisper die Grafikkarte nutzt.").into()
+            }
+            gpu_check::Cause::Nouveau => {
+                tr("Die NVIDIA-Karte läuft mit dem freien nouveau-Treiber, den Whisper nicht nutzen kann. Installiere den NVIDIA-Treiber.").into()
+            }
+            gpu_check::Cause::VulkanMissing if cfg!(windows) => tr(
+                "Der NVIDIA-Treiber läuft, aber Vulkan findet die Karte nicht. Installiere den aktuellen Treiber von nvidia.com/drivers neu.",
+            )
+            .into(),
+            gpu_check::Cause::VulkanMissing => {
+                tr("Der NVIDIA-Treiber läuft, aber Vulkan findet die Karte nicht – der Vulkan-Teil des Treibers fehlt vermutlich.").into()
+            }
+            gpu_check::Cause::VulkanRuntimeMissing => tr(
+                "Windows fehlt die Vulkan-Laufzeit (vulkan-1.dll), die der Grafiktreiber mitbringt. Installiere den aktuellen Treiber von nvidia.com/drivers.",
+            )
+            .into(),
+            gpu_check::Cause::DriverTooOld { version } => trf(
+                "Der NVIDIA-Treiber {} ist zu alt für Whisper auf der Grafikkarte. Installiere den aktuellen Treiber von nvidia.com/drivers.",
+                &[version],
+            )
+            .into(),
+        };
+        let command = banner.problem.fix.as_ref().map(|f| f.shell());
+        let can_run = banner.problem.fix.is_some() && gpu_check::Fix::can_run();
+        let status: Option<(SharedString, Hsla)> = match &banner.fixed {
+            Some(Ok(())) => Some((tr("Treiber installiert. Starte den Computer neu, damit er geladen wird.").into(), theme.success)),
+            Some(Err(e)) => Some((trf("Hat nicht geklappt: {}", &[e]).into(), theme.danger)),
+            None => None,
+        };
+        let done = matches!(banner.fixed, Some(Ok(())));
+        let fixing = banner.fixing;
+        Some(
+            h_flex()
+                .px_4()
+                .py_2()
+                .gap_3()
+                .items_start()
+                .bg(theme.warning.opacity(0.12))
+                .border_b_1()
+                .border_color(theme.border)
+                .child(Icon::new(IconName::TriangleAlert).small().mt_0p5().text_color(theme.warning))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap_1()
+                        .text_sm()
+                        .child(div().font_semibold().child(tr("Transkription nutzt die NVIDIA-Grafikkarte nicht")))
+                        .child(div().text_color(theme.muted_foreground).child(why))
+                        .when_some(command.clone().filter(|_| !done), |el, command| {
+                            el.child(
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded(theme.radius)
+                                    .bg(theme.muted)
+                                    .font_family(theme.mono_font_family.clone())
+                                    .text_xs()
+                                    .child(command),
+                            )
+                        })
+                        .when_some(status, |el, (text, color)| el.child(div().text_color(color).child(text))),
+                )
+                .when_some(command.filter(|_| !done), |el, command| {
+                    el.child(
+                        Button::new("gpu-copy")
+                            .small()
+                            .ghost()
+                            .icon(IconName::Copy)
+                            .label(tr("Befehl kopieren"))
+                            .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(command.clone()))),
+                    )
+                })
+                .when(can_run && !done, |el| {
+                    el.child(
+                        Button::new("gpu-fix")
+                            .small()
+                            .primary()
+                            .loading(fixing)
+                            .disabled(fixing)
+                            .label(if fixing { tr("Installiere…") } else { tr("Beheben") })
+                            .on_click(cx.listener(|this, _, _, cx| this.fix_gpu(cx))),
+                    )
+                })
+                .child(Button::new("gpu-dismiss").small().ghost().icon(IconName::X).disabled(fixing).on_click(cx.listener(|this, _, _, cx| {
+                    this.gpu_problem = None;
+                    cx.notify();
+                })))
+                .into_any_element(),
+        )
+    }
+
     /// Switches to the recording screen and starts recording.
     pub fn start_recording(&mut self, cx: &mut Context<Self>) {
         self.screen = Screen::Recording;
@@ -747,6 +1082,11 @@ impl MostalgiaApp {
                 this.delete_audio = true;
                 cx.notify();
             }
+            MeetingEvent::DocumentsChanged => {
+                if let Some(docs) = &this.documents_view {
+                    docs.update(cx, |d, cx| d.reload(cx));
+                }
+            }
         });
         self._subscriptions.push(sub);
         self.screen = Screen::Meeting(view);
@@ -791,6 +1131,10 @@ impl MostalgiaApp {
         let sub = cx.subscribe_in(&view, window, |this, _, event: &SettingsEvent, window, cx| {
             if let SettingsEvent::BuildDecisions = event {
                 this.open_decisions(true, window, cx);
+                return;
+            }
+            if let SettingsEvent::DownloadModels = event {
+                this.offer_models(cx);
                 return;
             }
             if this.cleanup_days != Some(mostalgia_core::config::Config::load().audio_keep_days) {
@@ -1218,6 +1562,200 @@ impl MostalgiaApp {
         )
     }
 
+    /// Asks to download the models that are missing (nothing when none are).
+    pub fn offer_models(&mut self, cx: &mut Context<Self>) {
+        if self.model_offer.as_ref().is_some_and(|o| o.running.is_some()) {
+            return;
+        }
+        let missing = models::missing();
+        self.model_offer = (!missing.is_empty()).then_some(ModelOffer { missing, running: None, error: None });
+        cx.notify();
+    }
+
+    fn start_model_download(&mut self, cx: &mut Context<Self>) {
+        let Some(offer) = self.model_offer.as_mut() else { return };
+        if offer.running.is_some() {
+            return;
+        }
+        let list = offer.missing.clone();
+        let progress = Arc::new(Mutex::new(models::Progress { total: models::total_size(&list), ..Default::default() }));
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        offer.running = Some((progress.clone(), cancel.clone()));
+        offer.error = None;
+        let result: Arc<Mutex<Option<Result<(), String>>>> = Arc::default();
+        {
+            let (result, cancel) = (result.clone(), cancel.clone());
+            std::thread::spawn(move || {
+                let r = models::download(&list, &cancel, |p| *progress.lock().unwrap() = p.clone());
+                *result.lock().unwrap() = Some(r.map_err(|e| format!("{e:#}")));
+            });
+        }
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(std::time::Duration::from_millis(150)).await;
+                let done = result.lock().unwrap().take();
+                let finished = done.is_some();
+                let alive = this
+                    .update(cx, |this, cx| {
+                        match done {
+                            None => {}
+                            Some(Ok(())) => {
+                                this.model_offer = None;
+                                this.start_backfill(cx);
+                                this.recording.update(cx, |r, cx| r.reload_config(cx));
+                                if let Some(s) = this.settings_view() {
+                                    s.update(cx, |_, cx| cx.notify());
+                                }
+                            }
+                            Some(Err(e)) => {
+                                if let Some(offer) = this.model_offer.as_mut() {
+                                    // Cancelled: back to the question; the
+                                    // download resumes from where it stopped.
+                                    let cancelled = offer.running.take().is_some_and(|(_, c)| c.load(std::sync::atomic::Ordering::Relaxed));
+                                    offer.error = (!cancelled).then(|| e.into());
+                                    offer.missing = models::missing();
+                                }
+                            }
+                        }
+                        cx.notify();
+                    })
+                    .is_ok();
+                if finished || !alive {
+                    break;
+                }
+            }
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// The model download: what's missing and how big, then a progress bar.
+    fn render_models_dialog(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let offer = self.model_offer.as_ref()?;
+        let theme = cx.theme().clone();
+        let human = mostalgia_core::cleanup::human;
+        let groups: Vec<(models::Purpose, &str)> = vec![
+            (models::Purpose::Transcription, "Whisper large-v3-turbo und Silero VAD – Transkription"),
+            (models::Purpose::Speakers, "pyannote und WeSpeaker – Sprechertrennung"),
+            (models::Purpose::Search, "multilingual-e5-small – Suche für „Fragen“"),
+        ];
+        let rows = groups.into_iter().filter_map(|(purpose, label)| {
+            let size: u64 = offer.missing.iter().filter(|m| m.purpose == purpose).map(|m| m.size).sum();
+            (size > 0).then(|| {
+                h_flex()
+                    .gap_2()
+                    .text_sm()
+                    .child(div().flex_1().min_w_0().child(tr(label)))
+                    .child(div().flex_none().text_color(theme.muted_foreground).child(human(size)))
+            })
+        });
+        let body = match &offer.running {
+            Some((progress, _)) => {
+                let p = progress.lock().unwrap().clone();
+                v_flex()
+                    .gap_2()
+                    .child(ui::progress_bar(Some(p.fraction()), cx))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(div().flex_1().min_w_0().truncate().child(p.file.clone()))
+                            .child(div().flex_none().child(trf("{} von {} geladen", &[&human(p.done), &human(p.total)]))),
+                    )
+                    .into_any_element()
+            }
+            None => v_flex()
+                .gap_2()
+                .children(rows)
+                .child(div().text_xs().text_color(theme.muted_foreground).child(tr(
+                    "Du transkribierst nur mit einem Cloud-Dienst? Dann geht es auch ohne; die Modelle lassen sich später unter Einstellungen → System laden.",
+                )))
+                .into_any_element(),
+        };
+        let running = offer.running.is_some();
+        let error = offer.error.clone();
+        let failed = error.is_some();
+        Some(
+            div()
+                .id("models-overlay")
+                .absolute()
+                .inset_0()
+                .bg(gpui_kit::black().opacity(0.45))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    v_flex()
+                        .id("models-dialog")
+                        .w(px(480. * ui::ui_scale()))
+                        .max_w(relative(0.9))
+                        .p_5()
+                        .gap_3()
+                        .rounded(theme.radius_lg)
+                        .border(ui::border_width(cx))
+                        .border_color(theme.border)
+                        .bg(theme.background)
+                        .shadow_lg()
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .items_start()
+                                .child(Icon::new(IconName::Download).flex_none().mt_1().text_color(theme.primary))
+                                .child(div().flex_1().min_w_0().text_lg().font_semibold().child(tr("Modelle herunterladen"))),
+                        )
+                        .child(div().text_sm().text_color(theme.muted_foreground).child(trf(
+                            "Mostalgia transkribiert auf deinem Rechner. Dafür lädt es einmalig diese Modelle ({}):",
+                            &[&human(models::total_size(&offer.missing))],
+                        )))
+                        .child(body)
+                        .children(error.map(|e| {
+                            h_flex()
+                                .gap_2()
+                                .items_start()
+                                .text_sm()
+                                .child(Icon::new(IconName::TriangleAlert).small().flex_none().mt_0p5().text_color(theme.warning))
+                                .child(div().flex_1().min_w_0().child(e))
+                        }))
+                        .child(
+                            h_flex()
+                                .justify_end()
+                                .gap_2()
+                                .when(running, |el| {
+                                    el.child(Button::new("models-cancel").ghost().label(tr("Abbrechen")).on_click(cx.listener(|this, _, _, cx| {
+                                        if let Some((_, cancel)) = this.model_offer.as_ref().and_then(|o| o.running.as_ref()) {
+                                            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                                        }
+                                        cx.notify();
+                                    })))
+                                })
+                                .when(!running, |el| {
+                                    el.child(Button::new("models-later").ghost().label(tr("Nicht jetzt")).on_click(cx.listener(|this, _, _, cx| {
+                                        this.model_offer = None;
+                                        let mut config = mostalgia_core::config::Config::load();
+                                        if !config.models_prompt_dismissed {
+                                            config.models_prompt_dismissed = true;
+                                            if let Err(e) = config.save() {
+                                                this.error = Some(format!("{e:#}").into());
+                                            }
+                                        }
+                                        cx.notify();
+                                    })))
+                                    .child(
+                                        Button::new("models-download")
+                                            .primary()
+                                            .icon(IconName::Download)
+                                            .label(if failed { tr("Erneut versuchen") } else { tr("Herunterladen") })
+                                            .on_click(cx.listener(|this, _, _, cx| this.start_model_download(cx))),
+                                    )
+                                }),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     /// The first cleanup: what it would delete, and a yes or no.
     fn render_cleanup_dialog(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let plan = self.confirm_cleanup.clone()?;
@@ -1625,7 +2163,7 @@ impl MostalgiaApp {
                             .when(matches!(self.screen, Screen::Ask(_)), |b| b.selected(true))
                             .icon(IconName::Sparkles)
                             .label(tr("Fragen"))
-                            .tooltip(tr("Frag deine Besprechungen (Strg+K)"))
+                            .tooltip(if cfg!(target_os = "macos") { tr("Frag deine Besprechungen (⌘K)") } else { tr("Frag deine Besprechungen (Strg+K)") })
                             .on_click(cx.listener(|this, _, window, cx| this.open_ask(window, cx))),
                     )
                     .child(
@@ -1660,18 +2198,24 @@ impl MostalgiaApp {
                     ),
             )
             .child(
-                div().flex_1().min_h_0().child(
-                    v_flex()
-                        .id("library")
-                        .key_context("Library")
-                        .track_focus(&self.library_focus)
-                        .on_action(cx.listener(Self::delete_selected))
-                        .size_full()
-                        .px_2()
-                        .pb_2()
-                        .overflow_y_scroll()
-                        .children(items),
-                ),
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .child(
+                        v_flex()
+                            .id("library")
+                            .key_context("Library")
+                            .track_focus(&self.library_focus)
+                            .on_action(cx.listener(Self::delete_selected))
+                            .size_full()
+                            .px_2()
+                            .pb_2()
+                            .track_scroll(&self.library_scroll)
+                            .overflow_y_scroll()
+                            .children(items),
+                    )
+                    .vertical_scrollbar(&self.library_scroll),
             )
             .when_some(self.error.clone(), |el, e| el.child(div().p_3().text_xs().text_color(theme.danger).child(e)))
             .when_some(self.mori_host.problem.clone(), |el, e| el.child(div().p_3().text_xs().text_color(theme.warning).child(e)))
@@ -1700,6 +2244,8 @@ impl Render for MostalgiaApp {
         self.tell_mori_open_meeting(cx);
         let sidebar = self.render_sidebar(cx);
         let call_prompt = self.render_call_prompt(cx);
+        let gpu_banner = self.render_gpu_banner(cx);
+        let update_bar = self.render_update_bar(cx);
         let content: AnyView = match &self.screen {
             Screen::Recording => self.recording.clone().into(),
             Screen::Meeting(v) => v.clone().into(),
@@ -1712,6 +2258,7 @@ impl Render for MostalgiaApp {
         let delete_dialog = self.render_delete_dialog(cx);
         let cleanup_dialog = self.render_cleanup_dialog(cx);
         let import_dialog = self.render_import_dialog(cx);
+        let models_dialog = self.render_models_dialog(cx);
         let theme = cx.theme();
         v_flex()
             .size_full()
@@ -1733,11 +2280,14 @@ impl Render for MostalgiaApp {
                         .child("Mostalgia"),
                 ),
             )
+            .children(gpu_banner)
+            .children(update_bar)
             .children(call_prompt)
             .child(h_flex().flex_1().min_h_0().child(sidebar).child(div().flex_1().min_w_0().h_full().child(content)))
             .child(self.companion.clone())
             .children(delete_dialog)
             .children(cleanup_dialog)
             .children(import_dialog)
+            .children(models_dialog)
     }
 }

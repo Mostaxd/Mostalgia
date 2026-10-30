@@ -20,19 +20,27 @@ pub struct NewPassage {
     pub text: String,
 }
 
-/// What changes in a meeting that the index depends on.
+/// What changes in a meeting that the index depends on: a hash of exactly
+/// the passages it would write, so any edit counts, also one that keeps
+/// the length ("Anna" renamed to "Lena", a word corrected in place).
 fn fingerprint(m: &Meeting) -> String {
-    let words: usize = m.segments.iter().map(|s| s.text.len()).sum();
-    let speakers: String = m.segments.iter().filter_map(|s| s.speaker.as_deref()).collect::<Vec<_>>().join(",");
-    format!(
-        "v1|{}|{}|{}|{}|{}|{}",
-        m.title,
-        m.segments.len(),
-        words,
-        speakers.len(),
-        m.summary.as_ref().map_or(0, |s| s.created_at.timestamp()),
-        m.notes.iter().map(|n| n.text.len() + n.pinned as usize).sum::<usize>() + m.notes.len()
-    )
+    // FNV-1a: stable across Rust versions, unlike `DefaultHasher`.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut feed = |bytes: &[u8]| {
+        for b in bytes {
+            hash ^= *b as u64;
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    let passages = build_passages(m);
+    for p in &passages {
+        feed(p.kind.as_bytes());
+        feed(&p.start_secs.to_le_bytes());
+        feed(&p.end_secs.to_le_bytes());
+        feed(p.text.as_bytes());
+        feed(&[0]);
+    }
+    format!("v2|{}|{hash:016x}", passages.len())
 }
 
 fn header(m: &Meeting) -> String {
@@ -121,9 +129,15 @@ pub fn index_meeting(store: &mut Store, meeting_id: i64) -> Result<usize> {
         return Ok(0);
     };
     let passages = build_passages(&m);
-    let texts: Vec<String> = passages.iter().map(|p| format!("passage: {}", p.text)).collect();
+    let texts: Vec<String> = passages.iter().map(|p| p.text.clone()).collect();
     let t = std::time::Instant::now();
-    let vectors = embed::embed(&texts)?;
+    // The active model, so the vectors match the rest of the index (a
+    // switch in progress embeds these again, see `reembed`). Without
+    // vectors the passages are still found by keywords.
+    let vectors = super::reembed::active_model(store.conn())?.passages(&texts).unwrap_or_else(|e| {
+        eprintln!("[mostalgia] meeting {meeting_id}: {e:#}");
+        None
+    });
     if std::env::var_os("MOSTALGIA_TIMING").is_some() {
         let chars: usize = texts.iter().map(|t| t.len()).sum();
         eprintln!("[timing] meeting {meeting_id}: {} passages ({chars} chars) embedded in {} ms", texts.len(), t.elapsed().as_millis());
@@ -140,7 +154,7 @@ pub fn index_meeting(store: &mut Store, meeting_id: i64) -> Result<usize> {
             stmt.execute(params![meeting_id, p.kind, p.start_secs, p.end_secs, p.text, blob])?;
         }
     }
-    // Without the model the fingerprint stays unset so a later run adds vectors.
+    // Without vectors the fingerprint stays unset so a later run adds them.
     if vectors.is_some() {
         tx.execute(
             "INSERT INTO index_state (meeting_id, fingerprint) VALUES (?1, ?2)
@@ -176,4 +190,45 @@ pub fn index_pending(store: &mut Store, cancel: &std::sync::atomic::AtomicBool) 
         }
     }
     Ok(done)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::finalize::FinalSegment;
+    use crate::store::NewMeeting;
+
+    #[test]
+    fn fingerprint_notices_same_length_edits() -> Result<()> {
+        let dir = std::env::temp_dir().join(format!("mostalgia-index-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)?;
+        let mut store = Store::open(&dir.join("test.db"))?;
+        let seg = |start: f64, text: &str| FinalSegment {
+            source: crate::Source::System,
+            start_secs: start,
+            end_secs: start + 2.0,
+            text: text.into(),
+            speaker: Some("Anna".into()),
+        };
+        let id = store.insert_meeting(
+            &NewMeeting { title: "Sync", started_at: chrono::Local::now(), duration_secs: 60.0, language: "de", dir: &dir.join("m1") },
+            &[seg(1.0, "Das Budget steht."), seg(4.0, "Gut.")],
+        )?;
+        let fp = |store: &Store| fingerprint(&store.get(id).unwrap().unwrap());
+        let before = fp(&store);
+        assert_eq!(fp(&store), before);
+
+        // Same length as "Anna".
+        store.rename_speaker(id, "Anna", "Lena")?;
+        let renamed = fp(&store);
+        assert_ne!(renamed, before);
+
+        // A word corrected in place, same length.
+        let seg_id = store.get(id)?.unwrap().segments[0].id;
+        store.update_segment_text(seg_id, "Das Budget sitzt.")?;
+        assert_ne!(fp(&store), renamed);
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
 }

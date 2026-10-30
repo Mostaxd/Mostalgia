@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Full debug info for whisper.cpp, candle and GPUI fills the runner's disk
+  # while linking; tests also run faster (some time themselves) with -O1.
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_DEV_OPT_LEVEL: 1
+
+jobs:
+  # Pushes that only touch the website or docs skip the Rust builds. The
+  # linux and windows jobs then report "skipped", which counts as passed for
+  # the required checks on main.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - uses: actions/checkout@v4
+      # On a branch, compares against where it left main; on main, against
+      # the previous commit.
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          predicate-quantifier: every
+          filters: |
+            rust:
+              - '**'
+              - '!site/**'
+              - '!docs/**'
+              - '!**/*.md'
+              - '!LICENSE-*'
+              - '!NOTICE'
+              - '!.github/ISSUE_TEMPLATE/**'
+              - '!.github/workflows/pages.yml'
+              - '!.github/workflows/release.yml'
+
+  linux:
+    needs: changes
+    # Runs if the filter failed too, so a broken filter never passes a check.
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake clang pkg-config libpulse-dev \
+            libvulkan-dev glslc libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev \
+            libxcb1-dev libfontconfig-dev libfreetype-dev libasound2-dev libzstd-dev
+      # sherpa-onnx's libraries are downloaded by its build script into the
+      # user cache; cache them with target/, or a restored build links to nothing.
+      # Only main saves: every branch writing its own ~1 GB cache per job
+      # pushes main's out of the repository's 10 GB, and builds start cold.
+      # Branches restore main's cache.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: sherpa
+          cache-directories: ~/.cache/sherpa-rs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Errors and failed tests also become annotations (see the script).
+      - run: bash scripts/ci-cargo.sh cargo build --workspace --all-targets
+        shell: bash
+      - run: bash scripts/ci-cargo.sh cargo test --workspace --no-fail-fast
+        shell: bash
+
+  windows:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: sherpa
+          cache-directories: ~/AppData/Local/sherpa-rs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # CMake and LLVM (for whisper.cpp and its bindings) come with the runner.
+      # Errors and failed tests also become annotations (see the script).
+      - run: bash scripts/ci-cargo.sh cargo build --workspace --all-targets
+        shell: bash
+      - run: bash scripts/ci-cargo.sh cargo test --workspace --no-fail-fast
+        shell: bash
+
+  macos:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
+    # Apple Silicon; whisper.cpp runs on Metal.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: sherpa
+          cache-directories: ~/Library/Caches/sherpa-rs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Errors and failed tests also become annotations (see the script).
+      - run: scripts/ci-cargo.sh cargo build --workspace --all-targets --features mostalgia-core/metal
+        shell: bash
+      - run: scripts/ci-cargo.sh cargo test --workspace --no-fail-fast --features mostalgia-core/metal
+        shell: bash

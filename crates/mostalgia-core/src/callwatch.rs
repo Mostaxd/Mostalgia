@@ -1,21 +1,35 @@
-//! Noticing calls: polls PipeWire (through its PulseAudio interface) for
-//! apps recording from a microphone, and reports when a call app starts and
-//! — after a grace period, so a brief stream restart doesn't count — stops.
+//! Noticing calls: polls for apps recording from a microphone — PipeWire
+//! (through its PulseAudio interface) on Linux, the privacy "consent store"
+//! in the registry on Windows, Core Audio on macOS (see `callwatch_macos.rs`)
+//! — and reports when a call app starts and — after a grace period, so a
+//! brief stream restart doesn't count — stops.
 
+#[cfg(target_os = "linux")]
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+#[cfg(target_os = "linux")]
+use std::collections::HashSet;
+#[cfg(target_os = "linux")]
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context as _, Result};
+#[cfg(target_os = "linux")]
+use anyhow::Context as _;
+#[cfg(not(target_os = "macos"))]
+use anyhow::Result;
 use crossbeam_channel::Sender;
+#[cfg(target_os = "linux")]
 use libpulse_binding::callbacks::ListResult;
+#[cfg(target_os = "linux")]
 use libpulse_binding::context::{Context as PaContext, FlagSet, State};
+#[cfg(target_os = "linux")]
 use libpulse_binding::mainloop::standard::{IterateResult, Mainloop};
+#[cfg(target_os = "linux")]
 use libpulse_binding::operation::{Operation, State as OpState};
+#[cfg(target_os = "linux")]
 use libpulse_binding::proplist::properties;
 
 /// How often the stream list is checked.
@@ -51,9 +65,11 @@ const CALL_APPS: &[(&str, &[&str])] = &[
     ("Element", &["element"]),
     ("Jitsi", &["jitsi"]),
     ("Skype", &["skype"]),
-    ("Webex", &["webex", "ciscowebex"]),
+    ("Webex", &["webex", "ciscowebex", "ciscocollabhost", "atmgr"]),
     ("Telegram", &["telegram"]),
     ("WhatsApp", &["whatsapp"]),
+    // macOS (FaceTime's audio runs in `avconferenced`).
+    ("FaceTime", &["facetime", "avconferenced"]),
 ];
 
 /// Browsers: any microphone capture there is WebRTC (Meet, Teams web, Jitsi…).
@@ -65,6 +81,8 @@ const BROWSERS: &[(&str, &[&str])] = &[
     ("Vivaldi", &["vivaldi"]),
     ("Opera", &["opera"]),
     ("Firefox", &["firefox"]),
+    // macOS: Safari's media runs in WebKit's GPU process.
+    ("Safari", &["safari", "com.apple.webkit"]),
 ];
 
 /// The call app behind a recording stream, if it is one ("Zoom",
@@ -89,12 +107,14 @@ pub fn classify(s: &CaptureStream) -> Option<String> {
 }
 
 /// A Pulse connection kept open for polling.
-struct Pulse {
+#[cfg(target_os = "linux")]
+struct Probe {
     ml: Mainloop,
     ctx: PaContext,
 }
 
-impl Pulse {
+#[cfg(target_os = "linux")]
+impl Probe {
     fn connect() -> Result<Self> {
         let mut ml = Mainloop::new().context("creating Pulse mainloop")?;
         let mut ctx = PaContext::new(&ml, "mostalgia-callwatch").context("creating Pulse context")?;
@@ -159,18 +179,118 @@ impl Pulse {
     }
 }
 
+/// One app's entry in Windows' microphone consent store
+/// (`HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone`).
+#[derive(Clone, Debug)]
+pub struct ConsentEntry {
+    /// The key's name: a package family name ("MSTeams_8wekyb3d8bbwe") for
+    /// a packaged app, or the executable's path with `#` for `\`
+    /// ("C:#Users#me#AppData#Local#Discord#app-1.0.9#Discord.exe") under
+    /// `NonPackaged`.
+    pub key: String,
+    pub packaged: bool,
+    /// FILETIMEs of the last use; a start with no stop means in use now.
+    pub last_start: u64,
+    pub last_stop: u64,
+}
+
+/// The apps using a microphone right now, as capture streams.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn consent_streams(entries: &[ConsentEntry]) -> Vec<CaptureStream> {
+    entries
+        .iter()
+        .filter(|e| e.last_start != 0 && e.last_stop == 0)
+        .map(|e| {
+            let (app_name, binary) = if e.packaged {
+                // "Microsoft.SkypeApp_kzf8qxf38zg5c" → "Microsoft.SkypeApp".
+                let name = e.key.rsplit_once('_').map_or(e.key.as_str(), |(n, _)| n);
+                (name.to_string(), e.key.clone())
+            } else {
+                let path = e.key.replace('#', "\\");
+                let file = path.rsplit('\\').next().unwrap_or(&path).to_string();
+                let stem = file.strip_suffix(".exe").or_else(|| file.strip_suffix(".EXE")).unwrap_or(&file).to_string();
+                (stem, file)
+            };
+            CaptureStream { app_name, binary, media_name: String::new(), from_monitor: false }
+        })
+        .collect()
+}
+
+/// Reads the microphone consent store (packaged apps and `NonPackaged`).
+#[cfg(windows)]
+fn read_consent_store() -> Result<Vec<ConsentEntry>> {
+    use winreg::RegKey;
+    use winreg::enums::HKEY_CURRENT_USER;
+    const STORE: &str = r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone";
+    let root = RegKey::predef(HKEY_CURRENT_USER).open_subkey(STORE)?;
+    let entry = |parent: &RegKey, key: String, packaged: bool| -> Option<ConsentEntry> {
+        let k = parent.open_subkey(&key).ok()?;
+        let last_start: u64 = k.get_value("LastUsedTimeStart").ok()?;
+        let last_stop: u64 = k.get_value("LastUsedTimeStop").unwrap_or(0);
+        Some(ConsentEntry { key, packaged, last_start, last_stop })
+    };
+    let mut out = Vec::new();
+    for name in root.enum_keys().flatten() {
+        if name == "NonPackaged" {
+            let Ok(np) = root.open_subkey(&name) else { continue };
+            out.extend(np.enum_keys().flatten().filter_map(|k| entry(&np, k, false)));
+        } else {
+            out.extend(entry(&root, name, true));
+        }
+    }
+    Ok(out)
+}
+
+/// Windows keeps who uses the microphone in the registry; nothing to
+/// connect to.
+#[cfg(windows)]
+struct Probe;
+
+#[cfg(windows)]
+impl Probe {
+    fn connect() -> Result<Self> {
+        Ok(Self)
+    }
+
+    fn capture_streams(&mut self) -> Result<Vec<CaptureStream>> {
+        Ok(consent_streams(&read_consent_store()?))
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[path = "callwatch_macos.rs"]
+mod macos;
+#[cfg(target_os = "macos")]
+use macos::Watcher as Probe;
+
+/// No call detection here yet: connecting always fails, so the watcher
+/// just keeps waiting.
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+struct Probe;
+
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+impl Probe {
+    fn connect() -> Result<Self> {
+        anyhow::bail!("call detection is not available on this system yet")
+    }
+
+    fn capture_streams(&mut self) -> Result<Vec<CaptureStream>> {
+        Ok(Vec::new())
+    }
+}
+
 /// Watches for calls on a background thread until `stop` is set. Each app
 /// gets one `Started` when its mic stream appears and one `Ended` once the
 /// stream has been gone for [`END_GRACE`].
 pub fn spawn(tx: Sender<CallEvent>, stop: Arc<AtomicBool>) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let mut active: HashMap<String, Instant> = HashMap::new();
-        let mut pulse: Option<Pulse> = None;
+        let mut pulse: Option<Probe> = None;
         while !stop.load(Ordering::SeqCst) {
             if pulse.is_none() {
-                pulse = Pulse::connect().ok();
+                pulse = Probe::connect().ok();
             }
-            let streams = match pulse.as_mut().map(Pulse::capture_streams) {
+            let streams = match pulse.as_mut().map(Probe::capture_streams) {
                 Some(Ok(s)) => s,
                 _ => {
                     // Reconnect next time (e.g. after PipeWire restarted).
@@ -226,5 +346,35 @@ mod tests {
         assert_eq!(classify(&stream("mostalgia", "mostalgia-app", false)), None);
         assert_eq!(classify(&stream("zoom", "zoom", true)), None);
         assert_eq!(classify(&stream("Audacity", "audacity", false)), None);
+    }
+
+    fn entry(key: &str, packaged: bool, start: u64, stop: u64) -> ConsentEntry {
+        ConsentEntry { key: key.into(), packaged, last_start: start, last_stop: stop }
+    }
+
+    /// Windows' consent store: only entries in use now (started, not
+    /// stopped) count, and both packaged and plain apps are recognized.
+    #[test]
+    fn consent_store_entries_in_use_become_calls() {
+        let entries = [
+            entry("C:#Users#me#AppData#Local#Discord#app-1.0.9#Discord.exe", false, 133_000, 0),
+            entry("C:#Program Files#Zoom#bin#Zoom.exe", false, 133_000, 133_100),
+            entry("MSTeams_8wekyb3d8bbwe", true, 133_000, 0),
+            entry("C:#Program Files#Google#Chrome#Application#chrome.exe", false, 133_000, 0),
+            entry("C:#Program Files#Mostalgia#mostalgia-app.exe", false, 133_000, 0),
+            entry("Microsoft.WindowsSoundRecorder_8wekyb3d8bbwe", true, 133_000, 0),
+            entry("C:#Program Files#Audacity#Audacity.exe", false, 0, 0),
+        ];
+        let streams = consent_streams(&entries);
+        assert_eq!(streams.len(), 5, "{streams:?}");
+        assert_eq!(streams[0].app_name, "Discord");
+        assert_eq!(streams[0].binary, "Discord.exe");
+        assert_eq!(streams[1].app_name, "MSTeams");
+        let calls: Vec<Option<String>> = streams.iter().map(classify).collect();
+        assert_eq!(calls[0].as_deref(), Some("Discord"));
+        assert_eq!(calls[1].as_deref(), Some("Microsoft Teams"));
+        assert!(calls[2].as_deref().is_some_and(|l| l.ends_with("(Chrome)")));
+        assert_eq!(calls[3], None, "our own capture");
+        assert_eq!(calls[4], None, "not a call app");
     }
 }

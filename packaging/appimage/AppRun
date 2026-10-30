@@ -1,0 +1,41 @@
+#!/bin/sh
+# Entry point of the Mostalgia AppImage. With no arguments (or the app's own
+# flags) it starts the desktop app; given a command it runs the CLI instead:
+#
+#   ./Mostalgia-x86_64.AppImage toggle                # start/stop a recording
+#   ./Mostalgia-x86_64.AppImage connections add ollama
+#
+# On the first start it also puts Mostalgia into the app menu, pointing at
+# wherever this AppImage lives (and follows it when it is moved).
+HERE="$(dirname "$(readlink -f "$0")")"
+
+integrate() {
+  [ -n "$APPIMAGE" ] || return 0
+  data="${XDG_DATA_HOME:-$HOME/.local/share}"
+  entry="$data/applications/io.github.mostaxd.Mostalgia.desktop"
+  # An entry from a source install (scripts/install-desktop.sh) is left alone.
+  if [ -e "$entry" ] && ! grep -q '^X-Mostalgia-AppImage=true' "$entry"; then
+    return 0
+  fi
+  grep -qxF "Exec=\"$APPIMAGE\"" "$entry" 2>/dev/null && return 0
+  mkdir -p "$data/applications" "$data/icons" || return 0
+  cp -r "$HERE/usr/share/icons/hicolor" "$data/icons/" 2>/dev/null
+  escaped=$(printf '%s' "$APPIMAGE" | sed 's/[\\|&]/\\&/g')
+  sed -e "s|^Exec=.*|Exec=\"$escaped\"|" \
+      -e "/^Exec=/a TryExec=$escaped" \
+      -e '$a X-Mostalgia-AppImage=true' \
+      "$HERE/io.github.mostaxd.Mostalgia.desktop" > "$entry.tmp" && mv "$entry.tmp" "$entry"
+  gtk-update-icon-cache -q -t "$data/icons/hicolor" 2>/dev/null
+  update-desktop-database -q "$data/applications" 2>/dev/null
+  return 0
+}
+
+case "$1" in
+  ""|--*)
+    integrate
+    exec "$HERE/usr/bin/mostalgia-app" "$@"
+    ;;
+  *)
+    exec "$HERE/usr/bin/mostalgia" "$@"
+    ;;
+esac

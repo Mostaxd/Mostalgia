@@ -3,6 +3,8 @@ name = "mostalgia"
 description = "Local meeting recorder with live Whisper transcription"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
@@ -11,12 +13,13 @@ clap = { version = "4.6.7", features = ["derive"] }
 crossbeam-channel = "0.5.17"
 ctrlc = "3.5.2"
 hound = "3.5.1"
-mostalgia-core = { version = "0.2.0", path = "../mostalgia-core" }
+mostalgia-core = { version = "0.3.0", path = "../mostalgia-core" }
 rpassword = "7.5.4"
 
 
 [features]
 default = []
 vulkan = ["mostalgia-core/vulkan"]
+metal = ["mostalgia-core/metal"]
 cuda = ["mostalgia-core/cuda"]
 openblas = ["mostalgia-core/openblas"]

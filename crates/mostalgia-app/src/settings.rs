@@ -6,14 +6,17 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, StyledExt, h_flex, switch::Switch, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use mostalgia_core::ask::{embed::Model as EmbedModel, reembed};
 use mostalgia_core::audio::{self, SourceInfo};
 use mostalgia_core::cloud_stt;
+use mostalgia_core::glossary::{self, Glossary, Suggestion, SuggestionKind};
 use mostalgia_core::store::Store;
 use mostalgia_core::config::{Config, Mode, NotesMode, SttChoice};
 use mostalgia_core::connections::{self, Api, Connection, PRESETS};
@@ -31,6 +34,8 @@ pub enum SettingsEvent {
     Changed,
     /// Open the decision log and fill it from earlier meetings.
     BuildDecisions,
+    /// Offer to download the missing models.
+    DownloadModels,
 }
 
 impl EventEmitter<SettingsEvent> for SettingsView {}
@@ -66,6 +71,7 @@ pub struct SettingsView {
     custom_target: Option<(Slot, String)>,
     /// Processing mode last clicked, to explain what's still missing.
     chosen_mode: Option<Mode>,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     shortcut_error: Option<String>,
     gpu: Option<String>,
     scroll: ScrollHandle,
@@ -86,6 +92,8 @@ pub struct SettingsView {
     preview_frame: usize,
     preview_ticking: bool,
     preview_seen: Instant,
+    /// Re-renders while the library is embedded with a new model.
+    embed_ticking: bool,
     /// Voices named in transcripts, recognised in later meetings.
     voices: Voices,
     /// The known voice being renamed, and the voice asked about forgetting.
@@ -96,6 +104,16 @@ pub struct SettingsView {
     /// An archive picked for import: what it would add, and what to take.
     library_preview: Option<(std::path::PathBuf, mostalgia_core::library::Preview, mostalgia_core::library::ImportOptions)>,
     library_error: Option<String>,
+    /// Terms and fix rules for transcription.
+    glossary: Glossary,
+    glossary_term: Entity<InputState>,
+    glossary_from: Entity<InputState>,
+    glossary_to: Entity<InputState>,
+    /// Terms the library suggests (`None` until asked for).
+    glossary_suggestions: Option<Vec<Suggestion>>,
+    /// Looking for suggestions or correcting the library.
+    glossary_busy: bool,
+    glossary_status: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -130,8 +148,12 @@ enum Slot {
     Ask,
     /// Mori's live notes.
     Notes,
+    /// Live translation.
+    Translate,
     Live,
     Final,
+    /// Embeddings for meaning search.
+    Embed,
 }
 
 struct ConnForm {
@@ -153,6 +175,12 @@ fn usd(amount: f64) -> String {
 fn cost_label(conn: &Connection, model: &str) -> Option<String> {
     let cost = cloud_stt::estimated_cost(conn, model, 1.0)?;
     Some(if cost <= 0.0 { tr("kostenlos (eigener Server)").to_string() } else { trf("≈ {} $/Std.", &[&usd(cost)]) })
+}
+
+/// "≈ 0,02 $ per million tokens" or "free (own server)".
+fn embed_cost_label(conn: &Connection, model: &str) -> Option<String> {
+    let cost = if conn.is_local() { 0.0 } else { conn.embed_models().iter().find(|m| m.id == model)?.usd_per_mtok };
+    Some(if cost <= 0.0 { tr("kostenlos (eigener Server)").to_string() } else { trf("≈ {} $ pro Mio. Tokens", &[&usd(cost)]) })
 }
 
 fn effort_label(e: &str) -> String {
@@ -285,9 +313,15 @@ fn read_shortcut() -> Option<String> {
     (!binding.is_empty()).then(|| binding.to_string())
 }
 
-/// Binds Super+Shift+R to `mostalgia toggle` (the CLI next to this app).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+/// Binds Super+Shift+R to `mostalgia toggle` (the CLI next to this app, or
+/// the AppImage, which runs the CLI when given a command: the paths inside
+/// it only exist while it runs).
 fn install_shortcut() -> anyhow::Result<String> {
-    let cli = std::env::current_exe()?.with_file_name("mostalgia");
+    let cli = match std::env::var_os("APPIMAGE") {
+        Some(appimage) => std::path::PathBuf::from(appimage),
+        None => std::env::current_exe()?.with_file_name(format!("mostalgia{}", std::env::consts::EXE_SUFFIX)),
+    };
     anyhow::ensure!(cli.exists(), "{}", trf("mostalgia (CLI) nicht neben der App gefunden: {}", &[&cli.display()]));
     let list = gsettings(&["get", MEDIA_KEYS, "custom-keybindings"]).unwrap_or_default();
     if !list.contains(SHORTCUT_PATH) {
@@ -302,7 +336,7 @@ fn install_shortcut() -> anyhow::Result<String> {
     let binding = "<Super><Shift>r";
     for (key, value) in [
         ("name", tr("Mostalgia: Aufnahme starten/stoppen").to_string()),
-        ("command", format!("{} toggle", cli.display())),
+        ("command", format!("\"{}\" toggle", cli.display())),
         ("binding", binding.to_string()),
     ] {
         gsettings(&["set", &schema, key, &value]).ok_or_else(|| anyhow::anyhow!(tr("gsettings fehlgeschlagen")))?;
@@ -322,6 +356,7 @@ fn tray_host_running() -> bool {
 }
 
 /// "<Super><Shift>r" → "Super + Shift + R".
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn pretty_binding(b: &str) -> String {
     let mut parts: Vec<String> = Vec::new();
     let mut rest = b;
@@ -374,6 +409,19 @@ impl SettingsView {
                 cx.notify();
             }
         });
+        let glossary_term = cx.new(|cx| InputState::new(window, cx).placeholder(tr("z. B. Brightwell")));
+        let glossary_from = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Falsch gehört, z. B. Bright Well")));
+        let glossary_to = cx.new(|cx| InputState::new(window, cx).placeholder(tr("Richtig, z. B. Brightwell")));
+        let term_sub = cx.subscribe_in(&glossary_term, window, |this, _, event: &InputEvent, window, cx| {
+            if let InputEvent::PressEnter { .. } = event {
+                this.add_glossary_term(window, cx);
+            }
+        });
+        let fix_sub = cx.subscribe_in(&glossary_to, window, |this, _, event: &InputEvent, window, cx| {
+            if let InputEvent::PressEnter { .. } = event {
+                this.add_glossary_fix(window, cx);
+            }
+        });
         let config = Config::load();
         let category = Category::parse(&config.settings_category);
         let mut this = Self {
@@ -407,6 +455,7 @@ impl SettingsView {
             preview_frames: HashMap::new(),
             preview_frame: 0,
             preview_ticking: false,
+            embed_ticking: false,
             preview_seen: Instant::now(),
             voices: Voices::load(),
             voice_rename: None,
@@ -414,7 +463,14 @@ impl SettingsView {
             library_export: Default::default(),
             library_preview: None,
             library_error: None,
-            _subscriptions: vec![sub, custom_sub, url_sub, focus_sub],
+            glossary: Glossary::load(),
+            glossary_term,
+            glossary_from,
+            glossary_to,
+            glossary_suggestions: None,
+            glossary_busy: false,
+            glossary_status: None,
+            _subscriptions: vec![sub, custom_sub, url_sub, focus_sub, term_sub, fix_sub],
         };
         this.load_system_status(cx);
         this.load_keys(cx);
@@ -874,7 +930,11 @@ impl SettingsView {
             .child(div().font_semibold().child(tr("Textgröße")))
             .child(row(
                 tr("Textgröße der App"),
-                Some(tr("Gilt überall, auch für die Begleiterin. Tastenkürzel: Strg + = größer, Strg + − kleiner, Strg + 0 zurücksetzen.")),
+                Some(if cfg!(target_os = "macos") {
+                    tr("Gilt überall, auch für die Begleiterin. Tastenkürzel: ⌘ + = größer, ⌘ + − kleiner, ⌘ + 0 zurücksetzen.")
+                } else {
+                    tr("Gilt überall, auch für die Begleiterin. Tastenkürzel: Strg + = größer, Strg + − kleiner, Strg + 0 zurücksetzen.")
+                }),
                 h_flex().flex_wrap().gap_1().children(presets).into_any_element(),
             ))
             .child(row(tr("Feiner einstellen"), None, self.scale_stepper("ui-scale", false, scale, UI_SCALE_STEPS, cx)))
@@ -1623,6 +1683,89 @@ impl SettingsView {
         self.save(cx);
     }
 
+    fn set_translation_connection(&mut self, id: Option<String>, cx: &mut Context<Self>) {
+        match id {
+            None => {
+                self.config.translation_provider.clear();
+                self.config.translation_model.clear();
+            }
+            Some(id) => {
+                let Some(conn) = self.config.connection(&id).cloned() else { return };
+                if self.config.translation_provider == id {
+                    return;
+                }
+                self.config.translation_provider = id.clone();
+                self.load_models(&id, cx);
+                self.config.translation_model = self.initial_model(&conn);
+            }
+        }
+        self.save(cx);
+    }
+
+    /// Live translation: on or off, into which language, with which model.
+    fn render_translation(&mut self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
+        let on = self.config.live_translation;
+        let switch = Switch::new("live-translation")
+            .checked(on)
+            .on_change(cx.listener(|this, v: &bool, _, cx| {
+                this.config.live_translation = *v;
+                this.save(cx);
+            }))
+            .into_any_element();
+
+        let target = self.config.translation_language.clone();
+        let app_name = mostalgia_core::language::native_name(&self.config.translation_target());
+        let language_label = if target.is_empty() {
+            trf("Wie die App ({})", &[&app_name])
+        } else {
+            mostalgia_core::language::native_name(&target)
+        };
+        let mut items: Vec<Choice> = vec![(trf("Wie die App ({})", &[&app_name]), target.is_empty(), Some(Pick::TranslateLanguage(String::new())))];
+        items.extend(
+            mostalgia_core::language::COMMON
+                .iter()
+                .map(|(code, name)| (name.to_string(), target == *code, Some(Pick::TranslateLanguage(code.to_string())))),
+        );
+        let language_picker = self.picker("translation-language", language_label, items, cx);
+
+        let separate = !self.config.translation_provider.is_empty();
+        let conn_id = self.config.translation_provider.clone();
+        let label = match self.config.translation_request() {
+            Ok(req) if separate => format!("{} · {}", req.connection.name, self.model_label(&req.connection.id, &req.model)),
+            _ if separate => self.config.connection(&conn_id).map_or(conn_id.clone(), |c| self.conn_label(c)),
+            _ => tr("Wie Live-Notizen").to_string(),
+        };
+        let mut items: Vec<Choice> = vec![(tr("Wie Live-Notizen").into(), !separate, Some(Pick::TranslateConn(None)))];
+        items.extend(self.config.connections.iter().map(|c| (self.conn_label(c), separate && c.id == conn_id, Some(Pick::TranslateConn(Some(c.id.clone()))))));
+        let conn_picker = self.picker("translation-conn", label, items, cx);
+        let model_picker = separate.then(|| {
+            let model = self.config.translation_request().map(|r| r.model).unwrap_or_default();
+            let items = self.model_choices(Slot::Translate, &conn_id, &model);
+            self.picker("translation-model", self.model_label(&conn_id, &model), items, cx)
+        });
+        let model_control = h_flex().flex_wrap().gap_1().child(conn_picker).children(model_picker).into_any_element();
+        let custom = self.custom_model_row(Slot::Translate, cx);
+        // Where the text goes, so nobody is surprised.
+        let goes_to = match self.config.translation_request() {
+            Ok(req) => trf("Übersetzt mit {} · {}. Nur der Text fertiger Zeilen geht dorthin, nie Audio.", &[&req.connection.name, &req.model]),
+            Err(e) => format!("{e:#}"),
+        };
+
+        ui::card(cx)
+            .child(div().font_semibold().child(tr("Live-Übersetzung")))
+            .child(settings_row(
+                tr("Während der Aufnahme übersetzen"),
+                Some(tr("Jede fertige Zeile erscheint zusätzlich übersetzt, im Fenster und in den Live-Untertiteln. Während einer Aufnahme auch über „Übersetzen“ schaltbar.")),
+                switch,
+                &theme,
+            ))
+            .child(settings_row(tr("Übersetzen in"), Some(tr("Zeilen, die schon in dieser Sprache sind, bleiben wie sie sind.")), language_picker, &theme))
+            .child(settings_row(tr("Modell für Übersetzung"), Some(tr("Ein schnelles Modell reicht. Lokal (z. B. Ollama) bleibt alles auf diesem Rechner.")), model_control, &theme))
+            .children(custom)
+            .child(div().text_xs().text_color(theme.muted_foreground).child(goes_to))
+    }
+
     /// Keeps both thinking levels valid for their models.
     fn fix_efforts(&mut self) {
         let summary = self.efforts(&self.config.summary_provider, &self.config.summary_model);
@@ -1641,11 +1784,49 @@ impl SettingsView {
             Slot::Summary => self.config.summary_model = model,
             Slot::Ask => self.config.ask_model = model,
             Slot::Notes => self.config.companion_notes_model = model,
+            Slot::Translate => self.config.translation_model = model,
             Slot::Live => self.config.live_engine = SttChoice { connection: conn, model },
             Slot::Final => self.config.final_engine = SttChoice { connection: conn, model },
+            Slot::Embed => {
+                let choice = SttChoice { connection: conn, model };
+                if self.config.embedding == choice {
+                    return;
+                }
+                self.config.embedding = choice;
+                self.save(cx);
+                reembed::start();
+                self.tick_embedding(cx);
+                return;
+            }
         }
         self.fix_efforts();
         self.save(cx);
+    }
+
+    /// Re-renders while the library is embedded again, to show progress.
+    fn tick_embedding(&mut self, cx: &mut Context<Self>) {
+        if self.embed_ticking {
+            return;
+        }
+        self.embed_ticking = true;
+        cx.spawn(async move |this, cx| {
+            // Give the job a moment to report that it runs.
+            cx.background_executor().timer(Duration::from_millis(300)).await;
+            loop {
+                let running = reembed::status().running;
+                let alive = this.update(cx, |_, cx| cx.notify()).is_ok();
+                if !running || !alive {
+                    break;
+                }
+                cx.background_executor().timer(Duration::from_millis(500)).await;
+            }
+            this.update(cx, |this, cx| {
+                this.embed_ticking = false;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn open_custom_model(&mut self, slot: Slot, conn: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -1699,19 +1880,24 @@ impl SettingsView {
         self.save(cx);
     }
 
-    /// Uses a local connection for summaries and questions.
+    /// Uses a local connection for summaries and questions (and the local
+    /// model for search).
     fn use_local_ai(&mut self, id: String, cx: &mut Context<Self>) {
         self.set_ask_connection(None, cx);
         self.set_summary_connection(id, cx);
+        if self.config.connection(&self.config.embedding.connection).is_some_and(|c| !c.is_local()) {
+            self.select_model(Slot::Embed, String::new(), String::new(), cx);
+        }
     }
 
-    /// Where a connection is in use: summaries, ask, live, final.
-    fn uses(&self, id: &str) -> [bool; 4] {
+    /// Where a connection is in use: summaries, ask, live, final, search.
+    fn uses(&self, id: &str) -> [bool; 5] {
         [
             self.config.summary_provider == id,
             self.ask_conn_id() == id,
             self.config.live_engine.connection == id,
             self.config.final_engine.connection == id,
+            self.config.embedding.connection == id,
         ]
     }
 
@@ -1851,6 +2037,10 @@ enum Pick {
     AskConn(Option<String>),
     /// Mori's live notes: a connection, or `None` for the "ask" one.
     NotesConn(Option<String>),
+    /// Live translation: a connection, or `None` for the live-notes one.
+    TranslateConn(Option<String>),
+    /// The language live translation writes in ("" = the app's).
+    TranslateLanguage(String),
     /// Slot, connection id, model id.
     Model(Slot, String, String),
     /// Type a model id for the slot on this connection.
@@ -1969,6 +2159,11 @@ impl SettingsView {
             Pick::SummaryConn(id) => self.set_summary_connection(id, cx),
             Pick::AskConn(id) => self.set_ask_connection(id, cx),
             Pick::NotesConn(id) => self.set_notes_connection(id, cx),
+            Pick::TranslateConn(id) => self.set_translation_connection(id, cx),
+            Pick::TranslateLanguage(code) => {
+                self.config.translation_language = code;
+                self.save(cx);
+            }
             Pick::Model(slot, conn, model) => self.select_model(slot, conn, model, cx),
             Pick::Custom(slot, conn) => self.open_custom_model(slot, conn, window, cx),
             Pick::SummaryLanguage(code) => {
@@ -2240,6 +2435,124 @@ impl SettingsView {
         self.picker(id, self.config.engine_label(&current), items, cx)
     }
 
+    fn embed_picker(&self, cx: &mut Context<Self>) -> AnyElement {
+        let current = self.config.embedding.clone();
+        let local_label = tr("multilingual-e5-small (lokal)").to_string();
+        let mut items: Vec<Choice> = vec![(local_label, current.is_local(), Some(Pick::Model(Slot::Embed, String::new(), String::new())))];
+        let mut listed = current.is_local();
+        for c in self.config.connections.iter().filter(|c| c.offers_embeddings() && self.configured(c)) {
+            for m in c.embed_models() {
+                let on = current.connection == c.id && current.model == m.id;
+                listed |= on;
+                let label = match embed_cost_label(c, m.id) {
+                    Some(cost) => format!("{} · {} — {cost}", c.name, m.id),
+                    None => format!("{} · {}", c.name, m.id),
+                };
+                items.push((label, on, Some(Pick::Model(Slot::Embed, c.id.clone(), m.id.into()))));
+            }
+            if c.preset().free_embed {
+                items.push((trf("{}: eigenes Modell …", &[&c.name]), false, Some(Pick::Custom(Slot::Embed, c.id.clone()))));
+            }
+        }
+        if !listed {
+            items.insert(1, (self.config.embedding_label(), true, Some(Pick::Model(Slot::Embed, current.connection.clone(), current.model.clone()))));
+        }
+        self.picker("embed-model", self.config.embedding_label(), items, cx)
+    }
+
+    fn embed_hint(&self) -> String {
+        let choice = &self.config.embedding;
+        if choice.is_local() {
+            return tr("Auf diesem Rechner (CPU) · kostenlos").into();
+        }
+        match self.config.connection(&choice.connection) {
+            None => trf("Verbindung \"{}\" gibt es nicht mehr", &[&choice.connection]),
+            Some(c) => {
+                let place = if c.is_local() { trf("Bleibt lokal ({})", &[&c.name]) } else { trf("Text der Besprechungen und Dokumente geht an {} (Cloud)", &[&c.name]) };
+                match embed_cost_label(c, &choice.model) {
+                    Some(cost) => format!("{place} · {cost}"),
+                    None => place,
+                }
+            }
+        }
+    }
+
+    /// Search: which model embeds meetings and documents for meaning
+    /// search, and how far a switch to another one is.
+    fn render_search(&mut self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
+        let picker = self.embed_picker(cx);
+        let hint = self.embed_hint();
+        let custom = self.custom_model_row(Slot::Embed, cx);
+        let status = reembed::status();
+        let target = EmbedModel::from_choice(&self.config);
+        // What searches use now, when it isn't the chosen model yet.
+        let active = (!status.running).then(|| reembed::active().ok()).flatten();
+        let pending = status.running || active.as_ref().is_some_and(|a| a.key() != target.key());
+        if status.running && !self.embed_ticking {
+            self.tick_embedding(cx);
+        }
+        let progress: Option<AnyElement> = if status.running {
+            let text = if status.total == 0 {
+                tr("Bibliothek wird neu eingebettet …").to_string()
+            } else {
+                trf("Bibliothek wird neu eingebettet: {} von {} Abschnitten", &[&status.done, &status.total])
+            };
+            let share = if status.total == 0 { 0.0 } else { status.done as f32 / status.total as f32 };
+            Some(
+                v_flex()
+                    .gap_1()
+                    .child(div().text_sm().child(text))
+                    .child(
+                        div()
+                            .h(px(4.))
+                            .w_full()
+                            .rounded_full()
+                            .bg(theme.muted)
+                            .child(div().h_full().rounded_full().bg(theme.primary).w(relative(share.clamp(0.0, 1.0)))),
+                    )
+                    .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Bis dahin sucht das bisherige Modell weiter.")))
+                    .into_any_element(),
+            )
+        } else if pending {
+            let reason = status.error.clone().unwrap_or_else(|| tr("Noch nicht fertig neu eingebettet.").to_string());
+            Some(
+                v_flex()
+                    .gap_2()
+                    .p_3()
+                    .rounded(theme.radius)
+                    .bg(theme.warning.opacity(0.1))
+                    .text_sm()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(Icon::new(IconName::TriangleAlert).small().text_color(theme.warning).flex_none())
+                            .child(div().flex_1().min_w_0().child(reason)),
+                    )
+                    .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Bis dahin sucht das bisherige Modell weiter.")))
+                    .child(
+                        h_flex().child(Button::new("embed-retry").small().outline().label(tr("Erneut versuchen")).on_click(cx.listener(
+                            |this, _, _, cx| {
+                                reembed::start();
+                                this.tick_embedding(cx);
+                            },
+                        ))),
+                    )
+                    .into_any_element(),
+            )
+        } else {
+            None
+        };
+        ui::card(cx)
+            .child(div().font_semibold().child(tr("Suche")))
+            .child(settings_row(tr("Bedeutungssuche"), Some(&hint), picker, &theme))
+            .children(custom)
+            .children(progress)
+            .child(div().text_xs().text_color(theme.muted_foreground).child(tr(
+                "Findet Stellen in Besprechungen und Dokumenten auch mit anderen Worten. Ein Wechsel bettet die ganze Bibliothek neu ein; Stichwortsuche geht immer.",
+            )))
+    }
+
     fn render_processing(&mut self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme().clone();
         let mode = self.config.mode();
@@ -2284,7 +2597,11 @@ impl SettingsView {
         let mut hint: Option<AnyElement> = None;
         if self.chosen_mode == Some(Mode::Local) && mode != Mode::Local {
             let mut cloud: Vec<String> = Vec::new();
-            for (what, id) in [(tr("Zusammenfassungen"), self.config.summary_provider.clone()), (tr("Fragen"), self.ask_conn_id())] {
+            for (what, id) in [
+                (tr("Zusammenfassungen"), self.config.summary_provider.clone()),
+                (tr("Fragen"), self.ask_conn_id()),
+                (tr("Suche"), self.config.embedding.connection.clone()),
+            ] {
                 if let Some(c) = self.config.connection(&id).filter(|c| !c.is_local()) {
                     cloud.push(format!("{what} → {}", c.name));
                 }
@@ -2396,7 +2713,7 @@ impl SettingsView {
             } else {
                 (trf("Cloud · Text geht an {}", &[&c.name]), theme.info)
             };
-            let used_for: Vec<AnyElement> = ["Zusammenfassungen", "Fragen", "Live-Transkription", "Feinschliff"]
+            let used_for: Vec<AnyElement> = ["Zusammenfassungen", "Fragen", "Live-Transkription", "Feinschliff", "Suche"]
                 .into_iter()
                 .zip(uses)
                 .filter(|(_, on)| *on)
@@ -2798,7 +3115,23 @@ impl Render for SettingsView {
                 tr("Automatisch beenden, wenn der Anruf endet"),
                 Some(tr("Nur für Aufnahmen, die durch einen Anruf gestartet wurden.")),
                 switch("call-stop", self.config.call_stop_auto, cx, |c, v| c.call_stop_auto = v),
-            ))
+            ));
+        // Calls are only noticed while the app runs.
+        #[cfg(any(windows, target_os = "macos"))]
+        let calls = calls.child(row(
+            if cfg!(target_os = "macos") { tr("Bei der Anmeldung starten") } else { tr("Mit Windows starten") },
+            Some(tr("Startet Mostalgia minimiert bei der Anmeldung, damit Anrufe erkannt werden.")),
+            Switch::new("login-start")
+                .checked(crate::login_start::enabled())
+                .on_change(cx.listener(|_, on: &bool, _, cx| {
+                    if let Err(e) = crate::login_start::set(*on) {
+                        eprintln!("[mostalgia] start at login: {e:#}");
+                    }
+                    cx.notify();
+                }))
+                .into_any_element(),
+        ));
+        let calls = calls
             .child(if app_rows.is_empty() {
                 div()
                     .text_xs()
@@ -2835,7 +3168,7 @@ impl Render for SettingsView {
                 Some(tr(if diarize_ok {
                     "Teilt „Andere“ in Sprecher 1, 2, … auf. Live ungefähr, im fertigen Transkript genau."
                 } else {
-                    "Modelle fehlen — scripts/download-model.sh ausführen."
+                    "Modelle fehlen — unter Einstellungen → System herunterladen."
                 })),
                 Switch::new("set-diarize")
                     .checked(self.config.diarize && diarize_ok)
@@ -2857,6 +3190,11 @@ impl Render for SettingsView {
                         .child(choice("dia-more", "Mehr Sprecher", dt < 0.45, cx, |c| c.diarize_threshold = 0.4))
                         .into_any_element(),
                 ))
+                .child(row(
+                    tr("Bekannte Stimmen mit Namen erkennen"),
+                    Some(tr("Aus: Sprecher bleiben „Sprecher 1“, „Sprecher 2“, … — Namen vergibst du selbst im Transkript.")),
+                    switch("set-recognize-voices", self.config.recognize_voices, cx, |c, v| c.recognize_voices = v),
+                ))
             })
             .child(div().text_xs().text_color(theme.muted_foreground).child(tr(
                 "Namen vergeben: im Transkript auf einen Sprecher-Chip klicken — alle Zeilen werden umbenannt.",
@@ -2871,7 +3209,7 @@ impl Render for SettingsView {
         cards.push(Card {
             category: Category::Sprecher,
             title: "Sprecher",
-            keywords: "sprecher ich andere label diarisierung trennen mehrere personen umbenennen speaker speakers me others diarization separate people rename",
+            keywords: "sprecher ich andere label diarisierung trennen mehrere personen umbenennen namen erkennen raten speaker speakers me others diarization separate people rename names recognise recognize guess",
             wide: false,
             element: speakers.into_any_element(),
         });
@@ -2906,6 +3244,27 @@ impl Render for SettingsView {
             element: self.render_processing(cx).into_any_element(),
         });
 
+        cards.push(Card {
+            category: Category::Ki,
+            title: "Live-Übersetzung",
+            keywords: "übersetzung übersetzen live sprache sprachen untertitel translation translate live language languages captions subtitles dolmetscher interpreter",
+            wide: false,
+            element: self.render_translation(cx).into_any_element(),
+        });
+        cards.push(Card {
+            category: Category::Ki,
+            title: "Glossar",
+            keywords: "glossar glossary begriffe terms wörter words vokabular vocabulary namen names fachbegriffe jargon schreibweise spelling korrektur korrigieren correction correct fix falsch verstanden misheard whisper hinweis hint prompt jira",
+            wide: true,
+            element: self.render_glossary(cx).into_any_element(),
+        });
+        cards.push(Card {
+            category: Category::Ki,
+            title: "Suche",
+            keywords: "suche search bedeutung meaning semantisch semantic embedding embeddings vektoren vectors e5 openai together ollama lokal local cloud neu einbetten re-embed index",
+            wide: false,
+            element: self.render_search(cx).into_any_element(),
+        });
         cards.push(Card {
             category: Category::Ki,
             title: "Zusammenfassungen & Fragen",
@@ -3056,7 +3415,7 @@ impl Render for SettingsView {
                     .text_color(theme.muted_foreground)
                     .children(mostalgia_core::export::Format::ALL.map(|f| h_flex().gap_2().child(Icon::new(IconName::FileText).xsmall()).child(tr(f.label())))),
             )
-            .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Im Terminal: mostalgia export <id> --format md|txt|srt|docx")));
+            .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Im Terminal: mostalgia export <id> --format md|txt|srt|docx [--only notes|summary]")));
         cards.push(Card {
             category: Category::Speicher,
             title: "Export",
@@ -3066,6 +3425,7 @@ impl Render for SettingsView {
         });
 
         // ── Tastenkürzel & System ──
+        #[cfg(not(any(windows, target_os = "macos")))]
         let shortcut = ui::card(cx)
             .child(title("Tastenkürzel"))
             .child(div().text_sm().text_color(theme.muted_foreground).child(tr("Startet oder stoppt eine Aufnahme von überall – auch wenn die App geschlossen ist.")))
@@ -3092,6 +3452,19 @@ impl Render for SettingsView {
             })
             .when_some(self.shortcut_error.clone(), |el, e| el.child(div().text_xs().text_color(theme.danger).child(e)))
             .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Ändern oder entfernen: GNOME-Einstellungen → Tastatur → Eigene Tastenkürzel.")));
+        // Windows and macOS: the app registers the hotkey itself (see `control`).
+        #[cfg(any(windows, target_os = "macos"))]
+        let shortcut = ui::card(cx)
+            .child(title("Tastenkürzel"))
+            .child(div().text_sm().text_color(theme.muted_foreground).child(tr("Startet oder stoppt eine Aufnahme von überall, solange Mostalgia läuft – auch minimiert.")))
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(Icon::new(IconName::Check).small().text_color(theme.success))
+                    .child(div().text_sm().child(tr("Eingerichtet:")))
+                    .child(div().px_2().py_0p5().rounded(theme.radius).border_1().border_color(theme.border).text_sm().font_family(theme.mono_font_family.clone()).child(if cfg!(target_os = "macos") { "⌃ ⌥ ⇧ R" } else { tr("Strg + Alt + Umschalt + R") })),
+            );
         cards.push(Card {
             category: Category::System,
             title: "Tastenkürzel",
@@ -3099,6 +3472,11 @@ impl Render for SettingsView {
             wide: false,
             element: shortcut.into_any_element(),
         });
+        #[cfg(not(target_os = "linux"))]
+        let tray = ui::card(cx)
+            .child(title("Tray-Symbol"))
+            .child(h_flex().gap_2().child(Icon::new(IconName::Check).small().text_color(theme.success)).child(div().text_sm().child(if cfg!(target_os = "macos") { tr("Aktiv – rechts oben in der Menüleiste.") } else { tr("Aktiv – im Infobereich der Taskleiste.") })));
+        #[cfg(target_os = "linux")]
         let tray = ui::card(cx)
             .child(title("Tray-Symbol"))
             .child(match self.tray_available {
@@ -3119,6 +3497,7 @@ impl Render for SettingsView {
             element: tray.into_any_element(),
         });
         let model = self.config.whisper_model_path();
+        let missing_models = mostalgia_core::models::missing();
         let status_row = |ok: bool, text: String| {
             h_flex()
                 .gap_2()
@@ -3132,6 +3511,24 @@ impl Render for SettingsView {
             .child(status_row(model.exists(), format!("Whisper: {}", model.display())))
             .child(status_row(self.config.vad_model_path().exists(), "Silero VAD".into()))
             .child(status_row(diarize_ok, tr("Sprechertrennung (sherpa-onnx)").into()))
+            .child(status_row(mostalgia_core::ask::embed::available(), tr("Suche für „Fragen“ (e5-small)").into()))
+            // Only the AppImage updates itself; a source build has git.
+            .when(mostalgia_core::self_update::updatable(), |el| {
+                el.child(row(
+                    tr("Nach Updates suchen"),
+                    Some(tr("Beim Start fragt Mostalgia bei GitHub nach einer neuen Version und bietet sie an. Geladen wird erst nach einem Klick.")),
+                    switch("set-check-updates", self.config.check_updates, cx, |c, v| c.check_updates = v),
+                ))
+            })
+            .when(!missing_models.is_empty(), |el| {
+                el.child(
+                    Button::new("download-models")
+                        .small()
+                        .icon(IconName::Download)
+                        .label(trf("Fehlende Modelle laden ({})", &[&mostalgia_core::cleanup::human(mostalgia_core::models::total_size(&missing_models))]))
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(SettingsEvent::DownloadModels))),
+                )
+            })
             .child(
                 h_flex()
                     .gap_2()
@@ -3143,7 +3540,7 @@ impl Render for SettingsView {
         cards.push(Card {
             category: Category::System,
             title: "Info",
-            keywords: "info version modell whisper gpu vad sherpa status model about",
+            keywords: "info version modell whisper gpu vad sherpa status model about update updates aktualisieren appimage",
             wide: false,
             element: info.into_any_element(),
         });
@@ -3227,23 +3624,31 @@ impl Render for SettingsView {
             .key_context("Settings")
             .child(nav)
             .child(
-                div().flex_1().min_w_0().h_full().child(
-                    div()
-                        .id("settings")
-                        .size_full()
-                        .track_scroll(&self.scroll)
-                        .overflow_y_scroll()
-                        .child(
-                            v_flex()
-                                .max_w(px(1180.))
-                                .px_8()
-                                .py_6()
-                                .gap_5()
-                                .child(header)
-                                .child(grid)
-                                .when(empty, |el| el.child(div().text_color(theme.muted_foreground).child(tr("Keine passende Einstellung gefunden.")))),
-                        ),
-                ),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .relative()
+                    .child(
+                        div()
+                            .id("settings")
+                            .size_full()
+                            .track_scroll(&self.scroll)
+                            .overflow_y_scroll()
+                            .child(
+                                v_flex()
+                                    .w_full()
+                                    .max_w(px(1180.))
+                                    .mx_auto()
+                                    .px_8()
+                                    .py_6()
+                                    .gap_5()
+                                    .child(header)
+                                    .child(grid)
+                                    .when(empty, |el| el.child(div().text_color(theme.muted_foreground).child(tr("Keine passende Einstellung gefunden.")))),
+                            ),
+                    )
+                    .vertical_scrollbar(&self.scroll),
             )
     }
 }
@@ -3352,6 +3757,231 @@ impl SettingsView {
         } else {
             cx.notify();
         }
+    }
+
+    fn render_glossary(&mut self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
+        let muted = theme.muted_foreground;
+        let chip = |id: (&'static str, usize), label: String, on_remove: Box<dyn Fn(&mut Self, &mut Context<Self>)>, cx: &mut Context<Self>| {
+            h_flex()
+                .gap_1()
+                .pl_2()
+                .rounded(theme.radius)
+                .bg(theme.muted)
+                .text_sm()
+                .child(label)
+                .child(Button::new(id).xsmall().ghost().icon(IconName::X).tooltip(tr("Entfernen")).on_click(cx.listener(move |this, _, _, cx| {
+                    on_remove(this, cx);
+                    this.save_glossary(cx);
+                })))
+        };
+
+        let mut terms = h_flex().gap_1().flex_wrap();
+        for (ix, term) in self.glossary.terms.clone().into_iter().enumerate() {
+            let t = term.clone();
+            terms = terms.child(chip(("glossary-term", ix), term, Box::new(move |this, _| { this.glossary.remove_term(&t); }), cx));
+        }
+        let mut fixes = v_flex().gap_1();
+        for (ix, fix) in self.glossary.fixes.clone().into_iter().enumerate() {
+            let from = fix.from.clone();
+            fixes = fixes.child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .text_sm()
+                    .child(div().text_color(muted).line_through().child(fix.from.clone()))
+                    .child(Icon::new(IconName::ArrowRight).xsmall().text_color(muted))
+                    .child(div().flex_1().child(fix.to.clone()))
+                    .child(Button::new(("glossary-fix", ix)).xsmall().ghost().icon(IconName::Trash).tooltip(tr("Entfernen")).on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            this.glossary.remove_fix(&from);
+                            this.save_glossary(cx);
+                        },
+                    ))),
+            );
+        }
+
+        let suggestions: Option<AnyElement> = self.glossary_suggestions.clone().map(|list| {
+            if list.is_empty() {
+                return div().text_sm().text_color(muted).child(tr("Keine neuen Vorschläge — Dokumente hochladen oder Sprecher benennen hilft.")).into_any_element();
+            }
+            let mut row = h_flex().gap_1().flex_wrap();
+            for (ix, s) in list.iter().enumerate() {
+                let what = match s.kind {
+                    SuggestionKind::Name => tr("Name"),
+                    SuggestionKind::ProjectKey => tr("Ticket-Projekt"),
+                    SuggestionKind::Term => tr("aus Dokumenten"),
+                };
+                let term = s.term.clone();
+                row = row.child(
+                    Button::new(("glossary-suggest", ix))
+                        .xsmall()
+                        .outline()
+                        .icon(IconName::Plus)
+                        .label(s.term.clone())
+                        .tooltip(what)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.glossary.add_term(&term);
+                            if let Some(list) = &mut this.glossary_suggestions {
+                                list.retain(|s| s.term != term);
+                            }
+                            this.save_glossary(cx);
+                        })),
+                );
+            }
+            v_flex()
+                .gap_2()
+                .child(row)
+                .child(h_flex().child(Button::new("glossary-add-all").xsmall().ghost().label(tr("Alle hinzufügen")).on_click(cx.listener(|this, _, _, cx| {
+                    for s in this.glossary_suggestions.take().unwrap_or_default() {
+                        this.glossary.add_term(&s.term);
+                    }
+                    this.glossary_suggestions = Some(Vec::new());
+                    this.save_glossary(cx);
+                }))))
+                .into_any_element()
+        });
+
+        let hint_len = self.glossary.hint().map_or(0, |h| h.len());
+        ui::card(cx)
+            .child(div().font_semibold().child(tr("Glossar")))
+            .child(div().text_xs().text_color(muted).child(tr(
+                "Eigene Begriffe, Namen und Projektwörter. Die Transkription bekommt sie als Hinweis und schreibt sie richtig; Korrekturen ersetzen falsch Gehörtes in jedem neuen Transkript.",
+            )))
+            .child(div().text_sm().font_medium().child(tr("Begriffe")))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(div().flex_1().child(Input::new(&self.glossary_term).small()))
+                    .child(Button::new("glossary-add").small().outline().icon(IconName::Plus).label(tr("Hinzufügen")).on_click(cx.listener(
+                        |this, _, window, cx| this.add_glossary_term(window, cx),
+                    ))),
+            )
+            .when(!self.glossary.terms.is_empty(), |el| el.child(terms))
+            .when(hint_len >= glossary::MAX_HINT_CHARS - 40, |el| {
+                el.child(div().text_xs().text_color(theme.warning).child(tr(
+                    "Die Liste ist lang: nur die ersten Begriffe gehen als Hinweis mit. Die wichtigsten nach vorn, selten gebrauchte entfernen.",
+                )))
+            })
+            .child(div().text_sm().font_medium().child(tr("Korrekturen")))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .flex_wrap()
+                    .child(div().flex_1().min_w(px(140.)).child(Input::new(&self.glossary_from).small()))
+                    .child(Icon::new(IconName::ArrowRight).small().text_color(muted))
+                    .child(div().flex_1().min_w(px(140.)).child(Input::new(&self.glossary_to).small()))
+                    .child(Button::new("glossary-fix-add").small().outline().icon(IconName::Plus).label(tr("Hinzufügen")).on_click(cx.listener(
+                        |this, _, window, cx| this.add_glossary_fix(window, cx),
+                    ))),
+            )
+            .when(!self.glossary.fixes.is_empty(), |el| el.child(fixes))
+            .child(div().text_xs().text_color(muted).child(tr(
+                "Tipp: Korrigierst du ein Wort im Transkript, bietet Mostalgia an, es sich als Korrektur zu merken.",
+            )))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .flex_wrap()
+                    .child(
+                        Button::new("glossary-suggest")
+                            .small()
+                            .outline()
+                            .icon(IconName::Sparkles)
+                            .label(tr("Vorschläge aus Dokumenten & Namen"))
+                            .disabled(self.glossary_busy)
+                            .on_click(cx.listener(|this, _, _, cx| this.suggest_glossary(cx))),
+                    )
+                    .child(
+                        Button::new("glossary-apply")
+                            .small()
+                            .ghost()
+                            .label(tr("Ältere Besprechungen korrigieren"))
+                            .disabled(self.glossary_busy || self.glossary.fixes.is_empty())
+                            .on_click(cx.listener(|this, _, _, cx| this.apply_glossary_to_library(cx))),
+                    ),
+            )
+            .children(suggestions)
+            .when_some(self.glossary_status.clone(), |el, status| el.child(div().text_sm().text_color(muted).child(status)))
+    }
+
+    fn add_glossary_term(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let value = self.glossary_term.read(cx).value().to_string();
+        // Several at once, separated by commas.
+        let mut added = false;
+        for term in value.split(',') {
+            added |= self.glossary.add_term(term);
+        }
+        if added {
+            self.glossary_term.update(cx, |s, cx| s.set_value("", window, cx));
+            self.save_glossary(cx);
+        }
+    }
+
+    fn add_glossary_fix(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let from = self.glossary_from.read(cx).value().to_string();
+        let to = self.glossary_to.read(cx).value().to_string();
+        if self.glossary.add_fix(&from, &to) {
+            self.glossary_from.update(cx, |s, cx| s.set_value("", window, cx));
+            self.glossary_to.update(cx, |s, cx| s.set_value("", window, cx));
+            self.save_glossary(cx);
+        }
+    }
+
+    fn suggest_glossary(&mut self, cx: &mut Context<Self>) {
+        self.glossary_busy = true;
+        self.glossary_status = None;
+        cx.notify();
+        let glossary = self.glossary.clone();
+        let task = cx.background_spawn(async move { glossary::suggest(&Store::open(&paths::database())?, &glossary) });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                this.glossary_busy = false;
+                match result {
+                    Ok(list) => this.glossary_suggestions = Some(list),
+                    Err(e) => this.glossary_status = Some(trf("Keine Vorschläge: {}", &[&format!("{e:#}")]).into()),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Runs every fix rule over the stored transcripts and summaries.
+    fn apply_glossary_to_library(&mut self, cx: &mut Context<Self>) {
+        self.glossary_busy = true;
+        self.glossary_status = Some(tr("Ältere Besprechungen werden korrigiert …").into());
+        cx.notify();
+        let fixer = self.glossary.fixer();
+        let task = cx.background_spawn(async move { glossary::apply_to_library(&mut Store::open(&paths::database())?, &fixer) });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                this.glossary_busy = false;
+                this.glossary_status = Some(
+                    match result {
+                        Ok(done) => trf(
+                            "{} Zeilen und {} Zusammenfassungen in {} Besprechungen korrigiert.",
+                            &[&done.lines, &done.summaries, &done.meetings],
+                        ),
+                        Err(e) => trf("Ältere Besprechungen nicht korrigiert: {}", &[&format!("{e:#}")]),
+                    }
+                    .into(),
+                );
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn save_glossary(&mut self, cx: &mut Context<Self>) {
+        if let Err(e) = self.glossary.save() {
+            self.glossary_status = Some(trf("Glossar nicht gespeichert: {}", &[&format!("{e:#}")]).into());
+        }
+        cx.notify();
     }
 
     fn save_voices(&mut self, cx: &mut Context<Self>) {
