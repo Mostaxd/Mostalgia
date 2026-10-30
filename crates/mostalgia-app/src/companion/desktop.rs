@@ -22,8 +22,11 @@ use super::x11::{Rect, X11};
 use super::{Companion, MoriEvent};
 use crate::{AppAssets, load_fonts, ui};
 
-/// Room around her in the small window (logical px).
+/// Room around her in the small window (logical px)…
 pub(super) const PAD: f32 = 16.;
+/// …except above her (the window manager keeps the window below the top
+/// bar; her artwork has room above her head anyway).
+const TOP_PAD: f32 = 2.;
 /// Extra width beside her for the chat bubble / cards, besides the bubble's.
 const SIDE_EXTRA_W: f32 = 4.;
 /// Extra height of the grown window, besides the bubble's.
@@ -95,12 +98,12 @@ impl Placement {
     /// for the cards (as much as her monitor has, up to `CARDS_MAX_H`).
     pub fn layout(&self, (w, h): (f32, f32), grown: bool) -> ((f32, f32), (f32, f32)) {
         if !grown || self.small {
-            return ((w + 2. * PAD, h + 2. * PAD), (PAD, PAD));
+            return ((w + 2. * PAD, h + PAD + TOP_PAD), (PAD, TOP_PAD));
         }
-        let cards = PAD + h + super::points::STACK_GAP + self.cards_room((w, h)) + super::points::STACK_EDGE;
+        let cards = if self.bottom { PAD } else { TOP_PAD } + h + super::points::STACK_GAP + self.cards_room((w, h)) + super::points::STACK_EDGE;
         let size = (w + 2. * PAD + self.bubble.0 + SIDE_EXTRA_W, cards.max(self.bubble.1 + GROWN_EXTRA_H * ui::ui_scale()));
         let ox = if self.right { size.0 - w - PAD } else { PAD };
-        let oy = if self.bottom { size.1 - h - PAD } else { PAD };
+        let oy = if self.bottom { size.1 - h - PAD } else { TOP_PAD };
         (size, (ox, oy))
     }
 

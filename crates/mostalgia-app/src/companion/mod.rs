@@ -267,6 +267,8 @@ pub struct Companion {
     /// The compact card under the mouse (shown in full).
     hovered_point: Option<usize>,
     expanded: bool,
+    /// The cards are hidden (the counter on her notepad brings them back).
+    points_hidden: bool,
     /// Cards shown and how many of them compact, at the last tick.
     visible_seen: (usize, usize),
     /// Screenshots: a fixed pose.
@@ -387,6 +389,7 @@ impl Companion {
             notes: Default::default(),
             hovered_point: None,
             expanded: false,
+            points_hidden: false,
             visible_seen: (0, 0),
             demo_pose: None,
             hidden: false,
@@ -812,6 +815,7 @@ impl Companion {
             self.points_follow = true;
             self.points_unseen = 0;
             self.expanded = false;
+            self.points_hidden = false;
             self.answers.reset();
             reset = true;
         }
@@ -947,6 +951,7 @@ impl Companion {
         }
         self.points.clear();
         self.expanded = false;
+        self.points_hidden = false;
         self.points_unseen = 0;
         // (The app saves them before it opens the meeting; on the desktop it
         // waits to hear it to reload the meeting.)
@@ -1001,6 +1006,7 @@ impl Companion {
         self.turns.clear();
         self.points.clear();
         self.expanded = false;
+        self.points_hidden = false;
         self.points_follow = true;
         self.points_unseen = 0;
         self.scope_choice = None;
