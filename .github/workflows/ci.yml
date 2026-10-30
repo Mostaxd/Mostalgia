@@ -96,7 +96,7 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
     # Apple Silicon; whisper.cpp runs on Metal.
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
