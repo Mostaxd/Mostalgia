@@ -195,11 +195,12 @@ impl Drop for DesktopHost {
 }
 
 fn spawn(arg: &str) -> anyhow::Result<Running> {
-    let exe = std::env::current_exe()?;
+    // After an update on Windows: the old program (renamed), not the new one.
+    let exe = mostalgia_core::self_update::own_exe()?;
     // Only the app itself knows `--mori` / `--captions`: started from an
     // example (the screenshot tool), the child would be another screenshot
     // run, which starts her again, and so on.
-    if exe.file_stem().is_none_or(|n| n != "mostalgia-app") {
+    if exe.file_name().and_then(|n| n.to_str()).and_then(|n| n.split('.').next()) != Some("mostalgia-app") {
         anyhow::bail!("not running as mostalgia-app");
     }
     let mut child = Command::new(exe)
