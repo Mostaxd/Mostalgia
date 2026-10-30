@@ -31,6 +31,7 @@ pub mod glossary;
 pub mod gpu_check;
 pub mod i18n;
 pub mod language;
+pub mod library;
 pub mod llm;
 pub mod media_import;
 pub mod models;
