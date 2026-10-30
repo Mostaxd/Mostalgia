@@ -3497,7 +3497,7 @@ impl Render for SettingsView {
             .child(status_row(self.config.vad_model_path().exists(), "Silero VAD".into()))
             .child(status_row(diarize_ok, tr("Sprechertrennung (sherpa-onnx)").into()))
             .child(status_row(mostalgia_core::ask::embed::available(), tr("Suche für „Fragen“ (e5-small)").into()))
-            // Only the AppImage updates itself; a source build has git.
+            // Only the release builds update themselves; a source build has git.
             .when(mostalgia_core::self_update::updatable(), |el| {
                 el.child(row(
                     tr("Nach Updates suchen"),
