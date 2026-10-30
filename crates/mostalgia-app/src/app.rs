@@ -2104,6 +2104,7 @@ impl MostalgiaApp {
         }
 
         let settings_active = matches!(self.screen, Screen::Settings(_));
+        let documents_active = matches!(self.screen, Screen::Documents(_));
         v_flex()
             .id("library")
             // Audio or video files dropped here are imported as recordings.
@@ -2154,18 +2155,6 @@ impl MostalgiaApp {
                             .tooltip(if cfg!(target_os = "macos") { tr("Frag deine Besprechungen (⌘K)") } else { tr("Frag deine Besprechungen (Strg+K)") })
                             .on_click(cx.listener(|this, _, window, cx| this.open_ask(window, cx))),
                     )
-                    .child(
-                        Button::new("documents")
-                            .w_full()
-                            .ghost()
-                            .when(matches!(self.screen, Screen::Documents(_)), |b| b.selected(true))
-                            .icon(IconName::Library)
-                            .label(tr("Dokumente"))
-                            .tooltip(tr("Deine Dokumente – Antworten können sie zitieren"))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_documents(window, cx);
-                            })),
-                    )
                     .when(mostalgia_core::config::Config::load().decision_log, |el| {
                         el.child(
                             Button::new("decisions")
@@ -2208,15 +2197,32 @@ impl MostalgiaApp {
             .when_some(self.error.clone(), |el, e| el.child(div().p_3().text_xs().text_color(theme.danger).child(e)))
             .when_some(self.mori_host.problem.clone(), |el, e| el.child(div().p_3().text_xs().text_color(theme.warning).child(e)))
             .child(
-                div().p_2().border_t_1().border_color(theme.sidebar_border).child(
-                    Button::new("settings")
-                        .w_full()
-                        .ghost()
-                        .when(settings_active, |b| b.selected(true))
-                        .icon(IconName::Settings)
-                        .label(tr("Einstellungen"))
-                        .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
-                ),
+                v_flex()
+                    .p_2()
+                    .gap_1()
+                    .border_t_1()
+                    .border_color(theme.sidebar_border)
+                    .child(
+                        Button::new("documents")
+                            .w_full()
+                            .ghost()
+                            .when(documents_active, |b| b.selected(true))
+                            .icon(IconName::Library)
+                            .label(tr("Dokumente"))
+                            .tooltip(tr("Deine Dokumente – Antworten können sie zitieren"))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_documents(window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("settings")
+                            .w_full()
+                            .ghost()
+                            .when(settings_active, |b| b.selected(true))
+                            .icon(IconName::Settings)
+                            .label(tr("Einstellungen"))
+                            .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx))),
+                    ),
             )
     }
 }
