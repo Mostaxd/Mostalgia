@@ -3,10 +3,12 @@
 //! stay above other windows and sit anywhere on any monitor). The app
 //! starts this process and talks to it over stdin / stdout (see `ipc`).
 //!
-//! The window is just big enough for her, and grows towards the middle of
-//! her monitor while the chat bubble or point cards are shown, so she
-//! stays where she was put. Only her and those cards take mouse input;
-//! clicks on the transparent rest go to the windows below.
+//! The window has room beside her for the chat bubble (at its largest)
+//! and above / below her for the point cards, towards the middle of her
+//! monitor. It keeps that size while they open and close: resizing an X11
+//! window shows a frame of black and moves her for a frame. Only her, the
+//! bubble and the cards take mouse input; clicks on the transparent rest
+//! go to the windows below.
 
 use std::io::{BufRead, Write};
 use std::time::{Duration, Instant};
@@ -23,10 +25,10 @@ use crate::{AppAssets, load_fonts, ui};
 
 /// Room around her in the small window (logical px).
 pub(super) const PAD: f32 = 16.;
-/// Extra width for the chat bubble / cards beside her.
-pub(super) const SIDE_W: f32 = 404.;
-/// Minimum height of the grown window (the bubble is up to 500 px).
-pub(super) const GROWN_MIN_H: f32 = 580.;
+/// Extra width for the chat bubble / cards beside her (the bubble at its widest).
+pub(super) const SIDE_W: f32 = super::bubble::BUBBLE_MAX_W + 4.;
+/// Minimum height of the window (the bubble at its tallest).
+pub(super) const MIN_H: f32 = super::bubble::BUBBLE_MAX_H + 60.;
 /// Room for the cards above or below her without a known work area.
 pub(super) const CARDS_H: f32 = 300.;
 /// The most room the cards' list takes above or below her (it scrolls).
@@ -35,8 +37,8 @@ pub(super) const CARDS_MAX_H: f32 = 560.;
 fn side_w() -> f32 {
     SIDE_W * ui::ui_scale()
 }
-fn grown_min_h() -> f32 {
-    GROWN_MIN_H * ui::ui_scale()
+fn min_h() -> f32 {
+    MIN_H * ui::ui_scale()
 }
 fn cards_h() -> f32 {
     CARDS_H * ui::ui_scale()
@@ -87,15 +89,12 @@ impl Placement {
         (space as f32 / self.scale - super::points::STACK_GAP - super::points::STACK_EDGE).clamp(CARDS_MIN_H, cards_max_h())
     }
 
-    /// The window size and her top-left in it (logical px), small or grown.
-    /// Grown, it has room beside her for the bubble and above / below her
-    /// for the cards (as much as her monitor has, up to `CARDS_MAX_H`).
-    pub fn layout(&self, (w, h): (f32, f32), grown: bool) -> ((f32, f32), (f32, f32)) {
-        if !grown {
-            return ((w + 2. * PAD, h + 2. * PAD), (PAD, PAD));
-        }
+    /// The window size and her top-left in it (logical px): room beside
+    /// her for the bubble and above / below her for the cards (as much as
+    /// her monitor has, up to `CARDS_MAX_H`).
+    pub fn layout(&self, (w, h): (f32, f32)) -> ((f32, f32), (f32, f32)) {
         let cards = PAD + h + super::points::STACK_GAP + self.cards_room((w, h)) + super::points::STACK_EDGE;
-        let size = (w + 2. * PAD + side_w(), cards.max(grown_min_h()));
+        let size = (w + 2. * PAD + side_w(), cards.max(min_h()));
         let ox = if self.right { size.0 - w - PAD } else { PAD };
         let oy = if self.bottom { size.1 - h - PAD } else { PAD };
         (size, (ox, oy))
@@ -105,9 +104,18 @@ impl Placement {
         (v * self.scale).round() as i32
     }
 
+    /// Her monitor's work area in window coordinates (logical px), where
+    /// the bubble has to stay (the window reaches past it).
+    pub fn work_in_window(&self, mori_size: (f32, f32)) -> Option<(f32, f32, f32, f32)> {
+        let m = self.work?;
+        let (_, o) = self.layout(mori_size);
+        let (wx, wy) = (self.mori.0 as f32 / self.scale - o.0, self.mori.1 as f32 / self.scale - o.1);
+        Some((m.x as f32 / self.scale - wx, m.y as f32 / self.scale - wy, m.w as f32 / self.scale, m.h as f32 / self.scale))
+    }
+
     /// Moves / resizes the window so she stays at `self.mori`.
-    pub fn apply_window(&mut self, mori_size: (f32, f32), grown: bool) {
-        let (size, o) = self.layout(mori_size, grown);
+    pub fn apply_window(&mut self, mori_size: (f32, f32)) {
+        let (size, o) = self.layout(mori_size);
         let rect = Rect { x: self.mori.0 - self.px(o.0), y: self.mori.1 - self.px(o.1), w: self.px(size.0), h: self.px(size.1) };
         if self.applied != Some(rect) {
             if let Err(e) = self.x.move_resize(rect) {
@@ -119,8 +127,8 @@ impl Placement {
 
     /// `apply_window`, and only `input` (window rectangles, logical px)
     /// takes the mouse.
-    pub fn apply(&mut self, mori_size: (f32, f32), grown: bool, input: &[(f32, f32, f32, f32)]) {
-        self.apply_window(mori_size, grown);
+    pub fn apply(&mut self, mori_size: (f32, f32), input: &[(f32, f32, f32, f32)]) {
+        self.apply_window(mori_size);
         let input: Vec<Rect> = input
             .iter()
             .map(|&(x, y, w, h)| Rect { x: self.px(x), y: self.px(y), w: self.px(w), h: self.px(h) })
@@ -134,8 +142,8 @@ impl Placement {
     }
 
     /// Her top-left from where the window is now (after a move).
-    pub fn read_back(&mut self, mori_size: (f32, f32), grown: bool) {
-        let (_, o) = self.layout(mori_size, grown);
+    pub fn read_back(&mut self, mori_size: (f32, f32)) {
+        let (_, o) = self.layout(mori_size);
         if let Ok((x, y)) = self.x.position() {
             self.mori = (x + self.px(o.0), y + self.px(o.1));
             self.applied = None;
@@ -262,6 +270,7 @@ pub struct DesktopMori {
     demo_expanded: bool,
     demo_scrolled: bool,
     demo_menu: bool,
+    demo_chat: (bool, bool),
     replay: Option<Replay>,
     _subscriptions: Vec<Subscription>,
 }
@@ -294,7 +303,7 @@ impl DesktopMori {
         });
         let moment = cx.subscribe(&companion, |_, _, event: &super::ShowLiveMoment, _| send(&FromMori::ShowLiveMoment { secs: event.secs }));
         cx.observe_window_appearance(window, |_, window, cx| ui::apply_theme(window, cx)).detach();
-        let this = Self { companion, feed, rx, demo: demo.then(Instant::now), demo_next: 0, demo_expanded: false, demo_scrolled: false, demo_menu: false, replay: demo.then(Replay::load).flatten(), _subscriptions: vec![sub, moment] };
+        let this = Self { companion, feed, rx, demo: demo.then(Instant::now), demo_next: 0, demo_expanded: false, demo_scrolled: false, demo_menu: false, demo_chat: (false, false), replay: demo.then(Replay::load).flatten(), _subscriptions: vec![sub, moment] };
         cx.spawn_in(window, async move |this, cx| {
             loop {
                 cx.background_executor().timer(Duration::from_millis(50)).await;
@@ -448,6 +457,19 @@ impl DesktopMori {
             self.demo_menu = true;
             eprintln!("[mori] demo: menu");
             self.companion.update(cx, |c, cx| c.demo_menu(Some((54., 44.)), cx));
+        }
+        // MORI_DEMO_CHAT_AT=<s> / MORI_DEMO_CHAT_CLOSE_AT=<s>: her chat
+        // bubble opens / closes then.
+        for (name, close) in [("MORI_DEMO_CHAT_AT", false), ("MORI_DEMO_CHAT_CLOSE_AT", true)] {
+            let done = if close { &mut self.demo_chat.1 } else { &mut self.demo_chat.0 };
+            if let Some(e) = at(name)
+                && t >= e
+                && !*done
+            {
+                *done = true;
+                eprintln!("[mori] demo: chat {}", if close { "closed" } else { "opened" });
+                self.companion.update(cx, |c, cx| c.demo_open_chat(!close, cx));
+            }
         }
         if let Some(e) = at("MORI_DEMO_SCROLL_AT")
             && t >= e

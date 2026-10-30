@@ -516,6 +516,7 @@ impl RecordingView {
         self.config.companion_clear_button = disk.companion_clear_button;
         self.config.companion_desktop = disk.companion_desktop;
         self.config.companion_desktop_pos = disk.companion_desktop_pos;
+        self.config.companion_bubble_size = disk.companion_bubble_size;
         self.config.companion_hidden = disk.companion_hidden;
         self.config.companion_bar_indicator = disk.companion_bar_indicator;
         // So is the audio cleanup (its dialog).

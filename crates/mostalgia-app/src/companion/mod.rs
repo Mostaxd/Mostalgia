@@ -475,15 +475,10 @@ impl Companion {
         ((self.viewport.0 - w - 2. * MARGIN).max(0.), (self.viewport.1 - h - 2. * MARGIN).max(0.))
     }
 
-    /// On the desktop: whether her window is grown for the bubble or cards.
-    fn grown(&self) -> bool {
-        self.open || self.expanded || self.error.is_some() || self.ctl.menu.is_some() || !self.visible_points().is_empty()
-    }
-
     /// Her top-left in window coordinates.
     fn origin(&self) -> Point2 {
         if let Some(p) = &self.desktop {
-            let (_, (x, y)) = p.layout(self.size(), self.grown());
+            let (_, (x, y)) = p.layout(self.size());
             return Point2 { x, y };
         }
         let (rx, ry) = self.room();
@@ -549,9 +544,9 @@ impl Companion {
                 let d = *d;
                 if let Ok((px_, py_, _)) = p.x.pointer() {
                     p.mori = (d.window.0 + px_ - d.pointer.0, d.window.1 + py_ - d.pointer.1);
-                    let (size, grown) = (self.size(), self.grown());
+                    let size = self.size();
                     if let Some(p) = &mut self.desktop {
-                        p.apply_window(size, grown);
+                        p.apply_window(size);
                     }
                 }
             }
@@ -606,10 +601,10 @@ impl Companion {
     /// A drag of her desktop window ended: where is she now? Keeps her on
     /// a monitor, turns the bubble towards its middle and remembers it.
     fn end_desktop_drag(&mut self, wm_moved: bool) {
-        let (size, grown) = (self.size(), self.grown());
+        let size = self.size();
         let Some(p) = &mut self.desktop else { return };
         if wm_moved {
-            p.read_back(size, grown);
+            p.read_back(size);
         }
         p.drag = None;
         p.settle(size);
@@ -621,11 +616,10 @@ impl Companion {
     /// place, and lets only her, the bubble and the cards take the mouse.
     fn place_desktop_window(&mut self, o: Point2) {
         let (w, h) = self.size();
-        let grown = self.grown();
         let cards = self.expanded || self.error.is_some() || !self.visible_points().is_empty();
         let open = self.open;
         let Some(p) = &self.desktop else { return };
-        let ((vw, vh), _) = p.layout((w, h), grown);
+        let ((vw, vh), _) = p.layout((w, h));
         self.viewport = (vw, vh);
         let menu = self.menu_rect(o);
         // While the window manager moves the window, leave it alone.
@@ -638,9 +632,19 @@ impl Companion {
         if let Some(m) = menu {
             input.push(m);
         }
-        if open {
-            // The bubble's side, full height.
-            input.push(if p.right { (0., 0., (o.x - 4.).max(0.), vh) } else { (o.x + w + 4., 0., vw - (o.x + w + 4.), vh) });
+        if self.bubble.resizing() {
+            // The whole window, so the mouse isn't lost while resizing.
+            input.push((0., 0., vw, vh));
+        } else if open {
+            // The bubble as painted last (a frame behind: `tick` re-renders
+            // when it changes), else its whole side.
+            let b = self.bubble.bounds.get();
+            self.bubble.applied = b;
+            input.push(match b {
+                Some(b) => (f32::from(b.origin.x) - 2., f32::from(b.origin.y) - 2., f32::from(b.size.width) + 4., f32::from(b.size.height) + 4.),
+                None if p.right => (0., 0., (o.x - 4.).max(0.), vh),
+                None => (o.x + w + 4., 0., vw - (o.x + w + 4.), vh),
+            });
         }
         if cards {
             // The stack as painted last (a frame behind: `tick` re-renders
@@ -658,7 +662,7 @@ impl Companion {
             input.push(rect);
         }
         if let Some(p) = &mut self.desktop {
-            p.apply((w, h), grown, &input);
+            p.apply((w, h), &input);
         }
     }
 
@@ -847,7 +851,7 @@ impl Companion {
         changed |= visible != self.visible_seen;
         self.visible_seen = visible;
         // The stack's size changed: her window's input region follows.
-        if self.desktop.is_some() && self.stack_bounds.get() != self.stack_applied {
+        if self.desktop.is_some() && (self.stack_bounds.get() != self.stack_applied || self.bubble.bounds.get() != self.bubble.applied) {
             changed = true;
         }
 
@@ -1113,6 +1117,32 @@ impl Render for Companion {
             .children(badge)
             .children(bubble)
             .children(menu)
+            // While resizing the bubble, a layer over everything follows the
+            // mouse wherever it goes.
+            .when(self.bubble.resizing(), |el| {
+                let this = cx.entity().downgrade();
+                el.child(
+                    div()
+                        .id("mori-bubble-resizing")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .child(canvas(|_, _, _| {}, move |_, _, window, _| {
+                            let (moved, up) = (this.clone(), this.clone());
+                            window.on_mouse_event(move |ev: &MouseMoveEvent, phase, _, cx| {
+                                if phase == DispatchPhase::Capture {
+                                    moved.update(cx, |this, cx| this.resize_move(ev, cx)).ok();
+                                }
+                            });
+                            window.on_mouse_event(move |ev: &MouseUpEvent, phase, _, cx| {
+                                if phase == DispatchPhase::Capture && ev.button == MouseButton::Left {
+                                    up.update(cx, |this, cx| this.resize_end(cx)).ok();
+                                }
+                            });
+                        }).absolute().size_full()),
+                )
+            })
             // While dragging, a layer over everything keeps the mouse even
             // when it outruns her.
             .when(self.drag.is_some(), |el| {

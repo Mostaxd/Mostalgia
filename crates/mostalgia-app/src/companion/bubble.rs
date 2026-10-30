@@ -1,6 +1,8 @@
 //! Mori's chat bubble: questions about the meeting being recorded (from
 //! the live transcript) or about all meetings (the "Fragen" pipeline).
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui_kit::assets::IconName;
@@ -21,13 +23,21 @@ use super::{ChatRx, Companion, MoriError, MoriEvent, Point2, Scope, Setup, Turn}
 use crate::ui;
 
 const BUBBLE_W: f32 = 400.;
-const BUBBLE_MAX_H: f32 = 520.;
-/// The bubble's size at the app's text size.
-fn bubble_w() -> f32 {
-    BUBBLE_W * ui::ui_scale()
-}
-fn bubble_max_h() -> f32 {
-    BUBBLE_MAX_H * ui::ui_scale()
+const BUBBLE_DEFAULT_MAX_H: f32 = 520.;
+/// How small and large it can be resized (her desktop window keeps room
+/// for the largest).
+const BUBBLE_MIN_W: f32 = 300.;
+const BUBBLE_MIN_H: f32 = 240.;
+pub(super) const BUBBLE_MAX_W: f32 = 720.;
+pub(super) const BUBBLE_MAX_H: f32 = 860.;
+/// The resize grip in its corner.
+const GRIP: f32 = 14.;
+/// The bubble's width and its (most) height at the app's text size: the
+/// size it was resized to (that height exactly), else the default (as tall
+/// as its content, up to `BUBBLE_DEFAULT_MAX_H`).
+fn bubble_size(resized: Option<(f32, f32)>) -> (f32, f32) {
+    let (w, h) = resized.unwrap_or((BUBBLE_W, BUBBLE_DEFAULT_MAX_H));
+    (w * ui::ui_scale(), h * ui::ui_scale())
 }
 /// How long "Chat cleared · Undo" stays.
 const UNDO_FOR: Duration = Duration::from_secs(6);
@@ -48,6 +58,29 @@ pub(crate) struct BubbleState {
     undo: Option<Undo>,
     /// Show the "New chat" button (`Config::companion_clear_button`).
     clear_button: bool,
+    /// The size it was resized to (`Config::companion_bubble_size`).
+    pub(super) size: Option<(f32, f32)>,
+    /// A resize in progress.
+    resize: Option<Resize>,
+    /// Its bounds at the last paint, and as last given to the desktop
+    /// window's input region.
+    pub(super) bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    pub(super) applied: Option<Bounds<Pixels>>,
+}
+
+impl BubbleState {
+    pub(super) fn resizing(&self) -> bool {
+        self.resize.is_some()
+    }
+}
+
+/// The grip was pressed here (window coordinates) with the bubble at this
+/// size; `left` = the grip is on its left side (it grows to the left).
+#[derive(Clone, Copy)]
+struct Resize {
+    mouse: (f32, f32),
+    from: (f32, f32),
+    left: bool,
 }
 
 struct Undo {
@@ -60,6 +93,9 @@ impl Companion {
     pub(super) fn load_setup(&mut self) {
         let config = Config::load();
         self.bubble.clear_button = config.companion_clear_button;
+        if self.bubble.resize.is_none() {
+            self.bubble.size = config.companion_bubble_size;
+        }
         self.setup = Some(match config.ask_request() {
             Ok(req) => Setup {
                 name: req.connection.name.clone(),
@@ -69,6 +105,13 @@ impl Companion {
             },
             Err(e) => Setup { name: String::new(), model: String::new(), local: None, problem: Some(format!("{e:#}")) },
         });
+    }
+
+    /// `--demo`: opens or closes the bubble.
+    pub(crate) fn demo_open_chat(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.open != open {
+            self.toggle_bubble(cx);
+        }
     }
 
     pub(super) fn toggle_bubble(&mut self, cx: &mut Context<Self>) {
@@ -439,6 +482,41 @@ impl Companion {
             .into_any_element()
     }
 
+    fn start_resize(&mut self, ev: &MouseDownEvent, left: bool, cx: &mut Context<Self>) {
+        let scale = ui::ui_scale();
+        let (w, h) = self.bubble.bounds.get().map_or(bubble_size(self.bubble.size), |b| (f32::from(b.size.width), f32::from(b.size.height)));
+        self.bubble.resize = Some(Resize { mouse: (ev.position.x.into(), ev.position.y.into()), from: (w / scale, h / scale), left });
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    /// The mouse moved while resizing (any place in the window).
+    pub(super) fn resize_move(&mut self, ev: &MouseMoveEvent, cx: &mut Context<Self>) {
+        let Some(r) = self.bubble.resize else { return };
+        let scale = ui::ui_scale();
+        let dx = (f32::from(ev.position.x) - r.mouse.0) / scale;
+        let dy = (f32::from(ev.position.y) - r.mouse.1) / scale;
+        let w = if r.left { r.from.0 - dx } else { r.from.0 + dx };
+        let size = Some((w.clamp(BUBBLE_MIN_W, BUBBLE_MAX_W).round(), (r.from.1 + dy).clamp(BUBBLE_MIN_H, BUBBLE_MAX_H).round()));
+        if size != self.bubble.size {
+            self.bubble.size = size;
+            cx.notify();
+        }
+    }
+
+    /// The resize ended: the bubble keeps that size.
+    pub(super) fn resize_end(&mut self, cx: &mut Context<Self>) {
+        if self.bubble.resize.take().is_none() {
+            return;
+        }
+        let mut config = Config::load();
+        config.companion_bubble_size = self.bubble.size;
+        if let Err(e) = config.save() {
+            eprintln!("[mostalgia] saving the bubble's size: {e:#}");
+        }
+        cx.notify();
+    }
+
     /// The bubble shows the Notes tab.
     fn bubble_notes(&self) -> bool {
         self.ctl.notes_tab
@@ -446,6 +524,7 @@ impl Companion {
 
     pub(super) fn render_bubble(&mut self, o: Point2, (w, h): (f32, f32), cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.open {
+            self.bubble.bounds.set(None);
             return None;
         }
         if self.setup.is_none() {
@@ -454,18 +533,36 @@ impl Companion {
         let setup = self.setup.clone()?;
         let theme = cx.theme().clone();
         let (vw, vh) = self.viewport;
-        let width = bubble_w().min(vw - 16.);
+        // Where it has to fit: the window, and on the desktop her monitor's
+        // work area (her window reaches past it).
+        let size = self.size();
+        let (ax, ay, aw, ah) = match &self.desktop {
+            Some(p) => p.work_in_window(size).and_then(|(x, y, w, h)| {
+                let (x0, y0) = (x.max(0.), y.max(0.));
+                let (x1, y1) = ((x + w).min(vw), (y + h).min(vh));
+                (x1 - x0 > 100. && y1 - y0 > 100.).then_some((x0, y0, x1 - x0, y1 - y0))
+            }),
+            None => None,
+        }
+        .unwrap_or((0., 0., vw, vh));
+        let resized = self.bubble.size.is_some();
+        let (want_w, want_h) = bubble_size(self.bubble.size);
+        let width = want_w.min(aw - 16.);
         // Beside her, on the side with room; over her on very narrow windows.
-        let right_room = vw - (o.x + w);
-        let left = if o.x >= width + 12. && (o.x + w / 2. > vw / 2. || right_room < width + 12.) {
+        let right_room = ax + aw - (o.x + w);
+        let left_room = o.x - ax;
+        let on_left = left_room >= width + 12. && (o.x + w / 2. > ax + aw / 2. || right_room < width + 12.);
+        let left = if on_left {
             o.x - width - 8.
         } else if right_room >= width + 12. {
             o.x + w + 8.
         } else {
-            (vw - width - 8.).max(8.)
+            (ax + aw - width - 8.).max(ax + 8.)
         };
-        let max_h = bubble_max_h().min(vh - 56.);
-        let top = (o.y + h * 0.1).min(vh - max_h - 8.).max(48.);
+        // (The app window keeps room for its title bar.)
+        let top_min = if self.desktop.is_some() { ay + 8. } else { 48. };
+        let max_h = want_h.min(ay + ah - 8. - top_min);
+        let top = (o.y + h * 0.1).min(ay + ah - max_h - 8.).max(top_min);
         let recording = self.recording.read(cx).is_recording();
         let scope = self.scope(cx);
         let busy = self.chat_rx.is_some();
@@ -694,6 +791,7 @@ impl Companion {
 
         let notes = if notes_tab { self.render_notes_tab(cx) } else { div().into_any_element() };
         let choice = self.render_choice_popup(cx);
+        let bounds = self.bubble.bounds.clone();
         let input_row = h_flex()
             .gap_2()
             .p_3()
@@ -721,7 +819,7 @@ impl Companion {
                 .left(px(left))
                 .top(px(top))
                 .w(px(width))
-                .max_h(px(max_h))
+                .map(|el| if resized { el.h(px(max_h)) } else { el.max_h(px(max_h)) })
                 .rounded(theme.radius_lg)
                 .border(ui::border_width(cx))
                 .border_color(theme.border)
@@ -750,6 +848,19 @@ impl Companion {
                 }))
                 .when(!notes_tab, |el| el.child(input_row))
                 .children(choice)
+                // The resize grip in the bottom corner away from her.
+                .child(
+                    div()
+                        .id("mori-bubble-resize")
+                        .absolute()
+                        .bottom_0()
+                        .size(px(GRIP))
+                        .map(|el| if on_left { el.left_0() } else { el.right_0() })
+                        .cursor(if on_left { CursorStyle::ResizeUpRightDownLeft } else { CursorStyle::ResizeUpLeftDownRight })
+                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, ev: &MouseDownEvent, _, cx| this.start_resize(ev, on_left, cx))),
+                )
+                // Measures the bubble (her desktop window lets only it take the mouse).
+                .child(canvas(move |b, _, _| bounds.set(Some(b)), |_, _, _, _| {}).absolute().top_0().left_0().size_full())
                 .into_any_element(),
         )
     }
