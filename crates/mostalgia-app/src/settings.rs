@@ -1397,26 +1397,17 @@ impl SettingsView {
                 .into_any_element()
         });
         let style_hint = format!("{} {}", style_now.hint(), trf("Für eine Aufnahme änderst du ihn in der Sprechblase von {}.", &[&name]));
-        // Which connection and model write the notes ("Wie Fragen" = the ask one).
-        let notes_picker = notes_on.then(|| {
-            let separate = !self.config.companion_notes_provider.is_empty();
-            let notes_id = self.config.companion_notes_provider.clone();
-            let label = match self.config.notes_request() {
-                Ok(req) if separate => format!("{} · {}", req.connection.name, self.model_label(&req.connection.id, &req.model)),
-                _ if separate => self.config.connection(&notes_id).map_or(notes_id.clone(), |c| self.conn_label(c)),
-                _ => tr("Wie Fragen (Ask)").to_string(),
+        // The model is chosen with the others, under KI & Transkription.
+        let notes_model = notes_on.then(|| {
+            let used = match self.config.notes_request() {
+                Ok(req) => trf("Nutzt {} · {}", &[&req.connection.name, &self.model_label(&req.connection.id, &req.model)]),
+                Err(e) => format!("{e:#}"),
             };
-            let mut items: Vec<Choice> = vec![(tr("Wie Fragen (Ask)").into(), !separate, Some(Pick::NotesConn(None)))];
-            items.extend(self.config.connections.iter().map(|c| (self.conn_label(c), separate && c.id == notes_id, Some(Pick::NotesConn(Some(c.id.clone()))))));
-            let conn_picker = self.picker("mori-notes-conn", label, items, cx);
-            let model_picker = separate.then(|| {
-                let model = self.config.notes_request().map(|r| r.model).unwrap_or_default();
-                let items = self.model_choices(Slot::Notes, &notes_id, &model);
-                self.picker("mori-notes-model", self.model_label(&notes_id, &model), items, cx)
-            });
-            h_flex().flex_wrap().gap_1().child(conn_picker).children(model_picker).into_any_element()
+            v_flex()
+                .gap_0p5()
+                .child(div().text_sm().child(used))
+                .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Ändern unter KI & Transkription → Zusammenfassungen & Fragen.")))
         });
-        let notes_custom = self.custom_model_row(Slot::Notes, cx);
         let mode_hint = match notes_mode {
             NotesMode::Live => tr("Sieht nach jedem fertigen Satz kurz nach – Notizen erscheinen wenige Sekunden, nachdem etwas gesagt wurde.").to_string(),
             NotesMode::Every(_) => tr("Sucht nach so vielen Sekunden neuer Sprache nach neuen Notizen.").to_string(),
@@ -1437,8 +1428,7 @@ impl SettingsView {
                         div().w(px(280.)).child(Input::new(&self.notes_focus).small()).into_any_element(),
                     ))
             })
-            .children(notes_picker.map(|p| row(tr("Modell für Live-Notizen"), Some(tr("Ein schnelles Modell reicht; gedacht wird dabei so wenig wie möglich.")), p)))
-            .children(notes_custom)
+            .children(notes_model)
     }
 
     /// Motion (the app-wide setting, mirrored here).
@@ -2335,6 +2325,27 @@ impl SettingsView {
 
         let summary_custom = self.custom_model_row(Slot::Summary, cx);
         let ask_custom = self.custom_model_row(Slot::Ask, cx);
+        // The companion's live notes (and live answers) have their own model.
+        let companion = self.config.character().map(|c| c.name());
+        let notes_picker = companion.is_some().then(|| {
+            let separate = !self.config.companion_notes_provider.is_empty();
+            let notes_id = self.config.companion_notes_provider.clone();
+            let label = match self.config.notes_request() {
+                Ok(req) if separate => format!("{} · {}", req.connection.name, self.model_label(&req.connection.id, &req.model)),
+                _ if separate => self.config.connection(&notes_id).map_or(notes_id.clone(), |c| self.conn_label(c)),
+                _ => tr("Wie Fragen (Ask)").to_string(),
+            };
+            let mut items: Vec<Choice> = vec![(tr("Wie Fragen (Ask)").into(), !separate, Some(Pick::NotesConn(None)))];
+            items.extend(conns.iter().map(|c| (self.conn_label(c), separate && c.id == notes_id, Some(Pick::NotesConn(Some(c.id.clone()))))));
+            let conn_picker = self.picker("mori-notes-conn", label, items, cx);
+            let model_picker = separate.then(|| {
+                let model = self.config.notes_request().map(|r| r.model).unwrap_or_default();
+                let items = self.model_choices(Slot::Notes, &notes_id, &model);
+                self.picker("mori-notes-model", self.model_label(&notes_id, &model), items, cx)
+            });
+            h_flex().flex_wrap().gap_1().child(conn_picker).children(model_picker).into_any_element()
+        });
+        let notes_custom = companion.is_some().then(|| self.custom_model_row(Slot::Notes, cx)).flatten();
         let summary_effort_row = (!summary_efforts.is_empty()).then(|| self.effort_row(Slot::Summary, &summary_efforts, cx));
         let ask_effort_row = (!ask_efforts.is_empty()).then(|| self.effort_row(Slot::Ask, &ask_efforts, cx));
         let summary_privacy = self.privacy_line(&summary_id, cx);
@@ -2384,6 +2395,17 @@ impl SettingsView {
             .children(ask_custom)
             .children(ask_effort_row)
             .child(ask_privacy)
+            .when_some(companion.zip(notes_picker), |el, (name, picker)| {
+                el.child(div().h(px(1.)).bg(theme.border))
+                    .child(ui::section_title(tr("BEGLEITERIN"), cx))
+                    .child(div().text_xs().text_color(theme.muted_foreground).child(trf("Der Chat mit {} nutzt die Verbindung für Fragen.", &[&name])))
+                    .child(row(
+                        tr("Modell für Live-Notizen"),
+                        Some(&trf("Auch für Live-Antworten von {}. Ein schnelles Modell reicht; gedacht wird dabei so wenig wie möglich.", &[&name])),
+                        picker,
+                    ))
+                    .children(notes_custom)
+            })
     }
 
     fn stt_hint(&self, choice: &SttChoice) -> String {
@@ -3260,7 +3282,7 @@ impl Render for SettingsView {
         cards.push(Card {
             category: Category::Ki,
             title: "Zusammenfassungen & Fragen",
-            keywords: "ki ai zusammenfassung zusammenfassungen summary summaries fragen ask modell model denktiefe thinking effort reasoning automatisch automatic claude openai ollama deepseek lokal local cloud",
+            keywords: "ki ai zusammenfassung zusammenfassungen summary summaries fragen ask modell model denktiefe thinking effort reasoning automatisch automatic claude openai ollama deepseek lokal local cloud begleiterin companion mori tsumugi hoshi live notizen notes antworten answers chat",
             wide: false,
             element: self.render_ai_use(cx).into_any_element(),
         });
