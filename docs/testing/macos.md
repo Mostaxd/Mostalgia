@@ -11,7 +11,7 @@ Thanks for testing! This is an early Mac build, and your results decide what get
 
 ## 1. Install
 
-1. Open https://github.com/Mostaxd/Mostalgia/actions/runs/40975201713, scroll to **Artifacts** and download **Mostalgia-macOS-arm64.dmg**. You need a free GitHub account. Unzip the download.
+1. Open https://github.com/Mostaxd/Mostalgia/actions/runs/40988331482, scroll to **Artifacts** and download **Mostalgia-macOS-arm64.dmg**. You need a free GitHub account. Unzip the download.
 2. Open the DMG and drag **Mostalgia** into **Applications**.
 3. The app isn't signed by Apple yet, so macOS blocks it at first. Open it once, then go to **System Settings → Privacy & Security** and click **Open Anyway** near the bottom.
 4. If macOS says the app is "damaged", run this in Terminal, then open it again:

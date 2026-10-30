@@ -11,7 +11,7 @@ Thanks for testing! This is an early Windows build, and your results decide what
 
 ## 1. Install
 
-1. Open https://github.com/Mostaxd/Mostalgia/actions/runs/40975201713, scroll to **Artifacts** and download **Mostalgia-windows-x86_64**. You need a free GitHub account.
+1. Open https://github.com/Mostaxd/Mostalgia/actions/runs/40988331482, scroll to **Artifacts** and download **Mostalgia-windows-x86_64**. You need a free GitHub account.
 2. Unzip it. Inside is `Mostalgia-windows-x86_64.zip`; unzip that into a folder of your own, for example `C:\Users\<you>\Mostalgia`.
    - **Not** into Program Files: updates need to write to this folder.
 3. Run **mostalgia-app.exe**. If **"Windows protected your PC"** appears, click **More info → Run anyway**.
