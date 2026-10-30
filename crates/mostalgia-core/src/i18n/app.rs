@@ -18,6 +18,7 @@ pub const EN: &[(&str, &str)] = &[
     ("Aufnahme läuft", "Recording"),
     ("Fragen", "Ask"),
     ("Frag deine Besprechungen (Strg+K)", "Ask your meetings (Ctrl+K)"),
+    ("Frag deine Besprechungen (⌘K)", "Ask your meetings (⌘K)"),
     ("Transkripte durchsuchen", "Search transcripts"),
     ("HEUTE", "TODAY"),
     ("GESTERN", "YESTERDAY"),
@@ -44,6 +45,18 @@ pub const EN: &[(&str, &str)] = &[
     (
         "Der NVIDIA-Treiber läuft, aber Vulkan findet die Karte nicht – der Vulkan-Teil des Treibers fehlt vermutlich.",
         "The NVIDIA driver is running, but Vulkan can't find the card. The driver's Vulkan part is probably missing.",
+    ),
+    (
+        "Der NVIDIA-Treiber läuft, aber Vulkan findet die Karte nicht. Installiere den aktuellen Treiber von nvidia.com/drivers neu.",
+        "The NVIDIA driver is running, but Vulkan can't find the card. Reinstall the current driver from nvidia.com/drivers.",
+    ),
+    (
+        "Windows fehlt die Vulkan-Laufzeit (vulkan-1.dll), die der Grafiktreiber mitbringt. Installiere den aktuellen Treiber von nvidia.com/drivers.",
+        "Windows is missing the Vulkan runtime (vulkan-1.dll) that comes with the graphics driver. Install the current driver from nvidia.com/drivers.",
+    ),
+    (
+        "Der NVIDIA-Treiber {} ist zu alt für Whisper auf der Grafikkarte. Installiere den aktuellen Treiber von nvidia.com/drivers.",
+        "NVIDIA driver {} is too old for Whisper on the graphics card. Install the current driver from nvidia.com/drivers.",
     ),
     ("Treiber installiert. Starte den Computer neu, damit er geladen wird.", "Driver installed. Restart your computer to load it."),
     ("Hat nicht geklappt: {}", "That didn't work: {}"),

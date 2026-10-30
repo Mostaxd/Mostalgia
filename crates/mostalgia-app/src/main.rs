@@ -1,3 +1,8 @@
+// Release builds on Windows are GUI programs: no console window behind
+// the app (its stdin/stdout pipes to Mori's and the captions' processes
+// work all the same).
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 use gpui_kit::component::{Root, TitleBar};
 use gpui_kit::*;
 use mostalgia_app::{AppAssets, app, load_fonts, ui};
@@ -5,6 +10,9 @@ use mostalgia_app::{AppAssets, app, load_fonts, ui};
 actions!(mostalgia, [Quit]);
 
 fn main() {
+    // Windows groups the app's windows and shows its toasts under this id.
+    #[cfg(windows)]
+    mostalgia_app::win_identity::set_process_id();
     // Mori on the desktop: her own small always-on-top window (started by
     // the app; `--demo` runs her alone with a fake recording).
     if std::env::args().any(|a| a == "--mori") {
@@ -15,6 +23,14 @@ fn main() {
     if std::env::args().any(|a| a == "--captions") {
         mostalgia_app::companion::captions::run(std::env::args().any(|a| a == "--demo"));
         return;
+    }
+    // What an update on Windows left behind (no-op elsewhere).
+    mostalgia_core::self_update::cleanup();
+    // The Start Menu entry toasts are shown under (installed copies only,
+    // not development builds).
+    #[cfg(windows)]
+    if mostalgia_core::self_update::running_install().is_some() {
+        mostalgia_app::win_identity::ensure_shortcut();
     }
     gpui_kit::application().with_assets(AppAssets).run(|cx: &mut App| {
         gpui_kit::init(cx);
@@ -32,11 +48,28 @@ fn main() {
             KeyBinding::new("ctrl-0", app::ZoomReset, None),
             KeyBinding::new("delete", app::DeleteSelected, Some("Library")),
         ]);
+        // macOS: the same with the Command key, and quitting with the
+        // window (as elsewhere) rather than living on without one.
+        #[cfg(target_os = "macos")]
+        {
+            cx.bind_keys([
+                KeyBinding::new("cmd-q", Quit, None),
+                KeyBinding::new("cmd-k", app::OpenAsk, None),
+                KeyBinding::new("cmd-=", app::ZoomIn, None),
+                KeyBinding::new("cmd-+", app::ZoomIn, None),
+                KeyBinding::new("cmd-shift-=", app::ZoomIn, None),
+                KeyBinding::new("cmd--", app::ZoomOut, None),
+                KeyBinding::new("cmd-0", app::ZoomReset, None),
+                KeyBinding::new("cmd-backspace", app::DeleteSelected, Some("Library")),
+            ]);
+            cx.set_quit_mode(QuitMode::LastWindowClosed);
+        }
         cx.on_action(|_: &Quit, cx| cx.quit());
         cx.on_action(|_: &app::ZoomIn, cx| app::MostalgiaApp::zoom_unfocused(Some(true), cx));
         cx.on_action(|_: &app::ZoomOut, cx| app::MostalgiaApp::zoom_unfocused(Some(false), cx));
         cx.on_action(|_: &app::ZoomReset, cx| app::MostalgiaApp::zoom_unfocused(None, cx));
 
+        let minimized = std::env::args().any(|a| a == "--minimized");
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(1240.), px(820.)), cx)),
             window_min_size: Some(size(px(860.), px(560.))),
@@ -51,9 +84,15 @@ fn main() {
             if std::env::args().any(|a| a == "--start") {
                 view.update(cx, |app, cx| app.start_recording(cx));
             }
+            // Started with the system (see `login_start`): out of the way.
+            if minimized {
+                window.minimize_window();
+            }
             cx.new(|cx| Root::new(view, window, cx))
         })
         .expect("failed to open the window");
-        cx.activate(true);
+        if !minimized {
+            cx.activate(true);
+        }
     });
 }

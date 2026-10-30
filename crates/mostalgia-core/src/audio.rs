@@ -54,6 +54,11 @@ impl Source {
     }
 }
 
+/// The system-audio device used when none is chosen: Pulse's name for the
+/// monitor of the default output. Elsewhere it means the default output
+/// too (see `spawn_capture`).
+pub const DEFAULT_MONITOR: &str = "@DEFAULT_MONITOR@";
+
 pub struct Block {
     pub source: Source,
     /// Live audio (empty for a silent block).
@@ -241,15 +246,54 @@ pub fn spawn_capture(
     }))
 }
 
+/// Capture one source at 16 kHz mono f32, archive it to a WAV file, and
+/// stream fixed-size blocks to the live transcriber (see `audio_pump`).
+/// The microphone goes through cpal (`audio_cpal`); system audio through
+/// each OS's own capture, see [`spawn_system_capture`].
 #[cfg(not(target_os = "linux"))]
 pub fn spawn_capture(
-    _source: Source,
-    _device: Option<String>,
-    _wav_path: PathBuf,
-    _tx: Sender<Block>,
-    _ctl: CaptureCtl,
+    source: Source,
+    device: Option<String>,
+    wav_path: PathBuf,
+    tx: Sender<Block>,
+    ctl: CaptureCtl,
 ) -> Result<JoinHandle<Result<()>>> {
-    anyhow::bail!("{}", crate::i18n::tr("Audioaufnahme ist auf diesem System noch nicht verfügbar"))
+    match source {
+        Source::Mic => crate::audio_cpal::spawn_input_capture(device, wav_path, tx, ctl),
+        Source::System => spawn_system_capture(device, wav_path, tx, ctl),
+    }
+}
+
+/// System audio (the other side of a call): the hook where each OS plugs
+/// in its own capture. `device` is `None` / [`DEFAULT_MONITOR`] for the
+/// default output, or a `name` from [`system_sources`].
+///
+/// - Windows: WASAPI loopback through cpal (`audio_cpal`).
+/// - macOS: `crate::audio_macos::spawn_system_capture(device, wav_path,
+///   tx, ctl)`, with this same signature (see that module).
+#[cfg(not(target_os = "linux"))]
+fn spawn_system_capture(device: Option<String>, wav_path: PathBuf, tx: Sender<Block>, ctl: CaptureCtl) -> Result<JoinHandle<Result<()>>> {
+    #[cfg(target_os = "windows")]
+    return crate::audio_cpal::spawn_loopback_capture(device, wav_path, tx, ctl);
+    #[cfg(target_os = "macos")]
+    return crate::audio_macos::spawn_system_capture(device, wav_path, tx, ctl);
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = (device, wav_path, tx, ctl);
+        anyhow::bail!("{}", crate::i18n::tr("Audioaufnahme ist auf diesem System noch nicht verfügbar"))
+    }
+}
+
+/// The system-audio entries of the device list (`is_monitor: true`), per OS
+/// like [`spawn_system_capture`].
+#[cfg(not(target_os = "linux"))]
+fn system_sources() -> Result<Vec<SourceInfo>> {
+    #[cfg(target_os = "windows")]
+    return crate::audio_cpal::loopback_sources();
+    #[cfg(target_os = "macos")]
+    return crate::audio_macos::list_system_sources();
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    Ok(Vec::new())
 }
 
 /// Hands a capture's blocks to the live transcriber without ever waiting
@@ -464,9 +508,16 @@ pub fn list_sources() -> Result<Vec<SourceInfo>> {
     Ok(sources.take())
 }
 
+/// Lists inputs (through cpal) and the system-audio sources of this OS
+/// (as monitors), marking the defaults.
 #[cfg(not(target_os = "linux"))]
 pub fn list_sources() -> Result<Vec<SourceInfo>> {
-    anyhow::bail!("{}", crate::i18n::tr("Audioaufnahme ist auf diesem System noch nicht verfügbar"))
+    let mut sources = crate::audio_cpal::input_sources()?;
+    match system_sources() {
+        Ok(system) => sources.extend(system),
+        Err(e) => eprintln!("[mostalgia] listing system-audio sources: {e:#}"),
+    }
+    Ok(sources)
 }
 
 /// Records `secs` from a source (without saving) and returns the loudest
@@ -493,9 +544,19 @@ pub fn measure_level(device: Option<&str>, secs: f32) -> Result<f32> {
     Ok(peak)
 }
 
+/// Records `secs` from a source (without saving) and returns the loudest
+/// 100 ms RMS — for a "test device" button. A system-audio device
+/// ([`DEFAULT_MONITOR`] or one of the monitors listed) is recorded as such.
 #[cfg(not(target_os = "linux"))]
-pub fn measure_level(_device: Option<&str>, _secs: f32) -> Result<f32> {
-    anyhow::bail!("{}", crate::i18n::tr("Audioaufnahme ist auf diesem System noch nicht verfügbar"))
+pub fn measure_level(device: Option<&str>, secs: f32) -> Result<f32> {
+    let system = match device {
+        None => false,
+        Some(DEFAULT_MONITOR) => true,
+        Some(name) => system_sources().is_ok_and(|s| s.iter().any(|s| s.name == name)),
+    };
+    let source = if system { Source::System } else { Source::Mic };
+    let device = device.map(str::to_string);
+    crate::audio_pump::measure_with(secs, move |path, tx, ctl| spawn_capture(source, device, path, tx, ctl))
 }
 
 #[cfg(test)]

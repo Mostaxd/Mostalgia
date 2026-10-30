@@ -7,7 +7,7 @@ pub const VAD_MODEL: &str = "ggml-silero-v5.1.2.bin";
 /// database, recordings and models live here. `MOSTALGIA_DATA_DIR`
 /// overrides it (e.g. for a separate demo library). On Windows it is the
 /// local AppData folder, so gigabytes of models and audio don't roam with
-/// the profile.
+/// the profile. On macOS it is `~/Library/Application Support/mostalgia`.
 pub fn data_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("MOSTALGIA_DATA_DIR") {
         return PathBuf::from(dir);

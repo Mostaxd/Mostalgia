@@ -60,7 +60,17 @@ fn alive(pid: u32) -> bool {
     if pid == std::process::id() {
         return true;
     }
-    std::fs::read(format!("/proc/{pid}/cmdline")).is_ok_and(|c| String::from_utf8_lossy(&c).contains("mostalgia"))
+    #[cfg(not(target_os = "macos"))]
+    let command = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+    // No /proc on macOS: the executable's path (its name is mostalgia-app
+    // or mostalgia, inside Mostalgia.app or not).
+    #[cfg(target_os = "macos")]
+    let command = {
+        let mut buf = [0u8; 4096];
+        let n = unsafe { libc::proc_pidpath(pid as i32, buf.as_mut_ptr().cast(), buf.len() as u32) };
+        buf[..n.max(0) as usize].to_vec()
+    };
+    String::from_utf8_lossy(&command).contains("mostalgia")
 }
 
 /// Session folders under `recordings` left behind by a recording that never

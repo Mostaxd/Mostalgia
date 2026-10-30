@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Mostalgia.app's Info.plist; scripts/build-macos-app.sh fills in the version. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>de</string>
+	</array>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.mostaxd.Mostalgia</string>
+	<key>CFBundleName</key>
+	<string>Mostalgia</string>
+	<key>CFBundleDisplayName</key>
+	<string>Mostalgia</string>
+	<key>CFBundleExecutable</key>
+	<string>mostalgia-app</string>
+	<key>CFBundleIconFile</key>
+	<string>Mostalgia</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@VERSION@</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<!-- ScreenCaptureKit audio (the fallback before 14.2) needs 13. -->
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>MIT OR Apache-2.0</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Mostalgia records your side of meetings from the microphone and transcribes it on this Mac.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Mostalgia records what the other participants of a call say (the Mac's sound output) and transcribes it on this Mac.</string>
+</dict>
+</plist>

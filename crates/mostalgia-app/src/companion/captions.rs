@@ -61,7 +61,9 @@ pub fn run(demo: bool) {
             titlebar: None,
             focus: false,
             show: true,
-            kind: WindowKind::Normal,
+            // macOS: a non-activating panel, so clicking it leaves the call
+            // app in front with the keyboard.
+            kind: if cfg!(target_os = "macos") { WindowKind::PopUp } else { WindowKind::Normal },
             is_movable: true,
             is_resizable: true,
             is_minimizable: false,
@@ -115,13 +117,15 @@ impl Captions {
                 if let Err(e) = x.setup_window().and_then(|_| x.no_input_focus()) {
                     eprintln!("[captions] window setup: {e:#}");
                 }
+                #[cfg(target_os = "macos")]
+                x.allow_resize();
                 let scale = window.scale_factor();
                 let (w, h) = config.live_captions_size.unwrap_or(DEFAULT_SIZE);
                 let size = ((w * scale) as i32, (h * scale) as i32);
                 let origin = config.live_captions_pos.unwrap_or_else(|| {
                     let monitors = x.monitors();
                     let m = monitors.iter().find(|m| m.primary).or(monitors.first()).map(|m| m.rect).unwrap_or(Rect { x: 0, y: 0, w: 1920, h: 1080 });
-                    default_origin(x.work_area().and_then(|w| w.intersect(&m)).unwrap_or(m), size)
+                    default_origin(x.work_area_on(&m), size)
                 });
                 let _ = x.move_resize(Rect { x: origin.0, y: origin.1, w: size.0, h: size.1 });
             }

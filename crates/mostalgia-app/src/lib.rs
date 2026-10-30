@@ -7,6 +7,11 @@ pub mod companion;
 pub mod control;
 pub mod decisions_view;
 pub mod documents;
+#[cfg(windows)]
+pub mod login_start;
+#[cfg(target_os = "macos")]
+#[path = "login_start_macos.rs"]
+pub mod login_start;
 pub mod meeting;
 pub mod processing;
 pub mod recording;
@@ -14,6 +19,8 @@ pub mod settings;
 pub mod text_import;
 pub mod themes;
 pub mod ui;
+#[cfg(windows)]
+pub mod win_identity;
 
 use std::borrow::Cow;
 

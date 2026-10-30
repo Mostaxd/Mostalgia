@@ -1,8 +1,10 @@
 name: Release
 
-# A tag like v0.3.0 builds the Linux AppImage and attaches it to that tag's
-# GitHub release (created if needed). Changes to the packaging build it too,
-# without releasing, so a broken AppImage shows up before the tag.
+# A tag like v0.3.0 builds the Linux AppImage, the Windows zip and the macOS
+# disk image and
+# attaches them to that tag's GitHub release (created if needed). Changes to
+# the packaging build them too, without releasing, so a broken package shows
+# up before the tag.
 on:
   push:
     tags: ["v*"]
@@ -10,11 +12,13 @@ on:
     paths:
       - .github/workflows/release.yml
       - scripts/build-appimage.sh
+      - scripts/build-windows.sh
+      - scripts/build-macos-app.sh
       - packaging/**
   workflow_dispatch:
     inputs:
       release:
-        description: Attach the AppImage to this existing release tag (e.g. v0.2.1)
+        description: Attach the AppImage, the Windows zip and the disk image to this existing release tag (e.g. v0.2.1)
         required: false
 
 concurrency:
@@ -78,3 +82,128 @@ jobs:
           tag_name: ${{ inputs.release || github.ref_name }}
           files: dist/*
           generate_release_notes: true
+
+  # Mostalgia.app in a disk image, for Apple Silicon (Metal). Ad-hoc signed:
+  # macOS asks to confirm the first start (right-click → Open, or System
+  # Settings → Privacy & Security → "Open Anyway").
+  #
+  # Optional Developer ID signing and notarization, which removes that step,
+  # runs only when these repository secrets exist (an Apple Developer
+  # account is needed for them):
+  #   MACOS_CERTIFICATE           base64 of the "Developer ID Application" .p12
+  #   MACOS_CERTIFICATE_PASSWORD  its password
+  #   MACOS_NOTARY_APPLE_ID       Apple ID for notarization
+  #   MACOS_NOTARY_TEAM_ID        the team id
+  #   MACOS_NOTARY_PASSWORD       an app-specific password of that Apple ID
+  dmg:
+    runs-on: macos-14
+    permissions:
+      contents: write
+    env:
+      HAS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE != '' }}
+      HAS_NOTARY: ${{ secrets.MACOS_NOTARY_PASSWORD != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: dmg
+          cache-directories: ~/Library/Caches/sherpa-rs
+      - name: Signing certificate
+        if: env.HAS_CERTIFICATE == 'true'
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(uuidgen)
+          echo "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity=$(security find-identity -v -p codesigning "$keychain" | grep -o '"Developer ID Application[^"]*"' | head -1 | tr -d '"')
+          [[ -n "$identity" ]] || { echo "no Developer ID Application identity in the certificate"; exit 1; }
+          echo "MACOS_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+      - run: ./scripts/build-macos-app.sh
+      - name: Smoke test
+        run: |
+          app=dist/Mostalgia.app/Contents/MacOS
+          "$app/mostalgia" help
+          "$app/mostalgia" download-models --list
+      - name: Notarize
+        if: env.HAS_CERTIFICATE == 'true' && env.HAS_NOTARY == 'true'
+        env:
+          APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+          PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+        run: |
+          dmg=$(ls dist/*.dmg)
+          xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$PASSWORD" --wait
+          xcrun stapler staple "$dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Mostalgia-macOS-arm64.dmg
+          path: dist/*.dmg
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.release != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release || github.ref_name }}
+          files: dist/*.dmg
+
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Whisper on the GPU needs the Vulkan SDK (headers, glslc, the import
+      # library) to build; users only need their GPU driver. If installing
+      # it fails, the zip is the CPU build instead of no zip at all.
+      - name: Vulkan SDK
+        id: vulkan
+        continue-on-error: true
+        env:
+          VK: 1.4.309.0
+        run: |
+          curl -fsSL -o vksdk.exe "https://sdk.lunarg.com/sdk/download/$VK/windows/VulkanSDK-$VK-Installer.exe"
+          ./vksdk.exe --root "C:\\VulkanSDK\\$VK" --accept-licenses --default-answer --confirm-command install
+          test -f "/c/VulkanSDK/$VK/Bin/glslc.exe"
+          echo "VULKAN_SDK=C:\\VulkanSDK\\$VK" >> "$GITHUB_ENV"
+          echo "/c/VulkanSDK/$VK/Bin" >> "$GITHUB_PATH"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-release
+          workspaces: ". -> C:/t"
+          cache-directories: ~/AppData/Local/sherpa-rs
+      - run: bash scripts/build-windows.sh
+        env:
+          CARGO_TARGET_DIR: C:/t
+      # The app's updater checks the download against this.
+      - name: Checksum
+        run: cd dist && sha256sum Mostalgia-windows-x86_64.zip > Mostalgia-windows-x86_64.zip.sha256 && cat *.sha256
+      - name: Smoke test
+        run: |
+          rm -rf smoke && mkdir smoke && cd smoke
+          7z x ../dist/Mostalgia-windows-x86_64.zip >/dev/null
+          ls -l Mostalgia
+          echo "::notice::zip contents: $(ls Mostalgia | tr '\n' ' ')"
+          ./Mostalgia/mostalgia.exe help
+          ./Mostalgia/mostalgia.exe download-models --list
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Mostalgia-windows-x86_64
+          path: dist/*
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.release != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release || github.ref_name }}
+          files: dist/*

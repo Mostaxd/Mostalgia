@@ -18,7 +18,11 @@ pub mod desktop;
 pub mod feed;
 pub mod host;
 pub mod ipc;
+#[cfg(windows)]
+mod win32;
 mod x11;
+#[cfg(target_os = "macos")]
+mod macos;
 
 use std::cell::Cell;
 use std::collections::HashMap;
