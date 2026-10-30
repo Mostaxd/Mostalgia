@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mostalgia: meetings you can recall in full</title>
-<meta name="description" content="Mostalgia is a local-first meeting recorder for Linux: live Whisper transcription in any language, summaries that know who promised what, Ask across all your meetings, and five animated companions who take notes with you.">
+<meta name="description" content="Mostalgia is a local-first meeting recorder for Linux and macOS: live Whisper transcription in any language, summaries that know who promised what, Ask across all your meetings, and five animated companions who take notes with you.">
 <meta name="theme-color" content="#2B1730">
 <meta property="og:title" content="Mostalgia: nostalgia, but for meetings you can actually recall in full">
-<meta property="og:description" content="Local-first meeting recorder for Linux. Whisper on your GPU, summaries, Ask, documents and animated note-taking companions.">
+<meta property="og:description" content="Local-first meeting recorder for Linux and macOS. Whisper on your GPU, summaries, Ask, documents and animated note-taking companions.">
 <meta property="og:image" content="assets/brand/og.png">
 <link rel="icon" href="assets/brand/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -69,7 +69,7 @@
   </div>
 
   <div class="hero-inner">
-    <p class="kicker"><span class="dot"></span> Local-first meeting recorder · Linux</p>
+    <p class="kicker"><span class="dot"></span> Local-first meeting recorder · Linux · macOS</p>
     <h1 class="title">
       <span class="jp" aria-hidden="true">モスタルジア</span>
       <span class="word">Mostalgia</span>
@@ -77,10 +77,10 @@
     <p class="tagline">Nostalgia, but for meetings you can <em>actually recall in full</em>.</p>
     <p class="lede">Live Whisper transcription in any language, summaries that know who promised what, and a search box that answers <q>wait, what did we decide?</q> with a link to the exact second it was said. Five little companions take notes with you.</p>
     <div class="cta">
-      <a class="btn btn-primary" href="#install">Get it for Linux</a>
+      <a class="btn btn-primary" href="#install">Download Mostalgia</a>
       <a class="btn btn-ghost" href="#prologue">Watch the episodes ↓</a>
     </div>
-    <p class="platforms">Linux with PipeWire today · Windows planned</p>
+    <p class="platforms">Linux and macOS today · Windows planned</p>
   </div>
 
   <div class="lineup" id="lineup" aria-label="The companions: Mori, Tsumugi, Hoshi, Kaito and Jin">
@@ -1679,17 +1679,21 @@
       <h2 class="section-title">Get Mostalgia.</h2>
       <p class="platform-row">
         <span class="plat now">🐧 Linux · PipeWire / Pulse <b>available</b></span>
+        <span class="plat now">🍎 macOS · Apple Silicon <b>available</b></span>
         <span class="plat soon">Windows <b>planned</b></span>
       </p>
-      <p>Built in Rust with GPUI. Vulkan works on NVIDIA, AMD and Intel without extra toolkits; no GPU at all works too, on the CPU or with a cloud engine.</p>
+      <p>Built in Rust with GPUI. Whisper runs on your GPU: Vulkan on NVIDIA, AMD and Intel, Metal on the Mac. No GPU at all works too, on the CPU or with a cloud engine.</p>
       <p class="cta">
         <a class="btn btn-primary" href="https://github.com/Mostaxd/Mostalgia/releases/latest/download/Mostalgia-x86_64.AppImage">Download for Linux</a>
+        <a class="btn btn-primary" href="https://github.com/Mostaxd/Mostalgia/releases/latest/download/Mostalgia-macOS-arm64.dmg">Download for macOS</a>
         <a class="btn btn-ghost" href="https://github.com/Mostaxd/Mostalgia#install">Source and full guide</a>
       </p>
-      <p class="fine">One AppImage for x86_64 (Ubuntu 22.04, Debian 12, Fedora 36 or newer). The speech models download on first launch.</p>
+      <p class="fine"><b>Linux:</b> one AppImage for x86_64 (Ubuntu 22.04, Debian 12, Fedora 36 or newer).<br>
+      <b>macOS:</b> a disk image for Apple Silicon (M1 or newer), macOS 13 or later. Drag Mostalgia into Applications. It isn't signed by Apple yet, so open it once, then click <b>Open Anyway</b> in System Settings → Privacy &amp; Security.<br>
+      The speech models download on first launch.</p>
     </div>
     <div class="terminal">
-      <div class="term-bar"><i></i><i></i><i></i><span>bash</span><button class="copy" id="copyBtn" type="button">Copy</button></div>
+      <div class="term-bar"><i></i><i></i><i></i><span>Linux</span><button class="copy" id="copyBtn" type="button">Copy</button></div>
 <pre id="installCmd"><span class="c"># 1. Make the download executable and start it</span>
 chmod +x Mostalgia-x86_64.AppImage
 ./Mostalgia-x86_64.AppImage
