@@ -1,385 +1,224 @@
 <p align="center">
-  <img src="assets/brand/banner.png" alt="Mostalgia — Nostalgia, but for meetings you can actually recall in full." width="100%">
+  <img src="assets/brand/banner.png" alt="Mostalgia" width="100%">
+</p>
+
+<h2 align="center">Every meeting, remembered.</h2>
+
+<p align="center">
+  Mostalgia records your calls, transcribes them live on your own GPU,<br>
+  and tells you what was decided, who owns what, and where it was said.
 </p>
 
 <p align="center">
-  <b>Nostalgia, but for meetings you can actually recall in full.</b><br>
-  A local-first meeting recorder for Linux: live transcription in any language, summaries that know who promised what,<br>
-  and a search box that answers “wait, what did we decide?” — with a link to the exact second it was said.
+  <a href="https://github.com/Mostaxd/Mostalgia/releases/latest/download/Mostalgia-x86_64.AppImage"><img alt="Download for Linux" src="https://img.shields.io/badge/Download-Linux_AppImage-B8472A?style=for-the-badge&logo=linux&logoColor=white"></a>
+  &nbsp;
+  <a href="https://mostaxd.github.io/Mostalgia"><img alt="Website" src="https://img.shields.io/badge/Website-Visit-5B2A4E?style=for-the-badge"></a>
 </p>
 
 <p align="center">
-  <img alt="Rust" src="https://img.shields.io/badge/built_with-Rust-B8472A">
-  <img alt="Local, hybrid or cloud" src="https://img.shields.io/badge/runs-local_·_hybrid_·_cloud-5B2A4E">
-  <img alt="Bring your own AI" src="https://img.shields.io/badge/AI-bring_your_own-3E7A52">
-  <img alt="Linux" src="https://img.shields.io/badge/platform-Linux_·_PipeWire-F2A541">
+  <a href="https://github.com/Mostaxd/Mostalgia/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/Mostaxd/Mostalgia?color=B8472A"></a>
+  <a href="https://github.com/Mostaxd/Mostalgia/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Mostaxd/Mostalgia/ci.yml?branch=main&label=CI"></a>
+  <img alt="Built with Rust" src="https://img.shields.io/badge/built_with-Rust-B8472A">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-3E7A52">
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/recording.png" alt="Live recording with speaker chips and provisional text" width="90%">
+  <img src="docs/screenshots/recording.png" alt="Mostalgia recording a meeting with live transcription" width="92%">
+</p>
+
+<table>
+<tr>
+<td width="33%" valign="top">
+
+**Private by default**
+
+Audio is transcribed on your machine and never leaves your disk. You decide whether summaries come from a local model or a cloud API.
+
+</td>
+<td width="33%" valign="top">
+
+**Fast and live**
+
+Whisper on Vulkan runs about 30× faster than real time. Text appears roughly one second after someone starts speaking.
+
+</td>
+<td width="33%" valign="top">
+
+**Answers with sources**
+
+Ask anything across all your meetings and documents. Every answer links to the moment it was said, with the audio one click away.
+
+</td>
+</tr>
+</table>
+
+---
+
+## Capture every call, automatically
+
+<img src="docs/screenshots/new-recording.png" alt="Starting a new recording" width="48%" align="right">
+
+Mostalgia notices when Zoom, Teams, Meet, Discord, Slack, Signal and others
+start using your microphone, and starts recording (or asks first). Your
+microphone and the other side of the call are recorded on separate tracks, so
+every line knows whether it came from you or from them.
+
+- Optional speaker diarization separates every voice, and names you assign are remembered in later meetings
+- Glossary corrections fix names and terms once, for good
+- Live captions, live translation and a mic-silence warning
+- Tray icon and <kbd>Super</kbd> + <kbd>Shift</kbd> + <kbd>R</kbd> from anywhere
+
+<br clear="right">
+
+## Summaries you can act on
+
+<img src="docs/screenshots/summary.png" alt="Meeting summary with decisions and action items" width="48%" align="left">
+
+When the meeting ends, a final pass re-transcribes both tracks and your chosen
+AI writes the summary in the meeting's own language:
+
+- Overview and key points
+- **Decisions**, collected in a decision log across meetings
+- **Action items** with owners and deadlines
+- Open questions
+
+Export to Markdown, text, SRT or Word, or keep it in Documents for later questions.
+
+<br clear="left">
+
+## Ask your meetings and your documents
+
+<img src="docs/screenshots/ask-night.png" alt="Ask with clickable sources" width="48%" align="right">
+
+*"What did Anna promise last week?"* Mostalgia searches every meeting and the
+files you add (PDF, Word, Markdown, OpenDocument, HTML) with local hybrid
+search in about 25 ms, then answers with numbered sources that open the
+transcript at the exact line and play the audio.
+
+When nothing in your sources answers the question, it says so instead of
+guessing. During a call, it can even suggest answers from past meetings and documents.
+
+<br clear="right">
+
+<p align="center">
+  <img src="docs/screenshots/documents.png" alt="Documents organized in collections" width="80%">
+</p>
+
+## A companion that takes notes with you
+
+Turn on an animated note-taker who writes along while people talk, pins up
+decisions, action items and numbers every ninety seconds, and answers
+questions about the meeting that is still running. Keep them in the corner of
+the app or floating above your call on the desktop.
+
+| Mori | Tsumugi | Hoshi | Kaito | Jin |
+|:---:|:---:|:---:|:---:|:---:|
+| <img src="docs/screenshots/mori/writing.gif" alt="Mori writing" width="120"> | <img src="docs/screenshots/companion-tsumugi.gif" alt="Tsumugi weaving" width="120"> | <img src="docs/screenshots/companion-hoshi.gif" alt="Hoshi charting" width="120"> | <img src="docs/screenshots/companion-kaito.gif" alt="Kaito serving tea" width="120"> | <img src="docs/screenshots/companion-jin.gif" alt="Jin cutting paper" width="120"> |
+| takes notes on a notepad | weaves them into her scarf | charts them as constellations | serves each note like tea | cuts each note onto paper |
+
+<p align="center">
+  <img src="docs/screenshots/companion-tsumugi.png" alt="Tsumugi" width="49%">
+  <img src="docs/screenshots/companion-hoshi.png" alt="Hoshi" width="49%">
+</p>
+
+## Make it yours
+
+Twenty themes, from warm *Mostalgia* to *Blockworld*, *Synthwave*, *Terminal*
+and a high-contrast mode, each with its own palette, fonts and a small animated
+scene. Or add your own as a JSON file in `~/.config/mostalgia/themes/`.
+
+<p align="center">
+  <img src="docs/screenshots/themes.png" alt="All twenty themes" width="92%">
 </p>
 
 ---
 
-## Why Mostalgia?
+## Get started
 
-You were *in* the meeting. You nodded. Three days later nobody remembers whether
-the budget was frozen “until June” or “in June”. Mostalgia sits quietly next to
-your call, writes everything down as it happens, and turns it into something you
-can actually use: a summary with decisions and owners, a transcript you can click
-to hear, and an assistant that answers questions across all your meetings.
-
-By default the audio is transcribed **on your own GPU** and stays on your disk;
-summaries and answers come from the AI provider *you* pick — a cloud API or a
-model running on your own machine. You always see which one is doing the work.
-
-## Features
-
-<table>
-<tr><td width="50%" valign="top">
-
-### 🎙️ Recording
-- Records **your mic and the other side of the call** (desktop audio) as separate tracks — so it always knows who said what: *Me* and *Others*.
-- **Auto-start with calls**: notices when Zoom, Teams, Meet, Discord, Slack, Signal & co. grab the mic and offers (or just starts) to record — and stops when the call ends.
-- Pause, bookmarks (“Mark”), live level meters, and a nudge when your mic has gone suspiciously quiet.
-- Tray icon, a global shortcut (**Super + Shift + R**) and readable device names (“Laptop microphone”, not `alsa_input.pci-0000_80_1f.3…`).
-
-</td><td width="50%" valign="top">
-
-### ✍️ Live transcription
-- **Whisper** via whisper.cpp on Vulkan — multilingual, and ~30× faster than real time on a laptop GPU.
-- **Provisional text after ~1 s** while someone is still talking, replaced by the clean line when they pause.
-- **Silero VAD** decides what's speech, so silence never turns into “Thanks for watching!” hallucinations.
-- After you stop, a **final pass** re-transcribes the full tracks for the archive.
-- **Local, Hybrid or Cloud**: Whisper on your GPU, or a cloud / self-hosted speech-to-text service for machines without one — chosen separately for live text and the final pass, with the cost per hour shown.
-- **No silent fallbacks**: if a provider fails you see which one and why, the audio stays on disk, and *Transcribe again* lets you pick another engine.
-- Auto-detects the language (or pin one); optional noise suppression (RNNoise).
-
-</td></tr>
-<tr><td valign="top">
-
-### ✨ Summaries
-- A title, short overview, key points, **decisions**, **action items with owners and deadlines**, and open questions — in the meeting's own language.
-- **Bring your own AI**: any of the [supported providers](#supported-providers) or any OpenAI-compatible URL. Each connection shows whether it's connected, not set up, or failing — and why.
-- Pick the model and, where it supports one, the **thinking level**; responses stream, so long thinking doesn't time out.
-
-</td><td valign="top">
-
-### 💬 Ask your meetings
-- “What did Anna promise last week?” — answers **with clickable sources** that open the meeting at that line and play the audio.
-- **Hybrid search**: BM25 keywords + multilingual e5 embeddings, fused with RRF, all local (~25 ms). Embeddings can come from a cloud model instead (OpenAI, Together, or any OpenAI-compatible `/embeddings` endpoint such as Gemini or Voyage); switching re-embeds the library in the background while search keeps using the old index.
-- Says so when nobody said it — no confident inventions. Or ask [Mori](#meet-mori) right in the middle of a meeting.
-- Works with local models too; a model without tool calling gets the search results up front.
-
-</td></tr>
-<tr><td valign="top">
-
-### 🗣️ Speakers
-- *Me* vs *Others* for free (separate tracks).
-- Optional **speaker diarization** (sherpa-onnx, pyannote + WeSpeaker) splits the other side into Speaker 1, 2, …
-- Rename a speaker once — every line follows, and the voice is remembered: "Speaker 2" → "Felix" today is labelled *Felix* automatically in the next meeting. Manage or forget known voices in Settings → Speakers (only a voice print is kept, no audio).
-
-</td><td valign="top">
-
-### 🎨 Themes, languages & polish
-- **20 themes** from warm *Mostalgia* to *Blockworld* pixels, *Synthwave*, *Terminal* and a high-contrast mode; little animated scenes (respecting “reduce motion”).
-- English UI (German available, switched live); right-to-left text in transcripts renders properly.
-- Settings grouped into categories with search; right-click a meeting to rename, export (Markdown, text, SRT, Word) or delete it — completely, including its search index.
-- Export a whole meeting, only its notes or only its summary (Markdown, text, Word), or **save the summary and notes into Documents** — into a collection of your choice — so Ask finds and cites them next to your files.
-
-</td></tr>
-</table>
-
-## Meet Mori <img src="docs/screenshots/mori/writing.gif" alt="Mori writing notes" height="120" align="right">
-
-Mori is Mostalgia's optional note-taker: a small animated companion who writes
-along whenever someone speaks. She lives in the corner of the app window — or,
-switched to **On the desktop**, floats above all your other windows (your call
-app included) and can be dragged anywhere across your monitors.
-
-- **Ask her live** — click her and ask about the meeting that's running right
-  now (“What did we decide so far?”), or switch to *All meetings* to search
-  your library. Answers stream in with small numbered sources that jump to the
-  moment they come from. Every recording starts with a fresh chat; the
-  conversation is kept with the meeting as *Chat with Mori*.
-- **Live notes** — every 90 seconds or so of new conversation she pins up
-  what she noticed: decisions, action items with owners, open questions and
-  numbers. All of them are saved with the meeting in its *Notes* tab (pin the
-  ones that matter most).
-- **Honest about what she's doing** — the bubble shows whether she uses a
-  local or a cloud model (hover for which one). Without one she tells you to set it up, and
-  when a provider fails she says so (with a worried face), instead of
-  pretending.
-- Off by default: *Settings → Companion*, with placement (app window
-  or desktop), size and how often she takes notes. On GNOME Wayland the desktop Mori
-  runs as a small XWayland window — that's what lets her stay on top. She idles, listens, writes, thinks, talks, dozes off when you
-  pause, and looks worried when something breaks:
-
-<p align="center"><img src="docs/screenshots/mori/poses.png" alt="Mori's poses on light and dark backgrounds" width="90%"></p>
-
-| | |
-|---|---|
-| ![Mori writing along](docs/screenshots/mori-writing.png) **Writing along** while people talk | ![Live notes](docs/screenshots/mori-points.png) **Live notes** — pin what matters |
-| ![Ask Mori](docs/screenshots/mori-chat.png) **Ask her** about this meeting or all of them | <p align="center"><img src="docs/screenshots/mori/desktop.png" alt="Mori on the desktop with live notes" height="320"> <img src="docs/screenshots/mori/mori.gif" alt="Mori's animations" height="320"></p> **On the desktop** — transparent, always on top |
-
-### Meet the companions
-
-Mori isn't the only note-taker. In *Settings → Companion* you pick who keeps
-you company — each with their own look, their own way of showing a new note
-and their own (honest, concise) personality in the chat:
-
-| | | |
-|---|---|---|
-| **Mori** takes notes on her notepad | **Tsumugi** weaves the notes into her scarf | **Hoshi** charts the notes as constellations |
-| ![Mori](docs/screenshots/mori-points.png) | ![Tsumugi](docs/screenshots/companion-tsumugi.png) | ![Hoshi](docs/screenshots/companion-hoshi.png) |
-| **Kaito** serves each note like a cup of tea | **Jin** cuts each note onto a paper strip | |
-| ![Kaito](docs/screenshots/companion-kaito.png) | ![Jin](docs/screenshots/companion-jin.png) | |
-
-![Companion settings](docs/screenshots/settings-companion.png)
-
-## Gallery
-
-| | |
-|---|---|
-| ![Ask your meetings](docs/screenshots/ask-night.png) **Ask** — answers with source chips | ![Summary](docs/screenshots/summary.png) **Summary** — decisions and owners |
-| ![Transcript](docs/screenshots/transcript-night.png) **Transcript** — click a time to play, click a chip to rename | ![Audio](docs/screenshots/audio.png) **Audio** — waveform per track, click to jump |
-| ![New recording](docs/screenshots/new-recording.png) **New recording** | ![Settings](docs/screenshots/settings-recording.png) **Settings** — tidy categories |
-| ![AI & transcription settings](docs/screenshots/settings-ai.png) **Connections & modes** — local, hybrid or cloud, at a glance | ![Transcribe again](docs/screenshots/retranscribe.png) **Transcribe again** — you pick the engine, nothing switches by itself |
-| ![Provider error](docs/screenshots/engine-error.png) **Clear errors** — which provider failed and why; the recording keeps going | ![Delete](docs/screenshots/delete.png) **Forget a meeting** — all of it |
-
-**Twenty themes**, each with its own palette, corners, fonts and speaker colours:
-
-![All themes](docs/screenshots/themes.png)
-
-…and a small animated scene while you wait for the first word:
-
-![Theme scenes](docs/screenshots/themes-scenes.png)
-
-## Install
-
-**Linux (x86_64):** download
-**[Mostalgia-x86_64.AppImage](https://github.com/Mostaxd/Mostalgia/releases/latest/download/Mostalgia-x86_64.AppImage)**,
-make it executable and start it:
+**1. Download and run**
 
 ```bash
 chmod +x Mostalgia-x86_64.AppImage
 ./Mostalgia-x86_64.AppImage
 ```
 
-(Or right-click it → *Properties* → *Allow executing as program*, then
-double-click.) That's it: no Rust, no packages, no scripts.
+**2. Download the speech models** when asked on first launch (~2.1 GB, once).
 
-- **First launch** puts Mostalgia in your app menu and offers to download the
-  speech models (~2.1 GB, once) with a progress bar. Only using a cloud
-  transcription service? Click *Not now*; you can download them later in
-  *Settings → System*.
-- **Connect an AI** for summaries and *Ask* in *Settings → AI & transcription*
-  (Ollama for a local model, or a cloud provider with your own key).
-- **The CLI** is inside the AppImage too:
-  `./Mostalgia-x86_64.AppImage connections add ollama`, `… list`, `… ask "…"`.
-- **Start/stop shortcut:** on GNOME, *Settings → System* sets up
-  Super + Shift + R; elsewhere, add a custom shortcut in your desktop's
-  keyboard settings that runs `/path/to/Mostalgia-x86_64.AppImage toggle`.
-- **Mori on the desktop** works from the AppImage too (on Wayland through
-  XWayland, like a source build).
-- **Updates:** [Gear Lever](https://flathub.org/apps/it.mijorus.gearlever)
-  or AppImageUpdate pick up new releases automatically.
+**3. Connect an AI** under *Settings → AI & transcription*: Ollama for a local
+model, or a cloud provider with your own key.
 
-It needs PipeWire or PulseAudio and a Vulkan driver, which desktop
-distributions ship by default (glibc 2.35 or newer: Ubuntu 22.04, Debian 12,
-Fedora 36 and later). The tray icon needs GNOME's AppIndicator extension:
-`gnome-extensions enable ubuntu-appindicators@ubuntu.com` (log out and in once).
+Runs on x86_64 Linux with glibc 2.35+ (Ubuntu 22.04, Debian 12, Fedora 36 or
+later), PipeWire or PulseAudio and a Vulkan driver. The AppImage updates itself.
+Prefer to build it yourself? See [CONTRIBUTING.md](CONTRIBUTING.md#building).
 
-### Build from source
+## You choose where your data goes
 
-```bash
-# 1. System packages (Ubuntu/Debian)
-sudo apt install build-essential cmake clang pkg-config libpulse-dev pulseaudio-utils \
-  libvulkan-dev glslc libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-xcb-dev \
-  libxcb1-dev libfontconfig-dev libfreetype-dev libasound2-dev libzstd-dev
-
-# 2. Build (Vulkan works on NVIDIA/AMD/Intel without extra toolkits)
-cargo build --release --features vulkan
-
-# 3. Put it in your app grid, and add the Super+Shift+R shortcut
-./scripts/install-desktop.sh
-./scripts/install-gnome-shortcut.sh
-
-# 4. Connect an AI provider for summaries and Ask — in the app under
-#    Settings → AI & transcription, or from the terminal:
-mostalgia connections add ollama            # a local model, no key needed
-mostalgia set-api-key --provider openai     # or claude, deepseek, groq, … (GNOME keyring)
-```
-
-Then launch **Mostalgia** from the app grid, or `mostalgia-app`; it offers to
-download the models on first launch (or run `mostalgia download-models`).
-`./scripts/build-appimage.sh` builds the AppImage yourself.
-
-## Supported providers
-
-Add as many connections as you like and choose, separately, which one writes
-summaries, which one answers *Ask*, and which engine transcribes live and in
-the final pass.
-
-**Summaries & Ask**
-
-| Provider | Runs | What it receives |
-|---|---|---|
-| Ollama, LM Studio, vLLM, LiteLLM | on your machine or network | meeting text — it never leaves your hardware |
-| Any OpenAI-compatible URL | wherever you host it | meeting text |
-| Anthropic (Claude), OpenAI, DeepSeek | cloud | meeting text for summaries; for *Ask*, only the passages it looks up |
-| OpenRouter, Groq, Together | cloud | the same, routed to the model you pick |
-
-Models are listed live from each provider (`/models`), and you can always type
-a model id by hand. Models without tool calling still work with *Ask*: the app
-searches first and hands them the results — and says so.
-
-**Transcription**
-
-| Engine | Runs | What it receives |
-|---|---|---|
-| Whisper via whisper.cpp (Vulkan, CUDA or CPU) | on your machine | nothing leaves it |
-| Self-hosted Whisper server (OpenAI-compatible `/audio/transcriptions`, e.g. via LiteLLM or vLLM) | your network | audio |
-| OpenAI, Groq | cloud | audio, billed per minute (the app shows the estimate) |
-
-## Privacy — what goes where
-
-Mostalgia always shows where your data goes: every connection carries a
-*local* or *cloud* badge, and the processing mode is spelled out in settings.
-
-| Mode | Transcription | Summaries & *Ask* | Leaves your laptop |
+| | Transcription | Summaries & Ask | Leaves your machine |
 |---|---|---|---|
-| **Local** | Whisper on your GPU | a local model | nothing |
-| **Hybrid** *(default)* | Whisper on your GPU | a cloud provider | meeting **text** for summaries; only the **few passages** *Ask* looks up |
-| **Cloud** | a cloud speech-to-text service | any | **audio** to the transcription provider, text as above |
+| **Local** | Whisper on your GPU | Ollama, LM Studio, vLLM, LiteLLM | nothing |
+| **Hybrid** (default) | Whisper on your GPU | Anthropic, OpenAI, DeepSeek, OpenRouter, Groq, Together | meeting text; for Ask, only the passages it finds |
+| **Cloud** | OpenAI, Groq or your own Whisper server | any | audio, plus text as above |
 
-Nothing ever switches provider behind your back: if one fails you get an error
-naming it, the recording stays on disk, and *Transcribe again* lets you choose
-another engine.
+Every connection is labelled *local* or *cloud*. If a provider fails, you see
+which one and why; Mostalgia never switches behind your back. Recordings and
+the search index always stay in `~/.local/share/mostalgia`, and API keys in the
+GNOME keyring.
 
-| | Where it lives |
-|---|---|
-| Recordings (WAV) | always on your disk, `~/.local/share/mostalgia` — whatever the mode |
-| Search index for *Ask* (BM25 + embeddings) | always on your disk; with cloud embeddings (Settings → AI → Search) passage and question text goes to that provider to be embedded |
-| API keys | GNOME keyring, sent only to their own provider |
+<details>
+<summary><b>For developers: architecture, performance and CLI</b></summary>
 
-## How it works
+<br>
+
+Mostalgia is written in Rust as three crates:
+[`mostalgia-core`](crates/mostalgia-core) (capture, VAD, Whisper, diarization,
+SQLite + FTS5 storage, summaries, Ask), [`mostalgia-app`](crates/mostalgia-app)
+(desktop app on GPUI) and [`mostalgia-cli`](crates/mostalgia-cli).
 
 ```mermaid
 flowchart LR
-  subgraph Capture["PipeWire / Pulse"]
-    MIC["🎙️ Mic"] --> CM["mic.wav"]
-    SYS["🔊 Desktop audio"] --> CS["system.wav"]
-  end
-  MIC --> VAD1["Silero VAD + chunker"]
-  SYS --> VAD2["Silero VAD + chunker"]
-  VAD1 & VAD2 --> W["Speech-to-text<br/>(local Whisper or a provider)"]
-  W -->|"provisional + final lines"| UI["Desktop app (GPUI)"]
-  CM & CS -->|"after stop"| FP["Final pass<br/>VAD regions → Whisper<br/>+ optional diarization"]
-  FP --> DB[("SQLite<br/>FTS5 · passages · vectors")]
-  DB --> SUM["Summary<br/>(your AI provider)"]
-  DB --> ASK["Ask<br/>BM25 + e5 → RRF → LLM with tools"]
+  MIC["Mic"] & SYS["Desktop audio"] --> VAD["Silero VAD + chunker"]
+  VAD --> W["Speech-to-text"]
+  W --> UI["Desktop app (GPUI)"]
+  W --> FP["Final pass + diarization"]
+  FP --> DB[("SQLite · FTS5 · vectors")]
+  DB --> SUM["Summary"] & ASK["Ask: BM25 + e5 → RRF → LLM"]
   SUM & ASK --> UI
 ```
 
-The workspace has three crates:
-
-- **`mostalgia-core`** — capture, VAD, live chunking, Whisper, final pass,
-  diarization, storage (SQLite + FTS5), summaries, *Ask*, call detection, i18n.
-  Front ends drive a `Recorder` and listen to its event channel.
-- **`mostalgia-app`** — the desktop app (GPUI + gpui-component).
-- **`mostalgia-cli`** — the `mostalgia` command.
-
-A few numbers from an RTX PRO 3000 laptop:
-
-| | |
+| On an RTX PRO 3000 laptop | |
 |---|---|
 | Live transcription of a 9 s chunk | 0.2–0.4 s |
-| First provisional text during continuous speech | ~1 s |
-| Final pass | a second or two per minute of audio |
-| Speaker diarization (optional) | ~5 min of CPU per hour of audio |
+| First provisional text | ~1 s |
+| Final pass | 1–2 s per minute of audio |
 | *Ask* search over the whole library | 23–30 ms |
-| *Ask* answer with a cloud model | ~5 s |
-
-## CLI
 
 ```text
-mostalgia start [--source mic|system|both] [--speakers] [--diarize] [--denoise] [--language auto|<code>]
-                [--engine local|<connection>/<model>] [--final-engine …]
+mostalgia start [--source mic|system|both] [--diarize] [--language auto|<code>] [--translate <lang>]
 mostalgia list | show <id> | search <words> | ask "<question>"
-mostalgia summarize <id> [--provider <connection>] [--summary-model …] [--effort low…max]
-mostalgia export <id> --format md|txt|srt|docx [-o file] [--only notes|summary]
-mostalgia delete <id> [--keep-audio]
-mostalgia import <session-folder> | transcribe <file.wav> | reindex [--all]
-mostalgia retranscribe <id> --engine local|<connection>/<model>
-mostalgia connections [list | add <preset> [--url …] | test <id> | remove <id>]
-mostalgia toggle | open           # control the running app (shortcut-friendly)
-mostalgia devices | models [--provider <connection>] | set-api-key [--provider <connection>]
+mostalgia docs [list | add <files> | search <words> | remove <id>]
+mostalgia summarize <id> | export <id> --format md|txt|srt|docx
+mostalgia connections [list | add <preset> | test <id> | remove <id>]
+mostalgia toggle | open
 ```
 
-The CLI follows the app's language setting (English by default).
+</details>
 
-## FAQ
+## Community
 
-**Does it work without a GPU?** Yes — without a Vulkan-capable GPU Whisper
-runs on the CPU (or build without `--features vulkan`). It's slower; a smaller model (`--model`) helps — or
-switch transcription to a provider in *Cloud* mode.
-
-**Which call apps are detected?** Zoom, Teams, Discord, Slack, Signal, Element,
-Jitsi, Skype, Webex, Telegram, WhatsApp, and any call in Chrome, Chromium,
-Firefox, Brave, Edge, Vivaldi or Opera (Meet, Teams on the web, …).
-
-**My voice is missing from a call recording.** Check that the microphone is on in
-*New recording* — recordings started for a detected call always include it, and a
-banner warns you if the mic stays silent.
-
-**Can I add my own theme?** Drop a JSON file into `~/.config/mostalgia/themes/`
-— same fields as [`themes.json`](crates/mostalgia-app/assets/themes.json).
-
-**Where is my data?** `~/.local/share/mostalgia` (database, recordings, models)
-and `~/.config/mostalgia` (settings). Delete a meeting from the app and it's gone
-from the library, the search index and — if you tick the box — the disk.
-
-## Roadmap
-
-- Meeting templates (stand-up, 1:1, customer call, interview)
-- Action-item tracker across meetings, weekly digest
-- Voice profiles that remember your colleagues
-
-## Credits
-
-- [whisper.cpp](https://github.com/ggml-org/whisper.cpp) / [whisper-rs](https://github.com/tazz4843/whisper-rs) and OpenAI's Whisper models (MIT)
-- [Silero VAD](https://github.com/snakers4/silero-vad) (MIT)
-- [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) with pyannote segmentation 3.0 and WeSpeaker ResNet34 for diarization
-- [multilingual-e5-small](https://huggingface.co/intfloat/multilingual-e5-small) (MIT) via [candle](https://github.com/huggingface/candle) for *Ask*
-- [nnnoiseless](https://github.com/jneem/nnnoiseless) (RNNoise)
-- [GPUI](https://github.com/zed-industries/zed) and gpui-component / gpui-kit for the UI; [Lucide](https://lucide.dev) icons
-- Fonts (SIL OFL): Inter, JetBrains Mono, IBM Plex Sans, Atkinson Hyperlegible, Noto Sans Arabic, Pixelify Sans, VT323
-
-Brand, icon and palette: see [`assets/brand/BRANDING.md`](assets/brand/BRANDING.md).
-
-## Contributing
-
-Questions, ideas and setups to show off go to
-[Discussions](https://github.com/Mostaxd/Mostalgia/discussions); bug reports
-and pull requests are welcome too. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test and open a pull
-request, and the [Code of Conduct](CODE_OF_CONDUCT.md) for how we treat each other.
-To report a security problem privately, see [SECURITY.md](SECURITY.md).
+Questions and ideas: [Discussions](https://github.com/Mostaxd/Mostalgia/discussions) ·
+Contributing: [CONTRIBUTING.md](CONTRIBUTING.md) ·
+[Code of Conduct](CODE_OF_CONDUCT.md) · Security: [SECURITY.md](SECURITY.md)
 
 ## License
 
-Mostalgia is licensed under either of
+Dual-licensed under [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT).
+Copyright 2026 Mostafa Ahmed ([github.com/Mostaxd](https://github.com/Mostaxd)).
+Forks are welcome; keep the [NOTICE](NOTICE) file and credit
+*"Based on Mostalgia by github.com/Mostaxd"*.
 
-- [Apache License, Version 2.0](LICENSE-APACHE)
-- [MIT license](LICENSE-MIT)
-
-at your option. Copyright 2026 Mostafa Ahmed ([github.com/Mostaxd](https://github.com/Mostaxd)).
-
-**Forks are welcome.** If you share or ship a copy or a changed version, keep
-the [NOTICE](NOTICE) file and credit the original project, for example in your
-README or About screen: *"Based on Mostalgia by github.com/Mostaxd"*. Please
-don't present a fork as the official Mostalgia.
-
-Third-party code, models and fonts listed under [Credits](#credits) keep their
-own licenses.
+Built with [whisper.cpp](https://github.com/ggml-org/whisper.cpp),
+[Silero VAD](https://github.com/snakers4/silero-vad),
+[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx),
+[candle](https://github.com/huggingface/candle) with multilingual-e5,
+[nnnoiseless](https://github.com/jneem/nnnoiseless) and
+[GPUI](https://github.com/zed-industries/zed).
