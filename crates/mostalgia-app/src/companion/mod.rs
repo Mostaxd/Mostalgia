@@ -428,12 +428,13 @@ impl Companion {
             // Her name in the placeholders.
             self.lang_seen = None;
         }
-        let size = self.size();
+        let (size, headroom) = (self.size(), self.headroom());
         if let Some(p) = &mut self.desktop
             && p.drag.is_none()
         {
             // No position yet (or reset): `settle` puts her top right.
             p.mori = config.companion_desktop_pos.unwrap_or((i32::MIN / 2, i32::MIN / 2));
+            p.headroom = headroom;
             p.settle(size);
         }
         self.reduce_motion = config.reduce_motion;
@@ -472,6 +473,11 @@ impl Companion {
         }
         let h = BASE_HEIGHT * self.scale;
         (h * art::FRAME_W / art::FRAME_H, h)
+    }
+
+    /// The empty room above her head (logical px; none for the bar).
+    fn headroom(&self) -> f32 {
+        if self.hidden { 0. } else { character::headroom(self.character) * self.size().1 }
     }
 
     /// Free room for her top-left corner inside the window.
@@ -517,7 +523,7 @@ impl Companion {
         let o = self.origin();
         if let Some(p) = &mut self.desktop {
             let pointer = p.x.pointer().map(|(x, y, _)| (x, y)).unwrap_or_default();
-            p.drag = Some(desktop::DesktopDrag { pointer, window: p.mori, wm_move: false, since: Instant::now() });
+            p.drag = Some(desktop::DesktopDrag { pointer, window: p.mori });
         }
         self.drag = Some(Drag {
             mouse: Point2 { x: ev.position.x.into(), y: ev.position.y.into() },
@@ -528,7 +534,7 @@ impl Companion {
         cx.notify();
     }
 
-    fn mouse_move(&mut self, ev: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn mouse_move(&mut self, ev: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let (size, grown) = (self.size(), self.desktop.is_some() && self.grown());
         let Some(drag) = &mut self.drag else { return };
         let (x, y): (f32, f32) = (ev.position.x.into(), ev.position.y.into());
@@ -546,24 +552,13 @@ impl Companion {
                 p.small = true;
                 p.apply_window(size, grown);
             }
-            let Some(d) = &mut p.drag else { return };
-            if first && !p.small {
-                // The window manager moves the window (across monitors,
-                // with its snapping); `tick` notices when it's dropped.
-                d.wm_move = true;
-                d.since = Instant::now();
-                window.start_window_move();
-            } else if d.wm_move && d.since.elapsed() > Duration::from_millis(250) && ev.pressed_button == Some(MouseButton::Left) {
-                // Still getting the motion: the window manager didn't take
-                // over, so move the window ourselves.
-                d.wm_move = false;
-            }
-            if !d.wm_move {
-                let d = *d;
-                if let Ok((px_, py_, _)) = p.x.pointer() {
-                    p.mori = (d.window.0 + px_ - d.pointer.0, d.window.1 + py_ - d.pointer.1);
-                    p.apply_window(size, grown);
-                }
+            // We move the window ourselves, not the window manager: it keeps
+            // a window below the top bar, and she may go a little higher
+            // than her window (see `Placement::lift`).
+            let Some(d) = p.drag else { return };
+            if let Ok((px_, py_, _)) = p.x.pointer() {
+                p.mori = (d.window.0 + px_ - d.pointer.0, d.window.1 + py_ - d.pointer.1);
+                p.apply_window(size, grown);
             }
             return;
         }
@@ -593,10 +588,7 @@ impl Companion {
         let Some(drag) = self.drag.take() else { return };
         if self.desktop.is_some() {
             if drag.moved {
-                // (The window manager may have moved the window and given
-                // the button release back to us: where is it now?)
-                let wm_moved = self.desktop.as_ref().and_then(|p| p.drag).is_some_and(|d| d.wm_move);
-                self.end_desktop_drag(wm_moved);
+                self.end_desktop_drag();
             } else {
                 if let Some(p) = &mut self.desktop {
                     p.drag = None;
@@ -618,15 +610,13 @@ impl Companion {
 
     /// A drag of her desktop window ended: where is she now? Keeps her on
     /// a monitor, turns the bubble towards its middle and remembers it.
-    fn end_desktop_drag(&mut self, wm_moved: bool) {
-        let (size, grown) = (self.size(), self.grown());
+    fn end_desktop_drag(&mut self) {
+        let (size, headroom) = (self.size(), self.headroom());
         let Some(p) = &mut self.desktop else { return };
-        if wm_moved {
-            p.read_back(size, grown);
-        }
         // Grown again, if it was (`render` applies it).
         p.small = false;
         p.drag = None;
+        p.headroom = headroom;
         p.settle(size);
         p.save();
         self.drag = None;
@@ -637,20 +627,17 @@ impl Companion {
     fn place_desktop_window(&mut self, o: Point2) {
         let (w, h) = self.size();
         let grown = self.grown();
-        let bubble = self.bubble_room();
+        let (bubble, headroom) = (self.bubble_room(), self.headroom());
         let cards = self.expanded || self.error.is_some() || !self.visible_points().is_empty();
         let open = self.open;
         if let Some(p) = &mut self.desktop {
             p.bubble = bubble;
+            p.headroom = headroom;
         }
         let Some(p) = &self.desktop else { return };
         let ((vw, vh), _) = p.layout((w, h), grown);
         self.viewport = (vw, vh);
         let menu = self.menu_rect(o);
-        // While the window manager moves the window, leave it alone.
-        if p.drag.is_some_and(|d| d.wm_move) && self.drag.as_ref().is_some_and(|d| d.moved) {
-            return;
-        }
         // (The bar takes the mouse only on itself.)
         let pad = if self.hidden { 2. } else { desktop::PAD };
         let mut input = vec![(o.x - pad, o.y - pad, w + 2. * pad, h + 2. * pad)];
@@ -854,10 +841,10 @@ impl Companion {
         if ended {
             self.final_points(cx);
         }
-        // The window manager dropped her window somewhere.
-        let wm_moving = self.drag.as_ref().is_some_and(|d| d.moved) && self.desktop.as_ref().and_then(|p| p.drag).is_some_and(|d| d.wm_move);
-        if wm_moving && self.desktop.as_ref().and_then(|p| p.x.pointer().ok()).is_some_and(|(_, _, down)| !down) {
-            self.end_desktop_drag(true);
+        // The button came up without us seeing it (outside her window).
+        let desktop_drag = self.drag.as_ref().is_some_and(|d| d.moved) && self.desktop.as_ref().is_some_and(|p| p.drag.is_some());
+        if desktop_drag && self.desktop.as_ref().and_then(|p| p.x.pointer().ok()).is_some_and(|(_, _, down)| !down) {
+            self.end_desktop_drag();
             self.idle_since = Instant::now();
             cx.notify();
         }
