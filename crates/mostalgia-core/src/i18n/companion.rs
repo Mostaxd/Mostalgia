@@ -62,6 +62,7 @@ pub const EN: &[(&str, &str)] = &[
     ("Schließen", "Close"),
     ("{} Notizen", "{} notes"),
     ("Einklappen", "Collapse"),
+    ("Blendet die Karten aus – der Zähler an der Figur zeigt sie wieder", "Hides the cards; the counter on the character brings them back"),
     ("{} weitere Notizen ({} angeheftet) – klicken zum Anzeigen", "{} more notes ({} pinned) – click to show"),
     ("Die Anfrage für Live-Notizen ist abgebrochen", "The live notes request stopped unexpectedly"),
     // Record controls, Notes tab, menu, collapsed bar

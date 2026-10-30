@@ -15,7 +15,7 @@ use x11rb::protocol::randr::ConnectionExt as _;
 #[cfg(target_os = "linux")]
 use x11rb::protocol::shape::{self, ConnectionExt as _};
 #[cfg(target_os = "linux")]
-use x11rb::protocol::xproto::{self, AtomEnum, ClientMessageEvent, ConfigureWindowAux, ConnectionExt as _, EventMask, PropMode};
+use x11rb::protocol::xproto::{self, AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, ConfigureWindowAux, ConnectionExt as _, EventMask, Gravity, PropMode};
 #[cfg(target_os = "linux")]
 use x11rb::rust_connection::RustConnection;
 #[cfg(target_os = "linux")]
@@ -97,8 +97,10 @@ impl X11 {
             AtomEnum::ATOM,
             &[a._NET_WM_WINDOW_TYPE_UTILITY, a._NET_WM_WINDOW_TYPE_NORMAL],
         )?;
-        // No title bar or frame (flags = decorations, decorations = none).
-        self.conn.change_property32(PropMode::REPLACE, self.window, a._MOTIF_WM_HINTS, a._MOTIF_WM_HINTS, &[2, 0, 0, 0, 0])?;
+        // No title bar or frame, and only moving (flags = functions |
+        // decorations, functions = move, decorations = none): dropped at
+        // the screen's top edge it mustn't be maximized.
+        self.conn.change_property32(PropMode::REPLACE, self.window, a._MOTIF_WM_HINTS, a._MOTIF_WM_HINTS, &[3, 4, 0, 0, 0])?;
         // _NET_WM_STATE_ADD, two properties per message.
         for pair in [
             [a._NET_WM_STATE_ABOVE, a._NET_WM_STATE_STICKY],
@@ -128,6 +130,21 @@ impl X11 {
     pub fn position(&self) -> Result<(i32, i32)> {
         let r = self.conn.translate_coordinates(self.window, self.root, 0, 0)?.reply()?;
         Ok((r.dst_x as i32, r.dst_y as i32))
+    }
+
+    /// Where the window's contents stay when it's resized: the right /
+    /// bottom edge, else the left / top one. No background either, so the
+    /// X server paints nothing (black) into the new part before we do.
+    pub fn set_gravity(&self, right: bool, bottom: bool) -> Result<()> {
+        let gravity = match (right, bottom) {
+            (false, false) => Gravity::NORTH_WEST,
+            (true, false) => Gravity::NORTH_EAST,
+            (false, true) => Gravity::SOUTH_WEST,
+            (true, true) => Gravity::SOUTH_EAST,
+        };
+        self.conn.change_window_attributes(self.window, &ChangeWindowAttributesAux::new().bit_gravity(gravity).background_pixmap(x11rb::NONE))?;
+        self.conn.flush()?;
+        Ok(())
     }
 
     pub fn move_resize(&self, r: Rect) -> Result<()> {
@@ -219,6 +236,9 @@ impl X11 {
         match self.never {}
     }
     pub fn position(&self) -> anyhow::Result<(i32, i32)> {
+        match self.never {}
+    }
+    pub fn set_gravity(&self, _right: bool, _bottom: bool) -> anyhow::Result<()> {
         match self.never {}
     }
     pub fn move_resize(&self, _r: Rect) -> anyhow::Result<()> {
