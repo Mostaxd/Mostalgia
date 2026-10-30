@@ -59,7 +59,7 @@ All pass AA for normal text (≥ 4.5 : 1).
 | `icons/hicolor/…` | Ready for `~/.local/share/icons` (16–512 px PNG, scalable, symbolic) as `io.github.mostaxd.Mostalgia` |
 | `wordmark.svg` / `.png` | Icon + "Mostalgia" for light backgrounds |
 | `wordmark-dark.svg` / `.png` | The same for dark backgrounds |
-| `banner.svg` / `.png` | 1280 × 640 social preview |
+| `banner.html` → `banner.png` | 1280 × 640 README header and social preview (rendered at 2×) |
 | `favicon.svg`, `favicon.ico` | 16 / 32 / 48 |
 
 - **Clear space:** keep at least ¼ of the icon's width free around it.
@@ -70,6 +70,9 @@ All pass AA for normal text (≥ 4.5 : 1).
 Regenerate everything with `python3 generate.py` (needs fontTools), then
 export PNGs with [`resvg`](https://github.com/linebender/resvg):
 `resvg -w 512 icon.svg icon-512.png`.
+The banner is HTML (the site's fonts and companion sprites): render it with
+`node scripts/render-banner.js` (Playwright, and pngquant to keep it under
+GitHub's 1 MB limit for social previews).
 
 ## Mori
 

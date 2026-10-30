@@ -148,49 +148,6 @@ def wordmark(dark=False):
 '''
 
 
-def banner():
-    W, H = 1280, 640
-    title, tw = text_path("Most", "Inter-Bold.ttf", 132, 0, 0, -0.025)
-    title2, tw2 = text_path("algia", "Inter-Bold.ttf", 132, 0, 0, -0.025)
-    tag1, t1w = text_path("Nostalgia, but for meetings", "Inter-Medium.ttf", 40, 0, 0)
-    tag2, t2w = text_path("you can actually recall in full.", "Inter-Medium.ttf", 40, 0, 0)
-    feat, fw = text_path(
-        "Local Whisper transcription  ·  Claude summaries  ·  Ask your meetings",
-        "Inter-Medium.ttf", 22, 0, 0, 0.01)
-    # Faint waveform along the bottom.
-    wave = ""
-    import math
-    for i in range(0, 128):
-        x = 20 + i * 10
-        h = 18 + 70 * abs(math.sin(i * 0.37) * math.sin(i * 0.11 + 1.3))
-        wave += f'<rect x="{x}" y="{560 - h / 2}" width="5" height="{h:.1f}" rx="2.5" fill="{AMBER}" opacity="0.18"/>'
-    ix, iy, isz = 112, 176, 288
-    tx = ix + isz + 72
-    return f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="{NIGHT}"/>
-      <stop offset="1" stop-color="{PLUM}"/>
-    </linearGradient>
-    <radialGradient id="sun" cx="0.82" cy="0.05" r="0.55">
-      <stop offset="0" stop-color="{AMBER}" stop-opacity="0.55"/>
-      <stop offset="0.6" stop-color="{TERRACOTTA}" stop-opacity="0.12"/>
-      <stop offset="1" stop-color="{TERRACOTTA}" stop-opacity="0"/>
-    </radialGradient>
-  </defs>
-  <rect width="{W}" height="{H}" fill="url(#bg)"/>
-  <rect width="{W}" height="{H}" fill="url(#sun)"/>
-  {wave}
-  <g transform="translate({ix} {iy}) scale({isz / 512})">{icon_body(True)}</g>
-  <path transform="translate({tx} 300)" d="{title}" fill="{CREAM}"/>
-  <path transform="translate({tx + tw - 0.025 * 132} 300)" d="{title2}" fill="{AMBER}"/>
-  <path transform="translate({tx + 4} 370)" d="{tag1}" fill="{CREAM}" opacity="0.92"/>
-  <path transform="translate({tx + 4} 420)" d="{tag2}" fill="{CREAM}" opacity="0.92"/>
-  <path transform="translate({tx + 4} 476)" d="{feat}" fill="{SAGE}"/>
-</svg>
-'''
-
-
 def main():
     out = lambda name, s: open(os.path.join(HERE, name), "w").write(s)
     out("icon.svg", icon_svg(True))
@@ -199,7 +156,6 @@ def main():
     out("favicon.svg", icon_small_svg())
     out("wordmark.svg", wordmark(False))
     out("wordmark-dark.svg", wordmark(True))
-    out("banner.svg", banner())
 
 
 if __name__ == "__main__":

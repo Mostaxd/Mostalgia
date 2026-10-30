@@ -1,0 +1,162 @@
+<!doctype html>
+<!--
+  Source of banner.png (1280 × 640, the README header and social preview).
+  Render it with scripts/render-banner.js (Playwright), which loads this
+  file next to the site's companion sprites.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=Zen+Maru+Gothic:wght@700;900&family=Inter:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --amber: #F2A541;
+    --amber-l: #F7C26B;
+    --terra: #D9653B;
+    --ember: #B8472A;
+    --cream: #FBF3E4;
+    --plum: #5B2A4E;
+    --night: #2B1730;
+    --sage: #9DB8A0;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { width: 1280px; height: 640px; overflow: hidden; background: var(--night); }
+  .banner {
+    position: relative; width: 1280px; height: 640px; overflow: hidden;
+    /* Dusk: night at the top, warm haze toward the horizon. */
+    background:
+      radial-gradient(70% 60% at 76% 78%, rgba(242,165,65,.55) 0%, rgba(217,101,59,.28) 38%, rgba(217,101,59,0) 70%),
+      linear-gradient(180deg, #1f1024 0%, var(--night) 28%, #4a2140 58%, #8a3a3f 82%, #b8572f 100%);
+    font-family: "Inter", system-ui, sans-serif;
+    color: var(--cream);
+  }
+  /* A few stars in the dark half. */
+  .stars { position: absolute; inset: 0; }
+  .stars i { position: absolute; width: 2px; height: 2px; border-radius: 50%; background: var(--cream); }
+
+  /* Retro sun: amber disc with horizontal cuts across its lower half. */
+  .sun {
+    position: absolute; left: 850px; top: 128px; width: 360px; height: 360px; border-radius: 50%;
+    background: linear-gradient(180deg, #ffe2a3 0%, var(--amber-l) 30%, var(--amber) 55%, var(--terra) 100%);
+    -webkit-mask: linear-gradient(180deg,
+      #000 0 52%, transparent 52% 55%, #000 55% 63%, transparent 63% 67%,
+      #000 67% 74%, transparent 74% 79%, #000 79% 85%, transparent 85% 91%, #000 91% 100%);
+            mask: linear-gradient(180deg,
+      #000 0 52%, transparent 52% 55%, #000 55% 63%, transparent 63% 67%,
+      #000 67% 74%, transparent 74% 79%, #000 79% 85%, transparent 85% 91%, #000 91% 100%);
+    box-shadow: 0 0 120px 30px rgba(242,165,65,.35);
+  }
+  .glow { position: absolute; left: 750px; top: 30px; width: 560px; height: 560px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(247,194,107,.32) 0%, rgba(247,194,107,0) 62%); }
+
+  .skyline { position: absolute; left: 0; bottom: 0; width: 1280px; height: 230px; }
+  .skyline .far { fill: #5a2747; opacity: .9; }
+  .skyline .near { fill: var(--night); }
+  .skyline .wires path { stroke: var(--night); stroke-width: 2.2; fill: none; }
+
+  /* The five companions on the rooftop line, Mori in front. */
+  .cast { position: absolute; right: 18px; bottom: 6px; display: flex; align-items: flex-end; }
+  .cast img { display: block; height: 252px; width: auto; margin: 0 -26px; filter: drop-shadow(0 6px 10px rgba(20,8,24,.55)); }
+  .cast img.lead { height: 292px; position: relative; z-index: 2; }
+  .cast img.mid { height: 270px; position: relative; z-index: 1; }
+
+  /* Copy column. */
+  .copy { position: absolute; left: 72px; top: 64px; width: 700px; }
+  /* Keeps the copy readable over the skyline. */
+  .shade { position: absolute; left: 0; top: 0; bottom: 0; width: 820px;
+    background: linear-gradient(90deg, rgba(31,16,36,.72) 0%, rgba(31,16,36,.45) 55%, rgba(31,16,36,0) 100%); }
+  .kicker {
+    display: inline-flex; align-items: center; gap: 10px;
+    padding: 7px 16px 7px 12px; border-radius: 999px;
+    border: 1.5px solid rgba(251,243,228,.35); background: rgba(43,23,48,.45);
+    font: 700 13px/1 "Zen Maru Gothic", "Inter", sans-serif; letter-spacing: .14em; text-transform: uppercase;
+  }
+  .kicker .dot { width: 9px; height: 9px; border-radius: 50%; background: #ff5a4f; box-shadow: 0 0 0 4px rgba(255,90,79,.22); }
+  .brand { display: flex; align-items: center; gap: 22px; margin-top: 26px; }
+  .brand img { width: 100px; height: 100px; filter: drop-shadow(0 10px 22px rgba(20,8,24,.6)); }
+  .jp { font: 400 26px/1 "Dela Gothic One", sans-serif; color: var(--amber); letter-spacing: .32em; margin-bottom: 8px; }
+  .word {
+    font: 400 92px/0.9 "Dela Gothic One", sans-serif; letter-spacing: -.01em; color: var(--cream);
+    text-shadow: 5px 5px 0 var(--plum), 0 0 40px rgba(43,23,48,.6);
+  }
+  .word b { font-weight: 400; color: var(--amber); }
+  .tagline {
+    margin-top: 24px; font: 900 31px/1.22 "Zen Maru Gothic", "Inter", sans-serif;
+    text-shadow: 0 2px 0 rgba(43,23,48,.7), 0 0 18px rgba(43,23,48,.6);
+  }
+  .tagline em { font-style: normal; color: var(--amber-l); }
+  .chips { display: grid; grid-template-columns: repeat(2, max-content); gap: 10px; margin-top: 26px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 8px; padding: 9px 15px; border-radius: 12px;
+    background: rgba(251,243,228,.10); border: 1.5px solid rgba(251,243,228,.22);
+    font: 600 16px/1 "Inter", sans-serif; color: var(--cream); backdrop-filter: blur(4px);
+  }
+  .chip svg { width: 17px; height: 17px; flex: none; }
+  .chip svg * { fill: none; stroke: var(--amber); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* Petals drifting across. */
+  .petal { position: absolute; width: 12px; height: 8px; border-radius: 50% 50% 50% 0; background: #f6b8c8; opacity: .8; }
+</style>
+</head>
+<body>
+<div class="banner">
+  <div class="stars" id="stars"></div>
+  <div class="glow"></div>
+  <div class="sun"></div>
+  <svg class="skyline" viewBox="0 0 1280 230" preserveAspectRatio="none">
+    <path class="far" d="M0 150 L50 150 L50 118 L96 118 L96 136 L140 136 L140 96 L176 96 L176 72 L204 72 L204 96 L240 96 L240 128 L294 128 L294 104 L338 104 L338 140 L392 140 L392 88 L420 88 L420 60 L446 60 L446 88 L472 88 L472 132 L534 132 L534 112 L588 112 L588 146 L640 146 L640 102 L676 102 L676 78 L712 78 L712 108 L756 108 L756 136 L810 136 L810 98 L854 98 L854 126 L898 126 L898 66 L924 66 L924 44 L950 44 L950 66 L978 66 L978 130 L1030 130 L1030 106 L1084 106 L1084 144 L1138 144 L1138 90 L1182 90 L1182 128 L1236 128 L1236 112 L1280 112 L1280 230 L0 230 Z"/>
+    <path class="near" d="M0 190 L80 190 L80 168 L134 168 L134 182 L214 182 L214 156 L268 156 L268 178 L374 178 L374 162 L418 162 L418 186 L534 186 L534 170 L604 170 L604 190 L730 190 L730 160 L782 160 L782 182 L890 182 L890 166 L960 166 L960 188 L1068 188 L1068 156 L1120 156 L1120 180 L1280 180 L1280 230 L0 230 Z"/>
+    <g class="wires">
+      <path d="M760 70 Q 1000 120 1280 84"/>
+      <path d="M760 90 Q 1000 142 1280 106"/>
+    </g>
+  </svg>
+  <div class="cast" aria-hidden="true">
+    <img src="../../site/assets/cast/tsumugi-listening.webp" alt="">
+    <img class="mid" src="../../site/assets/cast/hoshi-listening.webp" alt="">
+    <img class="lead" src="../../site/assets/cast/mori-writing.webp" alt="">
+    <img class="mid" src="../../site/assets/cast/kaito-listening.webp" alt="">
+    <img src="../../site/assets/cast/jin-listening.webp" alt="">
+  </div>
+
+  <div class="shade"></div>
+  <div class="copy">
+    <span class="kicker"><span class="dot"></span>Local-first meeting recorder</span>
+    <div class="brand">
+      <img src="icon.svg" alt="">
+      <div>
+        <div class="jp">モスタルジア</div>
+        <div class="word">Most<b>algia</b></div>
+      </div>
+    </div>
+    <p class="tagline">Nostalgia, but for meetings<br>you can <em>actually recall in full.</em></p>
+    <div class="chips">
+      <span class="chip"><svg viewBox="0 0 24 24"><path d="M4 12h2M8 8v8M12 5v14M16 8v8M20 12h-2"/></svg>Live transcripts, any language</span>
+      <span class="chip"><svg viewBox="0 0 24 24"><path d="M12 3l2.2 5.6L20 9.3l-4.6 3.8L17 19l-5-3.1L7 19l1.6-5.9L4 9.3l5.8-.7z"/></svg>Summaries with any AI</span>
+      <span class="chip"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>Ask your meetings</span>
+      <span class="chip"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>Stays on your machine</span>
+    </div>
+  </div>
+</div>
+<script>
+  // Fixed positions so every render is identical.
+  const stars = [[40,40],[120,22],[210,70],[300,30],[380,58],[470,18],[560,48],[650,26],[720,64],[180,120],[610,110],[520,86],[90,96],[260,140],[430,128],[700,20],[340,96],[760,40]];
+  const box = document.getElementById('stars');
+  stars.forEach(([x, y], i) => {
+    const s = document.createElement('i');
+    s.style.left = x + 'px'; s.style.top = y + 'px';
+    s.style.opacity = (0.35 + (i % 5) * 0.12).toFixed(2);
+    if (i % 4 === 0) { s.style.width = s.style.height = '3px'; }
+    box.appendChild(s);
+  });
+  const petals = [[760,130,-30],[1140,90,20],[680,300,50],[1215,260,-10],[870,60,70]];
+  petals.forEach(([x, y, r]) => {
+    const p = document.createElement('span');
+    p.className = 'petal';
+    p.style.left = x + 'px'; p.style.top = y + 'px'; p.style.transform = `rotate(${r}deg)`;
+    document.querySelector('.banner').appendChild(p);
+  });
+</script>
+</body>
+</html>
