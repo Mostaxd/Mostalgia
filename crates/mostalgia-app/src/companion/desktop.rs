@@ -192,7 +192,7 @@ impl Placement {
             .or(monitors.first())
             .map(|m| m.rect);
         let Some(m) = monitor else { return };
-        self.work = Some(self.x.work_area().and_then(|w| w.intersect(&m)).unwrap_or(m));
+        self.work = Some(self.x.work_area_on(&m));
         if distance(&m) > near {
             // Her monitor is gone: top right of the primary one.
             self.mori = (m.x + m.w - pw - self.px(48.), m.y + self.px(140.));
@@ -588,12 +588,26 @@ fn mmss(s: &str) -> Option<f64> {
     Some(m.trim().parse::<f64>().ok()? * 60. + s.trim().parse::<f64>().ok()?)
 }
 
-/// The X11 window id behind a GPUI window.
-pub(crate) fn window_id(window: &Window) -> Option<u32> {
+/// The native window behind a GPUI window: an X11 window id, an HWND on
+/// Windows, the NSView on macOS.
+#[cfg(not(any(windows, target_os = "macos")))]
+pub(crate) type NativeWindow = u32;
+#[cfg(windows)]
+pub(crate) type NativeWindow = isize;
+#[cfg(target_os = "macos")]
+pub(crate) type NativeWindow = usize;
+
+pub(crate) fn window_id(window: &Window) -> Option<NativeWindow> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     match HasWindowHandle::window_handle(window).ok()?.as_raw() {
+        #[cfg(not(any(windows, target_os = "macos")))]
         RawWindowHandle::Xcb(h) => Some(h.window.get()),
+        #[cfg(not(any(windows, target_os = "macos")))]
         RawWindowHandle::Xlib(h) => Some(h.window as u32),
+        #[cfg(windows)]
+        RawWindowHandle::Win32(h) => Some(h.hwnd.get()),
+        #[cfg(target_os = "macos")]
+        RawWindowHandle::AppKit(h) => Some(h.ns_view.as_ptr() as usize),
         _ => None,
     }
 }

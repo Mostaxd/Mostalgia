@@ -718,10 +718,10 @@ impl MostalgiaApp {
         )
     }
 
-    /// Asks GitHub for a newer AppImage (when running as one, and the
+    /// Asks GitHub for a newer AppImage or Windows zip (when running as one, and the
     /// setting is on). Offline or rate-limited: nothing to show.
     fn check_for_update(&mut self, cx: &mut Context<Self>) {
-        if !mostalgia_core::config::Config::load().check_updates || self_update::running_appimage().is_none() {
+        if !mostalgia_core::config::Config::load().check_updates || !self_update::updatable() {
             return;
         }
         let task = cx.background_spawn(async move { self_update::check() });
@@ -912,9 +912,22 @@ impl MostalgiaApp {
             gpu_check::Cause::Nouveau => {
                 tr("Die NVIDIA-Karte läuft mit dem freien nouveau-Treiber, den Whisper nicht nutzen kann. Installiere den NVIDIA-Treiber.").into()
             }
+            gpu_check::Cause::VulkanMissing if cfg!(windows) => tr(
+                "Der NVIDIA-Treiber läuft, aber Vulkan findet die Karte nicht. Installiere den aktuellen Treiber von nvidia.com/drivers neu.",
+            )
+            .into(),
             gpu_check::Cause::VulkanMissing => {
                 tr("Der NVIDIA-Treiber läuft, aber Vulkan findet die Karte nicht – der Vulkan-Teil des Treibers fehlt vermutlich.").into()
             }
+            gpu_check::Cause::VulkanRuntimeMissing => tr(
+                "Windows fehlt die Vulkan-Laufzeit (vulkan-1.dll), die der Grafiktreiber mitbringt. Installiere den aktuellen Treiber von nvidia.com/drivers.",
+            )
+            .into(),
+            gpu_check::Cause::DriverTooOld { version } => trf(
+                "Der NVIDIA-Treiber {} ist zu alt für Whisper auf der Grafikkarte. Installiere den aktuellen Treiber von nvidia.com/drivers.",
+                &[version],
+            )
+            .into(),
         };
         let command = banner.problem.fix.as_ref().map(|f| f.shell());
         let can_run = banner.problem.fix.is_some() && gpu_check::Fix::can_run();
@@ -2138,7 +2151,7 @@ impl MostalgiaApp {
                             .when(matches!(self.screen, Screen::Ask(_)), |b| b.selected(true))
                             .icon(IconName::Sparkles)
                             .label(tr("Fragen"))
-                            .tooltip(tr("Frag deine Besprechungen (Strg+K)"))
+                            .tooltip(if cfg!(target_os = "macos") { tr("Frag deine Besprechungen (⌘K)") } else { tr("Frag deine Besprechungen (Strg+K)") })
                             .on_click(cx.listener(|this, _, window, cx| this.open_ask(window, cx))),
                     )
                     .child(

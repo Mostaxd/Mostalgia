@@ -67,8 +67,11 @@ jobs:
           key: sherpa
           cache-directories: ~/.cache/sherpa-rs
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo build --workspace --all-targets
-      - run: cargo test --workspace
+      # Errors and failed tests also become annotations (see the script).
+      - run: bash scripts/ci-cargo.sh cargo build --workspace --all-targets
+        shell: bash
+      - run: bash scripts/ci-cargo.sh cargo test --workspace --no-fail-fast
+        shell: bash
 
   windows:
     needs: changes
@@ -83,5 +86,27 @@ jobs:
           cache-directories: ~/AppData/Local/sherpa-rs
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # CMake and LLVM (for whisper.cpp and its bindings) come with the runner.
-      - run: cargo build --workspace --all-targets
-      - run: cargo test --workspace
+      # Errors and failed tests also become annotations (see the script).
+      - run: bash scripts/ci-cargo.sh cargo build --workspace --all-targets
+        shell: bash
+      - run: bash scripts/ci-cargo.sh cargo test --workspace --no-fail-fast
+        shell: bash
+
+  macos:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
+    # Apple Silicon; whisper.cpp runs on Metal.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: sherpa
+          cache-directories: ~/Library/Caches/sherpa-rs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Errors and failed tests also become annotations (see the script).
+      - run: scripts/ci-cargo.sh cargo build --workspace --all-targets --features mostalgia-core/metal
+        shell: bash
+      - run: scripts/ci-cargo.sh cargo test --workspace --no-fail-fast --features mostalgia-core/metal
+        shell: bash

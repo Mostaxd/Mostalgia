@@ -5,6 +5,14 @@
 pub mod ask;
 pub mod assist;
 pub mod audio;
+/// Microphone, device list and playback through cpal (and system audio on
+/// Windows); see `audio::spawn_capture`.
+#[cfg(not(target_os = "linux"))]
+pub mod audio_cpal;
+/// System-audio capture on macOS (see `audio::spawn_capture`).
+#[cfg(target_os = "macos")]
+pub mod audio_macos;
+pub mod audio_pump;
 pub mod callwatch;
 pub mod chunker;
 pub mod cleanup;
@@ -12,6 +20,7 @@ pub mod companion;
 pub mod cloud_stt;
 pub mod config;
 pub mod connections;
+pub mod control_channel;
 pub mod decisions;
 pub mod denoise;
 pub mod diarize;

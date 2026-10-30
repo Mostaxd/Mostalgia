@@ -80,7 +80,7 @@ fn metadata_date(path: &Path) -> Option<DateTime<Local>> {
         found
     })();
     from_tags.or_else(|| {
-        let out = Command::new("ffprobe")
+        let out = tool("ffprobe")
             .args(["-v", "quiet", "-show_entries", "format_tags=creation_time", "-of", "default=nw=1:nk=1"])
             .arg(path)
             .output()
@@ -111,8 +111,10 @@ fn hint(path: &Path) -> Hint {
     hint
 }
 
-/// Streaming windowed-sinc resampler to 16 kHz (mono f32).
-struct Resampler {
+/// Streaming windowed-sinc resampler (mono f32), to 16 kHz unless made
+/// with [`Resampler::between`]. Also used by live capture and playback
+/// where the sound system doesn't resample for us (see `audio_pump`).
+pub(crate) struct Resampler {
     ratio: f64,
     /// Input samples not yet consumed, with `pos` the next output's place.
     buf: Vec<f32>,
@@ -130,8 +132,13 @@ struct Resampler {
 const STEPS: usize = 512;
 
 impl Resampler {
-    fn new(rate: u32) -> Self {
-        let ratio = rate as f64 / SAMPLE_RATE as f64;
+    pub(crate) fn new(rate: u32) -> Self {
+        Self::between(rate, SAMPLE_RATE)
+    }
+
+    /// From `from` Hz to `to` Hz.
+    pub(crate) fn between(from: u32, to: u32) -> Self {
+        let ratio = from as f64 / to.max(1) as f64;
         // Low-pass below the new Nyquist when downsampling.
         let cutoff = (1.0 / ratio).min(1.0) * 0.95;
         let half = (16.0 * ratio.max(1.0)).ceil() as usize;
@@ -152,7 +159,7 @@ impl Resampler {
         sinc * w
     }
 
-    fn push(&mut self, input: &[f32], out: &mut Vec<f32>) {
+    pub(crate) fn push(&mut self, input: &[f32], out: &mut Vec<f32>) {
         let before = out.len();
         self.taken += input.len() as u64;
         self.resample(input, out);
@@ -187,7 +194,7 @@ impl Resampler {
     }
 
     /// The tail: as many samples as the input's length calls for.
-    fn finish(&mut self, out: &mut Vec<f32>) {
+    pub(crate) fn finish(&mut self, out: &mut Vec<f32>) {
         let want = (self.taken as f64 / self.ratio).round() as u64;
         let missing = want.saturating_sub(self.given) as usize;
         let before = out.len();
@@ -212,12 +219,17 @@ pub fn convert(src: &Path, dst: &Path, progress: &dyn Fn(Option<f32>)) -> Result
         Err(native) => {
             let _ = std::fs::remove_file(dst);
             if !ffmpeg_available() {
+                let args: [&dyn std::fmt::Display; 2] = [&src.display(), &format!("{native:#}")];
                 bail!(
                     "{}",
-                    trf(
-                        "{} lässt sich nicht lesen ({}). Für dieses Format (z. B. Opus) wird ffmpeg gebraucht – installieren (sudo apt install ffmpeg) und erneut importieren.",
-                        &[&src.display(), &format!("{native:#}")]
-                    )
+                    if cfg!(target_os = "macos") {
+                        trf("{} lässt sich nicht lesen ({}). Für dieses Format (z. B. Opus) wird ffmpeg gebraucht – installieren (brew install ffmpeg) und erneut importieren.", &args)
+                    } else {
+                        trf(
+                            "{} lässt sich nicht lesen ({}). Für dieses Format (z. B. Opus) wird ffmpeg gebraucht – installieren (sudo apt install ffmpeg) und erneut importieren.",
+                            &args,
+                        )
+                    }
                 );
             }
             eprintln!("[mostalgia] {} — ffmpeg", format!("{native:#}"));
@@ -309,19 +321,48 @@ fn convert_native(src: &Path, dst: &Path, progress: &dyn Fn(Option<f32>)) -> Res
     Ok(written as f64 / SAMPLE_RATE as f64)
 }
 
+/// ffmpeg / ffprobe, without a console window flashing up on Windows.
+fn tool(name: &str) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(tool_path(name));
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+/// A tool's program: its name, found in PATH. On macOS also Homebrew's and
+/// MacPorts' folders, which an app started from the Finder doesn't have in
+/// its PATH.
+fn tool_path(name: &str) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        let in_path = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(name).is_file()));
+        if !in_path
+            && let Some(found) = ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"].iter().map(|d| Path::new(d).join(name)).find(|p| p.is_file())
+        {
+            return found;
+        }
+    }
+    PathBuf::from(name)
+}
+
 fn ffmpeg_available() -> bool {
-    Command::new("ffmpeg").arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success())
+    tool("ffmpeg").arg("-version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success())
 }
 
 /// ffmpeg decodes, mixes down and resamples; we stream its raw output.
 fn convert_ffmpeg(src: &Path, dst: &Path, progress: &dyn Fn(Option<f32>)) -> Result<f64> {
-    let total = Command::new("ffprobe")
+    let total = tool("ffprobe")
         .args(["-v", "quiet", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1"])
         .arg(src)
         .output()
         .ok()
         .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<f64>().ok());
-    let mut child = Command::new("ffmpeg")
+    let mut child = tool("ffmpeg")
         .args(["-v", "error", "-nostdin", "-i"])
         .arg(src)
         .args(["-vn", "-ac", "1", "-ar", &SAMPLE_RATE.to_string(), "-f", "s16le", "-"])

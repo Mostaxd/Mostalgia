@@ -27,6 +27,8 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 # Comparing the running AppImage with a release (see `self_update`).
 sha1_smol = "1"
+# Checking a downloaded Windows update against the release's .sha256.
+sha2 = "0.10"
 regex = "1"
 symphonia = { version = "0.5", default-features = false, features = ["aac", "adpcm", "alac", "flac", "mp1", "mp2", "mp3", "pcm", "vorbis", "caf", "isomp4", "mkv", "ogg", "aiff", "wav"] }
 sherpa-rs = { version = "0.6.8", default-features = false, features = ["download-binaries"], optional = true }
@@ -44,9 +46,36 @@ zip = { version = "8", default-features = false, features = ["deflate"] }
 libpulse-binding = "2.30.1"
 libpulse-simple-binding = "2.29.0"
 
+# Capture, playback and device lists everywhere else (WASAPI on Windows,
+# CoreAudio on macOS); see `audio_cpal`.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+cpal = "0.18"
+
+# Call detection: who uses the microphone (see `callwatch`).
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+# The GPU check: the NVIDIA card and its driver version (DXGI).
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Dxgi"] }
+
+# Core Audio (system audio tap, call detection) and ScreenCaptureKit (system
+# audio before macOS 14.2) on macOS. Same objc2 generation as GPUI's.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+dispatch2 = "0.3"
+libc = "0.2"
+objc2 = "0.6"
+objc2-core-audio = "0.3"
+objc2-core-audio-types = "0.3"
+objc2-core-foundation = "0.3"
+objc2-core-media = "0.3"
+objc2-foundation = "0.3"
+objc2-screen-capture-kit = "0.3"
+
 [features]
 default = ["diarization"]
 vulkan = ["whisper-rs/vulkan"]
+# Apple GPUs (macOS).
+metal = ["whisper-rs/metal"]
 cuda = ["whisper-rs/cuda"]
 openblas = ["whisper-rs/openblas"]
 # Speaker diarization (sherpa-onnx; its shared libraries are copied next to the binary).
