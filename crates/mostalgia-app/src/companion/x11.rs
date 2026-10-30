@@ -95,8 +95,10 @@ impl X11 {
             AtomEnum::ATOM,
             &[a._NET_WM_WINDOW_TYPE_UTILITY, a._NET_WM_WINDOW_TYPE_NORMAL],
         )?;
-        // No title bar or frame (flags = decorations, decorations = none).
-        self.conn.change_property32(PropMode::REPLACE, self.window, a._MOTIF_WM_HINTS, a._MOTIF_WM_HINTS, &[2, 0, 0, 0, 0])?;
+        // No title bar or frame, and only moving (flags = functions |
+        // decorations, functions = move, decorations = none): dropped at
+        // the screen's top edge it mustn't be maximized.
+        self.conn.change_property32(PropMode::REPLACE, self.window, a._MOTIF_WM_HINTS, a._MOTIF_WM_HINTS, &[3, 4, 0, 0, 0])?;
         // _NET_WM_STATE_ADD, two properties per message.
         for pair in [
             [a._NET_WM_STATE_ABOVE, a._NET_WM_STATE_STICKY],

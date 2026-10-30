@@ -588,7 +588,10 @@ impl Companion {
         let Some(drag) = self.drag.take() else { return };
         if self.desktop.is_some() {
             if drag.moved {
-                self.end_desktop_drag(false);
+                // (The window manager may have moved the window and given
+                // the button release back to us: where is it now?)
+                let wm_moved = self.desktop.as_ref().and_then(|p| p.drag).is_some_and(|d| d.wm_move);
+                self.end_desktop_drag(wm_moved);
             } else {
                 if let Some(p) = &mut self.desktop {
                     p.drag = None;

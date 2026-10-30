@@ -170,15 +170,23 @@ impl Placement {
         let monitors = self.x.monitors();
         let (pw, ph) = (self.px(w), self.px(h));
         let center = (self.mori.0 + pw / 2, self.mori.1 + ph / 2);
+        // Just past a monitor's edge (dropped there): that monitor.
+        let distance = |r: &Rect| {
+            let dx = (r.x - center.0).max(center.0 - (r.x + r.w)).max(0) as i64;
+            let dy = (r.y - center.1).max(center.1 - (r.y + r.h)).max(0) as i64;
+            dx * dx + dy * dy
+        };
+        let near = (pw as i64).pow(2) + (ph as i64).pow(2);
         let monitor = monitors
             .iter()
             .find(|m| m.rect.contains(center.0, center.1))
+            .or_else(|| monitors.iter().filter(|m| distance(&m.rect) <= near).min_by_key(|m| distance(&m.rect)))
             .or_else(|| monitors.iter().find(|m| m.primary))
             .or(monitors.first())
             .map(|m| m.rect);
         let Some(m) = monitor else { return };
         self.work = Some(self.x.work_area().and_then(|w| w.intersect(&m)).unwrap_or(m));
-        if !m.contains(center.0, center.1) {
+        if distance(&m) > near {
             // Her monitor is gone: top right of the primary one.
             self.mori = (m.x + m.w - pw - self.px(48.), m.y + self.px(140.));
         }
