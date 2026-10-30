@@ -75,12 +75,14 @@ impl BubbleState {
 }
 
 /// The grip was pressed here (window coordinates) with the bubble at this
-/// size; `left` = the grip is on its left side (it grows to the left).
+/// size; `left` / `up` = the grip is on its left side / top (it grows to
+/// the left / upwards).
 #[derive(Clone, Copy)]
 struct Resize {
     mouse: (f32, f32),
     from: (f32, f32),
     left: bool,
+    up: bool,
 }
 
 struct Undo {
@@ -482,10 +484,10 @@ impl Companion {
             .into_any_element()
     }
 
-    fn start_resize(&mut self, ev: &MouseDownEvent, left: bool, cx: &mut Context<Self>) {
+    fn start_resize(&mut self, ev: &MouseDownEvent, (left, up): (bool, bool), cx: &mut Context<Self>) {
         let scale = ui::ui_scale();
         let (w, h) = self.bubble.bounds.get().map_or(bubble_size(self.bubble.size), |b| (f32::from(b.size.width), f32::from(b.size.height)));
-        self.bubble.resize = Some(Resize { mouse: (ev.position.x.into(), ev.position.y.into()), from: (w / scale, h / scale), left });
+        self.bubble.resize = Some(Resize { mouse: (ev.position.x.into(), ev.position.y.into()), from: (w / scale, h / scale), left, up });
         cx.stop_propagation();
         cx.notify();
     }
@@ -497,7 +499,7 @@ impl Companion {
         let dx = (f32::from(ev.position.x) - r.mouse.0) / scale;
         let dy = (f32::from(ev.position.y) - r.mouse.1) / scale;
         let w = if r.left { r.from.0 - dx } else { r.from.0 + dx };
-        let size = Some((w.clamp(BUBBLE_MIN_W, BUBBLE_MAX_W).round(), (r.from.1 + dy).clamp(BUBBLE_MIN_H, BUBBLE_MAX_H).round()));
+        let size = Some((w.clamp(BUBBLE_MIN_W, BUBBLE_MAX_W).round(), (if r.up { r.from.1 - dy } else { r.from.1 + dy }).clamp(BUBBLE_MIN_H, BUBBLE_MAX_H).round()));
         if size != self.bubble.size {
             self.bubble.size = size;
             cx.notify();
@@ -563,6 +565,11 @@ impl Companion {
         let top_min = if self.desktop.is_some() { ay + 8. } else { 48. };
         let max_h = want_h.min(ay + ah - 8. - top_min);
         let top = (o.y + h * 0.1).min(ay + ah - max_h - 8.).max(top_min);
+        // No room below her top for it at its tallest: it grows up from her
+        // feet instead, so a short bubble stays next to her.
+        let feet = (o.y + h).min(ay + ah - 8.);
+        let bottom = (top < o.y + h * 0.1).then_some(vh - feet);
+        let max_h = if bottom.is_some() { max_h.min(feet - top_min) } else { max_h };
         let recording = self.recording.read(cx).is_recording();
         let scope = self.scope(cx);
         let busy = self.chat_rx.is_some();
@@ -817,7 +824,10 @@ impl Companion {
                 .id("mori-bubble")
                 .absolute()
                 .left(px(left))
-                .top(px(top))
+                .map(|el| match bottom {
+                    Some(b) => el.bottom(px(b)),
+                    None => el.top(px(top)),
+                })
                 .w(px(width))
                 .map(|el| if resized { el.h(px(max_h)) } else { el.max_h(px(max_h)) })
                 .rounded(theme.radius_lg)
@@ -848,17 +858,19 @@ impl Companion {
                 }))
                 .when(!notes_tab, |el| el.child(input_row))
                 .children(choice)
-                // The resize grip in the bottom corner away from her.
-                .child(
+                // The resize grip in the corner away from her (the top one
+                // when it grows up from her feet).
+                .child({
+                    let up = bottom.is_some();
                     div()
                         .id("mori-bubble-resize")
                         .absolute()
-                        .bottom_0()
                         .size(px(GRIP))
+                        .map(|el| if up { el.top_0() } else { el.bottom_0() })
                         .map(|el| if on_left { el.left_0() } else { el.right_0() })
-                        .cursor(if on_left { CursorStyle::ResizeUpRightDownLeft } else { CursorStyle::ResizeUpLeftDownRight })
-                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, ev: &MouseDownEvent, _, cx| this.start_resize(ev, on_left, cx))),
-                )
+                        .cursor(if on_left == up { CursorStyle::ResizeUpLeftDownRight } else { CursorStyle::ResizeUpRightDownLeft })
+                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, ev: &MouseDownEvent, _, cx| this.start_resize(ev, (on_left, up), cx)))
+                })
                 // Measures the bubble (her desktop window lets only it take the mouse).
                 .child(canvas(move |b, _, _| bounds.set(Some(b)), |_, _, _, _| {}).absolute().top_0().left_0().size_full())
                 .into_any_element(),
