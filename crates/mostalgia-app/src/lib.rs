@@ -7,6 +7,7 @@ pub mod companion;
 pub mod control;
 pub mod decisions_view;
 pub mod documents;
+pub mod library_job;
 pub mod meeting;
 pub mod processing;
 pub mod recording;

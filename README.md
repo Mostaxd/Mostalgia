@@ -276,6 +276,8 @@ mostalgia start [--source mic|system|both] [--speakers] [--diarize] [--denoise] 
 mostalgia list | show <id> | search <words> | ask "<question>"
 mostalgia summarize <id> [--provider <connection>] [--summary-model …] [--effort low…max]
 mostalgia export <id> --format md|txt|srt|docx [-o file]
+mostalgia export-library [file.mostalgia] [--audio] [--documents] [--voices]
+mostalgia import-library <file.mostalgia> [--dry-run] [--no-audio] [--no-documents] [--no-voices]
 mostalgia delete <id> [--keep-audio]
 mostalgia import <session-folder> | transcribe <file.wav> | reindex [--all]
 mostalgia retranscribe <id> --engine local|<connection>/<model>

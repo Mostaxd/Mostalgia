@@ -217,17 +217,28 @@ impl MostalgiaApp {
         .detach();
         // Work on meetings (see `processing`): redraw the library and the
         // open screens whenever it moves on.
+        // Also a library export / import (see `library_job`): its progress
+        // in Settings, and the library list once an import added meetings.
         cx.spawn(async move |this, cx| {
-            let mut seen = crate::processing::generation();
+            let changes = || crate::processing::generation() + crate::library_job::generation();
+            let mut seen = changes();
+            let mut imported = crate::library_job::imported();
             loop {
                 cx.background_executor().timer(std::time::Duration::from_millis(250)).await;
-                let now = crate::processing::generation();
+                let now = changes();
                 if now == seen {
                     continue;
                 }
                 seen = now;
                 let alive = this
                     .update(cx, |this, cx| {
+                        if crate::library_job::imported() != imported {
+                            imported = crate::library_job::imported();
+                            this.reload(cx);
+                        }
+                        if let Some(s) = this.settings_view() {
+                            s.update(cx, |_, cx| cx.notify());
+                        }
                         this.recording.update(cx, |_, cx| cx.notify());
                         if let Some(m) = this.meeting_view() {
                             m.update(cx, |m, cx| m.processing_changed(cx));
@@ -244,6 +255,7 @@ impl MostalgiaApp {
         cx.on_app_quit(|this, _| {
             this.mori_host.stop();
             this.caption_host.stop();
+            crate::library_job::shutdown();
             async {}
         })
         .detach();

@@ -100,4 +100,10 @@ pub const EN: &[(&str, &str)] = &[
     ("PDF-Dateien werden nicht unterstützt — kopiere den Text heraus und füge ihn ein.", "PDF files aren't supported — copy the text out and paste it."),
     ("Im Text steht nichts, woraus sich eine Besprechung machen ließe.", "There's nothing in the text to make a meeting from."),
     ("Diese Besprechung wurde aus Text importiert – es gibt kein Audio zum Transkribieren.", "This meeting was imported from text — there's no audio to transcribe."),
+    // Library export / import
+    ("Abgebrochen", "Cancelled"),
+    ("{} konnte nicht geschrieben werden", "Could not write {}"),
+    ("Die Datei ist kein Mostalgia-Archiv", "This file is not a Mostalgia archive"),
+    ("Das Archiv stammt von einer neueren Mostalgia-Version. Bitte Mostalgia aktualisieren.", "This archive was made by a newer version of Mostalgia. Please update Mostalgia."),
+    ("{} Besprechungen importiert, {} übersprungen.", "Imported {} meetings, skipped {}."),
 ];

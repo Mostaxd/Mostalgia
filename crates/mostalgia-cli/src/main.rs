@@ -266,6 +266,37 @@ enum Command {
         #[arg(long, short)]
         output: Option<PathBuf>,
     },
+    /// Export the whole library into one .mostalgia archive (a backup, or to
+    /// move it to another computer)
+    ExportLibrary {
+        /// Output file [default: mostalgia-library-<date>.mostalgia]
+        output: Option<PathBuf>,
+        /// Include the recordings' audio (WAV, large)
+        #[arg(long)]
+        audio: bool,
+        /// Include the documents drive and its collections
+        #[arg(long)]
+        documents: bool,
+        /// Include known voice prints (they identify people)
+        #[arg(long)]
+        voices: bool,
+    },
+    /// Import a .mostalgia archive; meetings already in the library are skipped
+    ImportLibrary {
+        file: PathBuf,
+        /// Only show what would be imported
+        #[arg(long)]
+        dry_run: bool,
+        /// Leave out the archive's audio
+        #[arg(long)]
+        no_audio: bool,
+        /// Leave out the archive's documents
+        #[arg(long)]
+        no_documents: bool,
+        /// Leave out the archive's voice prints
+        #[arg(long)]
+        no_voices: bool,
+    },
     /// Delete a meeting: transcript, summary, search index and its audio files
     Delete {
         id: i64,
@@ -555,6 +586,10 @@ fn main() -> Result<()> {
         }
         Command::Notes { id, focus, style } => regenerate_notes(id, focus, style),
         Command::Export { id, format, output } => export(id, format.as_deref(), output),
+        Command::ExportLibrary { output, audio, documents, voices } => export_library(output, audio, documents, voices),
+        Command::ImportLibrary { file, dry_run, no_audio, no_documents, no_voices } => {
+            import_library(&file, dry_run, mostalgia_core::library::ImportOptions { audio: !no_audio, documents: !no_documents, voices: !no_voices })
+        }
         Command::Delete { id, keep_audio } => {
             anyhow::ensure!(open_store()?.delete_meeting(id, !keep_audio)?, "{}", trf("Keine Besprechung #{}", &[&id]));
             if keep_audio {
@@ -1095,6 +1130,54 @@ fn export(id: i64, format: Option<&str>, output: Option<PathBuf>) -> Result<()> 
     let path = output.unwrap_or_else(|| PathBuf::from(export::suggested_name(&m, format)));
     export::write(&m, format, &path)?;
     println!("{}", trf("Besprechung #{} exportiert nach {}", &[&id, &path.display()]));
+    Ok(())
+}
+
+fn export_library(output: Option<PathBuf>, audio: bool, documents: bool, voices: bool) -> Result<()> {
+    use mostalgia_core::library;
+    let path = output.unwrap_or_else(|| PathBuf::from(library::suggested_name()));
+    let opts = library::ExportOptions { audio, documents, voices };
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let r = library::export(&open_store()?, &library::Places::data(), &path, &opts, &cancel, &|done, total| {
+        eprint!("\r{done}/{total}");
+    })?;
+    eprintln!();
+    println!(
+        "{}",
+        trf("{} Besprechungen exportiert nach {} ({})", &[&r.meetings, &path.display(), &mostalgia_core::cleanup::human(r.bytes)])
+    );
+    Ok(())
+}
+
+fn import_library(file: &Path, dry_run: bool, opts: mostalgia_core::library::ImportOptions) -> Result<()> {
+    use mostalgia_core::library;
+    let mut store = open_store()?;
+    let p = library::preview(&store, file)?;
+    println!("{}", trf("Neu: {} Besprechungen, schon vorhanden: {}", &[&p.new.len(), &p.existing.len()]));
+    for m in &p.new {
+        println!("  + {}  {}", Local.timestamp_opt(m.started_at, 0).single().map(|d| d.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default(), m.title);
+    }
+    if p.audio_files > 0 {
+        println!("{}", trf("Audio: {} Dateien", &[&p.audio_files]));
+    }
+    if p.documents_new + p.documents_existing > 0 {
+        println!("{}", trf("Dokumente: {} neu, {} schon vorhanden", &[&p.documents_new, &p.documents_existing]));
+    }
+    if p.voices > 0 {
+        println!("{}", trf("Stimmen: {}", &[&p.voices]));
+    }
+    if dry_run {
+        return Ok(());
+    }
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let r = library::import(&mut store, &library::Places::data(), file, &opts, &cancel, &|done, total| {
+        eprint!("\r{done}/{total}");
+    })?;
+    eprintln!();
+    println!("{}", trf("{} Besprechungen importiert, {} übersprungen.", &[&r.meetings_added, &r.meetings_skipped]));
+    if r.meetings_added > 0 {
+        println!("{}", tr("Der Suchindex wird beim nächsten Start der App oder mit „mostalgia reindex“ aufgebaut."));
+    }
     Ok(())
 }
 

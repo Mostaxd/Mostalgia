@@ -20,6 +20,7 @@ pub mod export;
 pub mod finalize;
 pub mod i18n;
 pub mod language;
+pub mod library;
 pub mod llm;
 pub mod media_import;
 pub mod paths;

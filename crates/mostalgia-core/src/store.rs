@@ -235,7 +235,7 @@ pub struct NewMeeting<'a> {
     pub dir: &'a Path,
 }
 
-const SCHEMA_VERSION: i32 = 14;
+pub const SCHEMA_VERSION: i32 = 14;
 
 const SCHEMA: &str = "
 CREATE TABLE meetings (
