@@ -126,6 +126,12 @@ const MIN_SPAN_SECS: f64 = 3.0;
 const MAX_GAP_SECS: f64 = 1.5;
 /// …and the result stays under this (Whisper's window is 30 s).
 const MAX_SPAN_SECS: f64 = 25.0;
+/// A region past that limit is cut at the quietest moment of its last
+/// stretch this long, so the cut falls in a pause rather than in a word.
+const SPLIT_WINDOW_SECS: f64 = 5.0;
+/// From this share of a track's audio being speech, its quieter blocks are
+/// speech as well and say nothing about the background.
+const MOSTLY_SPEECH: f64 = 0.7;
 
 /// Re-transcribes each full track and merges the tracks into one
 /// transcript by time. With a VAD model, Silero finds the speech first and
@@ -178,17 +184,18 @@ fn final_pass_in(
             samples = crate::denoise::denoise_all(&samples);
         }
         let first = out.len();
-        let gate = crate::chunker::speech_gate(noise_floor(&samples));
         let spans: Vec<(f64, f64)> = match vad.as_mut() {
             Some(vad) => speech_spans(vad, &samples)?,
             None => vec![(0.0, samples.len() as f64 / SAMPLE_RATE as f64)],
-        }
-        .into_iter()
-        .filter(|&(start, end)| {
-            let audio = &samples[sample_range(start, end, samples.len())];
-            !audio.is_empty() && crate::vad::rms(audio) >= gate
-        })
-        .collect();
+        };
+        let gate = span_gate(&samples, &spans);
+        let spans: Vec<(f64, f64)> = spans
+            .into_iter()
+            .filter(|&(start, end)| {
+                let audio = &samples[sample_range(start, end, samples.len())];
+                !audio.is_empty() && crate::vad::rms(audio) >= gate
+            })
+            .collect();
         let total: f64 = spans.iter().map(|(a, b)| b - a).sum();
         let mut done = 0.0;
         report(0.0, total);
@@ -295,6 +302,21 @@ fn noise_floor(samples: &[f32]) -> f32 {
     blocks[blocks.len() / 5]
 }
 
+/// The loudness a speech span of this track needs. Speech without real
+/// pauses (a talk, a podcast, a video) has no background to measure: its
+/// floor is the speech itself and 2.5 times that would drop all of it, so
+/// such a track only has to clear the absolute floor.
+fn span_gate(samples: &[f32], spans: &[(f64, f64)]) -> f32 {
+    let speech: f64 = spans.iter().map(|(a, b)| b - a).sum();
+    let audible = samples.chunks(crate::BLOCK_SAMPLES).filter(|b| crate::vad::rms(b) > 0.0).count();
+    let audible = audible as f64 * crate::BLOCK_SAMPLES as f64 / SAMPLE_RATE as f64;
+    if speech >= audible * MOSTLY_SPEECH {
+        crate::chunker::MIN_UTTERANCE_RMS
+    } else {
+        crate::chunker::speech_gate(noise_floor(samples))
+    }
+}
+
 fn load_vad(path: &Path) -> Result<WhisperVadContext> {
     crate::transcribe::quiet_native_logs();
     let mut params = WhisperVadContextParams::new();
@@ -328,7 +350,33 @@ fn speech_spans(vad: &mut WhisperVadContext, samples: &[f32]) -> Result<Vec<(f64
             _ => spans.push((start, end)),
         }
     }
-    Ok(spans)
+    // whisper.cpp merges adjacent regions after applying its own limit, so
+    // an unbroken stretch of speech can still come back far too long.
+    Ok(spans.into_iter().flat_map(|span| split_long(span, samples)).collect())
+}
+
+/// `span` in pieces of at most [`MAX_SPAN_SECS`].
+fn split_long((mut start, end): (f64, f64), samples: &[f32]) -> Vec<(f64, f64)> {
+    let mut pieces = Vec::new();
+    while end - start > MAX_SPAN_SECS {
+        let cut = quietest_moment(start + MAX_SPAN_SECS - SPLIT_WINDOW_SECS, start + MAX_SPAN_SECS, samples);
+        pieces.push((start, cut));
+        start = cut;
+    }
+    pieces.push((start, end));
+    pieces
+}
+
+/// Start of the quietest 100 ms block between `from` and `to`; `to` when
+/// there's no audio there.
+fn quietest_moment(from: f64, to: f64, samples: &[f32]) -> f64 {
+    let block_secs = crate::BLOCK_SAMPLES as f64 / SAMPLE_RATE as f64;
+    samples[sample_range(from, to, samples.len())]
+        .chunks(crate::BLOCK_SAMPLES)
+        .map(crate::vad::rms)
+        .enumerate()
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map_or(to, |(i, _)| from + i as f64 * block_secs)
 }
 
 fn sample_range(start: f64, end: f64, len: usize) -> std::ops::Range<usize> {
@@ -479,5 +527,59 @@ mod tests {
         assert!((noise_floor(&track) - 0.01).abs() < 1e-4);
         assert_eq!(noise_floor(&vec![0.0; 10 * crate::BLOCK_SAMPLES]), 0.0, "all off: no floor, nothing breaks");
         assert_eq!(noise_floor(&[]), 0.0);
+    }
+
+    fn tone(secs: usize, level: f32) -> Vec<f32> {
+        (0..secs * SAMPLE_RATE as usize).map(|i| if i % 2 == 0 { level } else { -level }).collect()
+    }
+
+    #[test]
+    fn speech_without_pauses_is_not_its_own_background() {
+        // A video on system audio: speech from start to end at a steady level.
+        let track = tone(100, 0.05);
+        let gate = span_gate(&track, &[(0.0, 100.0)]);
+        assert_eq!(gate, crate::chunker::MIN_UTTERANCE_RMS);
+        assert!(crate::vad::rms(&track) >= gate);
+    }
+
+    #[test]
+    fn digital_silence_does_not_count_against_the_speech_share() {
+        let mut track = vec![0.0f32; 60 * SAMPLE_RATE as usize];
+        track.extend(tone(40, 0.05));
+        assert_eq!(span_gate(&track, &[(60.0, 100.0)]), crate::chunker::MIN_UTTERANCE_RMS);
+    }
+
+    #[test]
+    fn short_speech_over_a_steady_background_keeps_the_noise_gate() {
+        let track = tone(100, 0.01);
+        assert_eq!(span_gate(&track, &[(10.0, 20.0)]), crate::chunker::speech_gate(noise_floor(&track)));
+    }
+
+    #[test]
+    fn silence_stays_below_the_gate() {
+        let track = vec![0.0f32; 10 * SAMPLE_RATE as usize];
+        assert!(crate::vad::rms(&track) < span_gate(&track, &[(0.0, 10.0)]));
+        assert!(0.0 < span_gate(&[], &[]));
+    }
+
+    #[test]
+    fn long_spans_are_cut_in_their_pauses() {
+        let mut track = tone(22, 0.05);
+        track.extend(tone(1, 0.001));
+        track.extend(tone(37, 0.05));
+        let pieces = split_long((0.0, 60.0), &track);
+        assert_eq!(pieces.len(), 3);
+        assert!((pieces[0].1 - 22.0).abs() <= 0.1, "cut in the pause, not at the limit: {pieces:?}");
+        assert_eq!(pieces[0].0, 0.0);
+        assert_eq!(pieces[2].1, 60.0);
+        assert!(pieces.windows(2).all(|w| w[0].1 == w[1].0), "nothing lost between pieces");
+        assert!(pieces.iter().all(|(a, b)| b - a <= MAX_SPAN_SECS));
+    }
+
+    #[test]
+    fn short_spans_stay_whole_and_cuts_survive_a_span_past_the_audio() {
+        assert_eq!(split_long((3.0, 20.0), &tone(30, 0.05)), [(3.0, 20.0)]);
+        let pieces = split_long((0.0, 60.0), &[]);
+        assert!(pieces.iter().all(|(a, b)| b - a <= MAX_SPAN_SECS) && pieces.last().unwrap().1 == 60.0);
     }
 }
