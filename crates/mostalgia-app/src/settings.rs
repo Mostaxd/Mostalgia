@@ -99,6 +99,11 @@ pub struct SettingsView {
     /// The known voice being renamed, and the voice asked about forgetting.
     voice_rename: Option<(String, Entity<InputState>)>,
     voice_forget: Option<String>,
+    /// What "Export library" includes besides the meetings' text.
+    library_export: mostalgia_core::library::ExportOptions,
+    /// An archive picked for import: what it would add, and what to take.
+    library_preview: Option<(std::path::PathBuf, mostalgia_core::library::Preview, mostalgia_core::library::ImportOptions)>,
+    library_error: Option<String>,
     /// Terms and fix rules for transcription.
     glossary: Glossary,
     glossary_term: Entity<InputState>,
@@ -455,6 +460,9 @@ impl SettingsView {
             voices: Voices::load(),
             voice_rename: None,
             voice_forget: None,
+            library_export: Default::default(),
+            library_preview: None,
+            library_error: None,
             glossary: Glossary::load(),
             glossary_term,
             glossary_from,
@@ -3412,6 +3420,13 @@ impl Render for SettingsView {
             wide: false,
             element: self.render_audio_cleanup(cx).into_any_element(),
         });
+        cards.push(Card {
+            category: Category::Speicher,
+            title: "Bibliothek sichern",
+            keywords: "bibliothek library sichern backup export import exportieren importieren archiv archive umzug transfer computer mostalgia datei file",
+            wide: true,
+            element: self.render_library_transfer(cx).into_any_element(),
+        });
         let export = ui::card(cx)
             .child(title("Export"))
             .child(div().text_sm().child(tr("In jeder Besprechung über „Exportieren“: Zusammenfassung und Transkript als")))
@@ -4181,5 +4196,263 @@ impl SettingsView {
             h_flex().flex_wrap().gap_1().children(buttons).into_any_element(),
             &theme,
         ))
+    }
+}
+
+// ── Speicher & Export: the whole library in one .mostalgia file ──
+impl SettingsView {
+    fn pick_library_export(&mut self, cx: &mut Context<Self>) {
+        use mostalgia_core::library;
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_else(|| ".".into());
+        let dir = if home.join("Documents").is_dir() { home.join("Documents") } else { home };
+        let picked = cx.prompt_for_new_path(&dir, Some(&library::suggested_name()));
+        let opts = self.library_export;
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(mut path))) = picked.await else { return };
+            if path.extension().is_none_or(|e| e != library::EXTENSION) {
+                path.set_extension(library::EXTENSION);
+            }
+            crate::library_job::start_export(path, opts);
+            this.update(cx, |this, cx| {
+                this.library_error = None;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn pick_library_import(&mut self, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: false, prompt: Some(tr("Importieren").into()) });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else { return };
+            let Some(path) = paths.into_iter().next() else { return };
+            let read = path.clone();
+            let preview = cx
+                .background_spawn(async move { Store::open(&paths::database()).and_then(|s| mostalgia_core::library::preview(&s, &read)) })
+                .await;
+            this.update(cx, |this, cx| {
+                match preview {
+                    Ok(p) => {
+                        let opts = mostalgia_core::library::ImportOptions { audio: p.audio_files > 0, documents: p.documents_new > 0, voices: p.voices > 0 };
+                        this.library_preview = Some((path, p, opts));
+                        this.library_error = None;
+                    }
+                    Err(e) => this.library_error = Some(format!("{e:#}")),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn render_library_transfer(&mut self, cx: &mut Context<Self>) -> Div {
+        use crate::library_job::{self, Phase};
+        let theme = cx.theme().clone();
+        let job = library_job::current();
+        let busy = job.as_ref().is_some_and(|j| j.running());
+        let opts = self.library_export;
+        let audio_size = Store::open(&paths::database()).and_then(|s| mostalgia_core::cleanup::usage(&s)).map(|u| u.bytes).unwrap_or(0);
+        let toggle = |id: &'static str, label: &'static str, hint: &'static str, on: bool, set: fn(&mut mostalgia_core::library::ExportOptions, bool)| {
+            settings_row(
+                tr(label),
+                Some(tr(hint)),
+                Switch::new(id)
+                    .checked(on)
+                    .disabled(busy)
+                    .on_change(cx.listener(move |this, v: &bool, _, cx| {
+                        set(&mut this.library_export, *v);
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+                &theme,
+            )
+        };
+        let mut card = ui::card(cx)
+            .child(div().font_semibold().child(tr("Bibliothek sichern")))
+            .child(div().text_sm().text_color(theme.muted_foreground).child(tr(
+                "Alle Besprechungen in einer .mostalgia-Datei: Transkripte, Zusammenfassungen, Notizen, Sprecher, Chats und Entscheidungen. Zum Sichern oder um sie auf einen anderen Computer mitzunehmen. Beim Importieren bleiben vorhandene Besprechungen unverändert; doppelt wird nichts.",
+            )))
+            .child(
+                settings_row(
+                    tr("Audio der Aufnahmen"),
+                    Some(&if audio_size > 0 {
+                        trf("Die WAV-Dateien ({}). Ohne Audio bleibt die Datei klein, aber Abspielen und neu Transkribieren gehen dann nicht.", &[&mostalgia_core::cleanup::human(audio_size)])
+                    } else {
+                        tr("Die WAV-Dateien. Ohne Audio bleibt die Datei klein, aber Abspielen und neu Transkribieren gehen dann nicht.").to_string()
+                    }),
+                    Switch::new("library-audio")
+                        .checked(opts.audio)
+                        .disabled(busy)
+                        .on_change(cx.listener(|this, v: &bool, _, cx| {
+                            this.library_export.audio = *v;
+                            cx.notify();
+                        }))
+                        .into_any_element(),
+                    &theme,
+                ),
+            )
+            .child(toggle("library-documents", "Dokumente", "Die Dateien im Dokumente-Bereich mit ihren Sammlungen.", opts.documents, |o, v| o.documents = v))
+            .child(toggle(
+                "library-voices",
+                "Bekannte Stimmen",
+                "Stimmabdrücke erkennen Personen wieder. Nur mitnehmen, wenn die Datei bei dir bleibt.",
+                opts.voices,
+                |o, v| o.voices = v,
+            ))
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(Button::new("library-export").small().primary().icon(IconName::Download).label(tr("Exportieren …")).disabled(busy).on_click(cx.listener(|this, _, _, cx| this.pick_library_export(cx))))
+                    .child(Button::new("library-import").small().outline().icon(IconName::Upload).label(tr("Importieren …")).disabled(busy).on_click(cx.listener(|this, _, _, cx| this.pick_library_import(cx)))),
+            );
+
+        if let Some(job) = job {
+            let what = match job.phase {
+                Phase::Exporting => tr("Exportiere …"),
+                Phase::Importing => tr("Importiere …"),
+                Phase::Indexing => tr("Mache die Besprechungen durchsuchbar …"),
+            };
+            let status = match &job.outcome {
+                None => v_flex()
+                    .gap_1p5()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(div().flex_1().text_sm().child(match job.fraction() {
+                                Some(f) => format!("{what} {}", crate::processing::percent(f)),
+                                None => what.to_string(),
+                            }))
+                            .child(Button::new("library-cancel").small().ghost().label(tr("Abbrechen")).on_click(|_, _, _| library_job::cancel())),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .h(px(4.))
+                            .rounded_full()
+                            .bg(theme.muted)
+                            .child(div().h_full().rounded_full().bg(theme.primary).w(relative(job.fraction().unwrap_or(1.0)))),
+                    ),
+                Some(outcome) => {
+                    let (icon, color, text) = match outcome {
+                        Ok(text) => (IconName::Check, theme.success, text.clone()),
+                        Err(e) => (IconName::TriangleAlert, theme.danger, e.clone()),
+                    };
+                    v_flex().child(
+                        h_flex()
+                            .gap_2()
+                            .items_start()
+                            .child(Icon::new(icon).small().text_color(color))
+                            .child(div().flex_1().text_sm().child(text))
+                            .child(Button::new("library-dismiss").small().ghost().icon(IconName::Close).on_click(cx.listener(|_, _, _, cx| {
+                                library_job::dismiss();
+                                cx.notify();
+                            }))),
+                    )
+                }
+            };
+            card = card.child(status);
+        }
+        if let Some(e) = &self.library_error {
+            card = card.child(div().text_xs().text_color(theme.danger).child(e.clone()));
+        }
+        if let Some((path, p, chosen)) = &self.library_preview {
+            card = card.child(self.render_library_preview(path, p, *chosen, busy, cx));
+        }
+        card
+    }
+
+    /// What a picked archive would add, before anything is written.
+    fn render_library_preview(
+        &self,
+        path: &std::path::Path,
+        p: &mostalgia_core::library::Preview,
+        chosen: mostalgia_core::library::ImportOptions,
+        busy: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        use chrono::TimeZone;
+        let theme = cx.theme().clone();
+        let file = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let exported = chrono::Local.timestamp_opt(p.manifest.exported_at, 0).single().map(|d| d.format("%d.%m.%Y %H:%M").to_string()).unwrap_or_default();
+        let mut lines = vec![trf("Neu: {} Besprechungen", &[&p.new.len()])];
+        if !p.existing.is_empty() {
+            lines.push(trf("Schon vorhanden: {} (bleiben, wie sie sind)", &[&p.existing.len()]));
+        }
+        let titles = p.new.iter().rev().take(5).map(|m| {
+            let when = chrono::Local.timestamp_opt(m.started_at, 0).single().map(|d| d.format("%d.%m.%Y").to_string()).unwrap_or_default();
+            h_flex()
+                .gap_2()
+                .text_xs()
+                .child(div().flex_none().text_color(theme.muted_foreground).child(when))
+                .child(div().flex_1().min_w_0().truncate().child(m.title.clone()))
+        });
+        let more = p.new.len().saturating_sub(5);
+        let set = |id: &'static str, label: String, on: bool, apply: fn(&mut mostalgia_core::library::ImportOptions, bool)| {
+            settings_row(
+                &label,
+                None,
+                Switch::new(id)
+                    .checked(on)
+                    .disabled(busy)
+                    .on_change(cx.listener(move |this, v: &bool, _, cx| {
+                        if let Some((_, _, o)) = &mut this.library_preview {
+                            apply(o, *v);
+                        }
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+                &theme,
+            )
+        };
+        let mut box_ = v_flex()
+            .gap_2()
+            .p_3()
+            .rounded(theme.radius)
+            .border_1()
+            .border_color(theme.border)
+            .child(div().text_sm().font_semibold().child(trf("{} importieren?", &[&file])))
+            .child(div().text_xs().text_color(theme.muted_foreground).child(trf("Exportiert am {} mit Mostalgia {}", &[&exported, &p.manifest.app_version])))
+            .children(lines.into_iter().map(|l| div().text_sm().child(l)))
+            .child(v_flex().gap_0p5().children(titles))
+            .when(more > 0, |el| el.child(div().text_xs().text_color(theme.muted_foreground).child(trf("und {} weitere", &[&more]))));
+        if p.audio_files > 0 {
+            box_ = box_.child(set("library-import-audio", trf("Audio übernehmen ({} Dateien)", &[&p.audio_files]), chosen.audio, |o, v| o.audio = v));
+        }
+        if p.documents_new + p.documents_existing > 0 {
+            box_ = box_.child(set(
+                "library-import-documents",
+                trf("Dokumente übernehmen ({} neu, {} schon vorhanden)", &[&p.documents_new, &p.documents_existing]),
+                chosen.documents,
+                |o, v| o.documents = v,
+            ));
+        }
+        if p.voices > 0 {
+            box_ = box_.child(set("library-import-voices", trf("Bekannte Stimmen übernehmen ({})", &[&p.voices]), chosen.voices, |o, v| o.voices = v));
+        }
+        let nothing = p.new.is_empty() && !(chosen.documents && p.documents_new > 0) && !chosen.voices && !(chosen.audio && !p.existing.is_empty());
+        box_.child(
+            h_flex()
+                .gap_2()
+                .child(
+                    Button::new("library-import-go")
+                        .small()
+                        .primary()
+                        .label(tr("Importieren"))
+                        .disabled(busy || nothing)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some((path, _, opts)) = this.library_preview.take() {
+                                crate::library_job::start_import(path, opts);
+                            }
+                            cx.notify();
+                        })),
+                )
+                .child(Button::new("library-import-cancel").small().ghost().label(tr("Abbrechen")).on_click(cx.listener(|this, _, _, cx| {
+                    this.library_preview = None;
+                    cx.notify();
+                }))),
+        )
     }
 }

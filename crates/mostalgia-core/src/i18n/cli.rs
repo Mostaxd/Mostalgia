@@ -116,6 +116,13 @@ pub const EN: &[(&str, &str)] = &[
     ("{} unterbrochene Aufnahme(n) gefunden – `mostalgia recover` macht Besprechungen daraus", "{} unfinished recording(s) found – `mostalgia recover` turns them into meetings"),
     ("{}: kein unterstütztes Audio- oder Videoformat ({})", "{}: not a supported audio or video format ({})"),
     ("Importiere {} ({}) …", "Importing {} ({}) …"),
+    // Library export / import
+    ("{} Besprechungen exportiert nach {} ({})", "Exported {} meetings to {} ({})"),
+    ("Neu: {} Besprechungen, schon vorhanden: {}", "New: {} meetings, already here: {}"),
+    ("Audio: {} Dateien", "Audio: {} files"),
+    ("Dokumente: {} neu, {} schon vorhanden", "Documents: {} new, {} already here"),
+    ("Stimmen: {}", "Voices: {}"),
+    ("Der Suchindex wird beim nächsten Start der App oder mit „mostalgia reindex“ aufgebaut.", "The search index is built the next time the app starts, or with “mostalgia reindex”."),
     ("Bibliothek wird neu eingebettet ({}) …", "Re-embedding the library ({}) …"),
     ("Fertig: die Suche nutzt jetzt das neue Modell.", "Done: search now uses the new model."),
     ("Ordner: {}", "Folder: {}"),

@@ -7,6 +7,7 @@ pub mod companion;
 pub mod control;
 pub mod decisions_view;
 pub mod documents;
+pub mod library_job;
 #[cfg(windows)]
 pub mod login_start;
 #[cfg(target_os = "macos")]

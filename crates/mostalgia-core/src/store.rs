@@ -235,7 +235,7 @@ pub struct NewMeeting<'a> {
     pub dir: &'a Path,
 }
 
-const SCHEMA_VERSION: i32 = 15;
+pub const SCHEMA_VERSION: i32 = 15;
 
 /// The oldest schema version whose Mostalgia can still use a library at
 /// `SCHEMA_VERSION`: raise it only when a migration changes something an

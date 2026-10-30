@@ -197,6 +197,28 @@ impl Voices {
         }
     }
 
+    /// Adds a print as it is (from a library import), unless `name`
+    /// already has it; keeps the newest [`MAX_SAMPLES`]. Returns whether
+    /// it was added.
+    pub fn add_sample(&mut self, name: &str, sample: VoiceSample) -> bool {
+        let voice = match self.voices.iter().position(|v| v.name == name) {
+            Some(i) => &mut self.voices[i],
+            None => {
+                self.voices.push(KnownVoice { name: name.to_string(), samples: Vec::new() });
+                self.voices.last_mut().unwrap()
+            }
+        };
+        if voice.samples.iter().any(|s| s.learned_at == sample.learned_at && s.secs == sample.secs) {
+            return false;
+        }
+        voice.samples.push(VoiceSample { embedding: normalize(sample.embedding), ..sample });
+        voice.samples.sort_by_key(|s| s.learned_at);
+        while voice.samples.len() > MAX_SAMPLES {
+            voice.samples.remove(0);
+        }
+        true
+    }
+
     /// Drops what `name` learned from one meeting (it was the wrong
     /// person there); a voice left without prints is forgotten.
     pub fn unlearn_meeting(&mut self, name: &str, meeting_id: i64) -> bool {

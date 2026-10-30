@@ -228,6 +228,8 @@ mostalgia start [--source mic|system|both] [--diarize] [--language auto|<code>] 
 mostalgia list | show <id> | search <words> | ask "<question>"
 mostalgia docs [list | add <files> | search <words> | remove <id>]
 mostalgia summarize <id> | export <id> --format md|txt|srt|docx
+mostalgia export-library [file.mostalgia] [--audio] [--documents] [--voices]
+mostalgia import-library <file.mostalgia> [--dry-run] [--no-audio] [--no-documents] [--no-voices]
 mostalgia connections [list | add <preset> | test <id> | remove <id>]
 mostalgia toggle | open
 ```
