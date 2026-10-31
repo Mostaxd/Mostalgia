@@ -42,7 +42,7 @@ notify-rust = "4.18"
 # Mori's desktop window and the captions window (always on top, no taskbar
 # entry, click-through), the tray's message loop, and starting with Windows.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse"] }
 winreg = "0.56"
 # The app's identity for toasts and the taskbar: AppUserModelID and its
 # Start Menu shortcut (COM: IShellLink, IPropertyStore).

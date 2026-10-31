@@ -55,7 +55,7 @@ cpal = "0.18"
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
 # The GPU check: the NVIDIA card and its driver version (DXGI).
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Dxgi"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Dxgi", "Win32_System_Com"] }
 
 # Core Audio (system audio tap, call detection) and ScreenCaptureKit (system
 # audio before macOS 14.2) on macOS. Same objc2 generation as GPUI's.
