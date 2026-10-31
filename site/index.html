@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Mostalgia: meetings you can recall in full</title>
-<meta name="description" content="Mostalgia is a local-first meeting recorder for Linux and macOS: live Whisper transcription in any language, summaries that know who promised what, Ask across all your meetings, and five animated companions who take notes with you.">
+<meta name="description" content="Mostalgia is a local-first meeting recorder for Linux, macOS and Windows: live Whisper transcription in any language, summaries that know who promised what, Ask across all your meetings, and five animated companions who take notes with you.">
 <meta name="theme-color" content="#2B1730">
 <meta property="og:title" content="Mostalgia: nostalgia, but for meetings you can actually recall in full">
-<meta property="og:description" content="Local-first meeting recorder for Linux and macOS. Whisper on your GPU, summaries, Ask, documents and animated note-taking companions.">
+<meta property="og:description" content="Local-first meeting recorder for Linux, macOS and Windows. Whisper on your GPU, summaries, Ask, documents and animated note-taking companions.">
 <meta property="og:image" content="assets/brand/og.png">
 <link rel="icon" href="assets/brand/favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -69,7 +69,7 @@
   </div>
 
   <div class="hero-inner">
-    <p class="kicker"><span class="dot"></span> Local-first meeting recorder · Linux · macOS</p>
+    <p class="kicker"><span class="dot"></span> Local-first meeting recorder · Linux · macOS · Windows</p>
     <h1 class="title">
       <span class="jp" aria-hidden="true">モスタルジア</span>
       <span class="word">Mostalgia</span>
@@ -80,7 +80,7 @@
       <a class="btn btn-primary" href="#install">Download Mostalgia</a>
       <a class="btn btn-ghost" href="#prologue">Watch the episodes ↓</a>
     </div>
-    <p class="platforms">Linux and macOS today · Windows planned</p>
+    <p class="platforms">Linux · macOS · Windows</p>
   </div>
 
   <div class="lineup" id="lineup" aria-label="The companions: Mori, Tsumugi, Hoshi, Kaito and Jin">
@@ -1680,16 +1680,19 @@
       <p class="platform-row">
         <span class="plat now">🐧 Linux · PipeWire / Pulse <b>available</b></span>
         <span class="plat now">🍎 macOS · Apple Silicon <b>available</b></span>
-        <span class="plat soon">Windows <b>planned</b></span>
+        <span class="plat now">🪟 Windows 10 / 11 <b>available</b></span>
       </p>
-      <p>Built in Rust with GPUI. Whisper runs on your GPU: Vulkan on NVIDIA, AMD and Intel, Metal on the Mac. No GPU at all works too, on the CPU or with a cloud engine.</p>
+      <p>Built in Rust with GPUI. Whisper runs on your GPU: Vulkan on NVIDIA, AMD and Intel (Linux and Windows), Metal on the Mac. No GPU at all works too, on the CPU or with a cloud engine.</p>
       <p class="cta">
         <a class="btn btn-primary" href="https://github.com/Mostaxd/Mostalgia/releases/latest/download/Mostalgia-x86_64.AppImage">Download for Linux</a>
         <a class="btn btn-primary" href="https://github.com/Mostaxd/Mostalgia/releases/latest/download/Mostalgia-macOS-arm64.dmg">Download for macOS</a>
+        <a class="btn btn-primary" href="https://github.com/Mostaxd/Mostalgia/releases/latest/download/Mostalgia-windows-x86_64.zip">Download for Windows</a>
         <a class="btn btn-ghost" href="https://github.com/Mostaxd/Mostalgia#install">Source and full guide</a>
       </p>
       <p class="fine"><b>Linux:</b> one AppImage for x86_64 (Ubuntu 22.04, Debian 12, Fedora 36 or newer).<br>
       <b>macOS:</b> a disk image for Apple Silicon (M1 or newer), macOS 13 or later. Drag Mostalgia into Applications. It isn't signed by Apple yet, so open it once, then click <b>Open Anyway</b> in System Settings → Privacy &amp; Security.<br>
+      <b>Windows:</b> a zip for Windows 10 or 11 (64-bit). Unzip it into a folder of your own (not Program Files) and run <b>mostalgia-app.exe</b>. If SmartScreen warns, click <b>More info → Run anyway</b>.<br>
+      All three update themselves.<br>
       The speech models download on first launch.</p>
     </div>
     <div class="terminal">
@@ -1712,7 +1715,6 @@ chmod +x Mostalgia-x86_64.AppImage
   <div class="wrap">
     <p class="next-label">次回予告 · Next time on Mostalgia</p>
     <ul class="next-list">
-      <li class="reveal"><b>Windows</b> joins the cast</li>
       <li class="reveal"><b>Meeting templates</b>: stand-up, 1:1, customer call, interview</li>
       <li class="reveal"><b>Action-item tracker</b> across meetings, with a weekly digest</li>
     </ul>
