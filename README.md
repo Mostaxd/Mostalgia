@@ -14,6 +14,8 @@
   &nbsp;
   <a href="https://github.com/Mostaxd/Mostalgia/releases/latest/download/Mostalgia-macOS-arm64.dmg"><img alt="Download for macOS" src="https://img.shields.io/badge/Download-macOS_DMG-B8472A?style=for-the-badge&logo=apple&logoColor=white"></a>
   &nbsp;
+  <a href="https://github.com/Mostaxd/Mostalgia/releases/latest/download/Mostalgia-windows-x86_64.zip"><img alt="Download for Windows" src="https://img.shields.io/badge/Download-Windows_zip-B8472A?style=for-the-badge&logo=windows&logoColor=white"></a>
+  &nbsp;
   <a href="https://mostaxd.github.io/Mostalgia"><img alt="Website" src="https://img.shields.io/badge/Website-Visit-5B2A4E?style=for-the-badge"></a>
 </p>
 
@@ -170,7 +172,23 @@ xattr -dr com.apple.quarantine /Applications/Mostalgia.app
 ```
 
 When you record, allow **Microphone** and **Screen & System Audio Recording**
-access so it hears both sides of the call.
+access so it hears both sides of the call. The app updates itself.
+
+</details>
+
+<details open>
+<summary><b>Windows</b>: <a href="https://github.com/Mostaxd/Mostalgia/releases/latest/download/Mostalgia-windows-x86_64.zip">Mostalgia-windows-x86_64.zip</a></summary>
+
+<br>
+
+Unzip it into a folder of your own, for example `C:\Users\<you>\Mostalgia`
+(not *Program Files*: updates write to this folder), and run
+**mostalgia-app.exe**. Needs 64-bit Windows 10 or 11; Whisper runs on the GPU
+through Vulkan, or on the CPU without one.
+
+The app isn't signed yet, so SmartScreen may say "Windows protected your PC".
+Click **More info → Run anyway**. It adds itself to the Start Menu and updates
+itself.
 
 </details>
 
@@ -192,8 +210,9 @@ Prefer to build it yourself? See [CONTRIBUTING.md](CONTRIBUTING.md#building).
 Every connection is labelled *local* or *cloud*. If a provider fails, you see
 which one and why; Mostalgia never switches behind your back. Recordings and
 the search index always stay on your disk (`~/.local/share/mostalgia` on Linux,
-`~/Library/Application Support/mostalgia` on macOS), and API keys in the GNOME
-keyring or the macOS Keychain.
+`~/Library/Application Support/mostalgia` on macOS, `%LOCALAPPDATA%\mostalgia` on
+Windows), and API keys in the GNOME keyring, the macOS Keychain or the Windows
+Credential Manager.
 
 <details>
 <summary><b>For developers: architecture, performance and CLI</b></summary>
