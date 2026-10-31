@@ -5288,7 +5288,7 @@ dependencies = [
 
 [[package]]
 name = "mostalgia"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5302,7 +5302,7 @@ dependencies = [
 
 [[package]]
 name = "mostalgia-app"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "block2 0.6.2",
@@ -5335,7 +5335,7 @@ dependencies = [
 
 [[package]]
 name = "mostalgia-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "block2 0.6.2",
