@@ -493,38 +493,28 @@ impl RecordingView {
         }
     }
 
+    /// Saves what this screen changes (sources, language, speakers) on top
+    /// of the settings as they are on disk. Everything else may have been
+    /// changed elsewhere since this view read it (the AI models in
+    /// Settings, Mori's position, …) and must not be written back.
     fn save_config(&mut self) {
-        // Mori's settings and position change elsewhere; keep them.
-        let disk = Config::load();
-        self.config.companion = disk.companion;
-        self.config.companion_scale = disk.companion_scale;
-        self.config.companion_points_interval_secs = disk.companion_points_interval_secs;
-        self.config.companion_notes_mode = disk.companion_notes_mode.clone();
-        self.config.companion_notes_gap_secs = disk.companion_notes_gap_secs;
-        self.config.companion_notes_interval_secs = disk.companion_notes_interval_secs;
-        self.config.companion_notes_focus = disk.companion_notes_focus.clone();
-        self.config.companion_card_collapse_secs = disk.companion_card_collapse_secs;
-        self.config.companion_card_stagger_secs = disk.companion_card_stagger_secs;
-        self.config.companion_notes_provider = disk.companion_notes_provider.clone();
-        self.config.companion_notes_model = disk.companion_notes_model.clone();
-        // So is live translation (Settings, or its switch here).
-        self.config.live_translation = disk.live_translation;
-        self.config.translation_language = disk.translation_language.clone();
-        self.config.translation_provider = disk.translation_provider.clone();
-        self.config.translation_model = disk.translation_model.clone();
-        self.config.companion_pos = disk.companion_pos;
-        self.config.companion_clear_button = disk.companion_clear_button;
-        self.config.companion_desktop = disk.companion_desktop;
-        self.config.companion_desktop_pos = disk.companion_desktop_pos;
-        self.config.companion_bubble_size = disk.companion_bubble_size;
-        self.config.companion_hidden = disk.companion_hidden;
-        self.config.companion_bar_indicator = disk.companion_bar_indicator;
-        // So is the audio cleanup (its dialog).
-        self.config.audio_keep_days = disk.audio_keep_days;
-        self.config.audio_cleanup_confirmed = disk.audio_cleanup_confirmed;
-        if let Err(e) = self.config.save() {
+        let mut disk = Config::load();
+        disk.record_mic = self.config.record_mic;
+        disk.record_system = self.config.record_system;
+        disk.language = self.config.language.clone();
+        disk.recent_languages = self.config.recent_languages.clone();
+        disk.speaker_labels = self.config.speaker_labels;
+        if let Err(e) = disk.save() {
             eprintln!("[mostalgia] saving settings: {e:#}");
         }
+        self.config = disk;
+    }
+
+    /// Back on the setup screen: read the settings again (changes made in
+    /// Settings while a recording ran were not picked up).
+    fn back_to_setup(&mut self) {
+        self.phase = Phase::Setup;
+        self.config = Config::load();
     }
 
     /// Turns live translation on or off for this recording (and as the
@@ -817,7 +807,7 @@ impl RecordingView {
         self.call_mode = false;
         self.sources_override = None;
         self.error = Some(format!("{e:#}").into());
-        self.phase = Phase::Setup;
+        self.back_to_setup();
         cx.notify();
     }
 
@@ -1149,7 +1139,7 @@ impl RecordingView {
         processing::set(Key::Recording, Job { title, stage: tr("Transkript wird fertiggestellt …").to_string(), fraction: None });
         let progress = finalize::Progress::new(|stage| processing::stage(Key::Recording, stage.label(), stage.fraction()));
         let Some(recorder) = live.recorder else {
-            self.phase = Phase::Setup;
+            self.back_to_setup();
             return;
         };
         recorder.stop();
@@ -1212,7 +1202,7 @@ impl RecordingView {
                     if let Some(e) = &saved.error {
                         eprintln!("[mostalgia] {e}");
                     }
-                    this.phase = Phase::Setup;
+                    this.back_to_setup();
                     this.call_mode = false;
                     this.sources_override = None;
                     cx.emit(RecordingEvent::Saved(saved.meeting_id));
