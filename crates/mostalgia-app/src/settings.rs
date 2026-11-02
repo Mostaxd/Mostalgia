@@ -213,6 +213,7 @@ enum Category {
     Aufnahme,
     Sprecher,
     Ki,
+    KiFunktionen,
     Darstellung,
     Begleiterin,
     Speicher,
@@ -220,10 +221,11 @@ enum Category {
 }
 
 impl Category {
-    const ALL: [Category; 7] = [
+    const ALL: [Category; 8] = [
         Category::Aufnahme,
         Category::Sprecher,
         Category::Ki,
+        Category::KiFunktionen,
         Category::Darstellung,
         Category::Begleiterin,
         Category::Speicher,
@@ -235,6 +237,7 @@ impl Category {
             Category::Aufnahme => "aufnahme",
             Category::Sprecher => "sprecher",
             Category::Ki => "ki",
+            Category::KiFunktionen => "ki-funktionen",
             Category::Darstellung => "darstellung",
             Category::Begleiterin => "begleiterin",
             Category::Speicher => "speicher",
@@ -247,6 +250,7 @@ impl Category {
             Category::Aufnahme => "Aufnahme",
             Category::Sprecher => "Sprecher",
             Category::Ki => "KI & Transkription",
+            Category::KiFunktionen => "KI-Funktionen",
             Category::Darstellung => "Darstellung",
             Category::Begleiterin => "Begleiterin",
             Category::Speicher => "Speicher & Export",
@@ -258,7 +262,8 @@ impl Category {
         tr(match self {
             Category::Aufnahme => "Geräte, Sprache und Spracherkennung",
             Category::Sprecher => "Wer hat was gesagt",
-            Category::Ki => "Verbindungen, Modelle und wo transkribiert wird",
+            Category::Ki => "Wo verarbeitet wird, welche Modelle und die Verbindungen dazu",
+            Category::KiFunktionen => "Zusammenfassungen, Übersetzung, Glossar und Entscheidungen",
             Category::Darstellung => "Design, Schrift und Animationen",
             Category::Begleiterin => "Wer mitschreibt, wo sie steht und wie sie Notizen macht",
             Category::Speicher => "Wo Aufnahmen liegen und wie exportiert wird",
@@ -271,6 +276,7 @@ impl Category {
             Category::Aufnahme => IconName::Mic,
             Category::Sprecher => IconName::Users,
             Category::Ki => IconName::Sparkles,
+            Category::KiFunktionen => IconName::WandSparkles,
             Category::Darstellung => IconName::Palette,
             Category::Begleiterin => IconName::FaceSlightlySmiling,
             Category::Speicher => IconName::FolderOpen,
@@ -493,13 +499,13 @@ impl SettingsView {
         .detach();
     }
 
-    /// Opens a category by id ("aufnahme", "sprecher", "ki", "darstellung",
-    /// "begleiterin", "speicher", "system").
+    /// Opens a category by id ("aufnahme", "sprecher", "ki", "ki-funktionen",
+    /// "darstellung", "begleiterin", "speicher", "system").
     pub fn show_category(&mut self, id: &str, cx: &mut Context<Self>) {
         self.set_category(Category::parse(id), cx);
     }
 
-    pub const CATEGORY_IDS: [&'static str; 7] = ["aufnahme", "sprecher", "ki", "darstellung", "begleiterin", "speicher", "system"];
+    pub const CATEGORY_IDS: [&'static str; 8] = ["aufnahme", "sprecher", "ki", "ki-funktionen", "darstellung", "begleiterin", "speicher", "system"];
 
     fn set_category(&mut self, category: Category, cx: &mut Context<Self>) {
         self.category = category;
@@ -1721,23 +1727,6 @@ impl SettingsView {
         );
         let language_picker = self.picker("translation-language", language_label, items, cx);
 
-        let separate = !self.config.translation_provider.is_empty();
-        let conn_id = self.config.translation_provider.clone();
-        let label = match self.config.translation_request() {
-            Ok(req) if separate => format!("{} · {}", req.connection.name, self.model_label(&req.connection.id, &req.model)),
-            _ if separate => self.config.connection(&conn_id).map_or(conn_id.clone(), |c| self.conn_label(c)),
-            _ => tr("Wie Live-Notizen").to_string(),
-        };
-        let mut items: Vec<Choice> = vec![(tr("Wie Live-Notizen").into(), !separate, Some(Pick::TranslateConn(None)))];
-        items.extend(self.config.connections.iter().map(|c| (self.conn_label(c), separate && c.id == conn_id, Some(Pick::TranslateConn(Some(c.id.clone()))))));
-        let conn_picker = self.picker("translation-conn", label, items, cx);
-        let model_picker = separate.then(|| {
-            let model = self.config.translation_request().map(|r| r.model).unwrap_or_default();
-            let items = self.model_choices(Slot::Translate, &conn_id, &model);
-            self.picker("translation-model", self.model_label(&conn_id, &model), items, cx)
-        });
-        let model_control = h_flex().flex_wrap().gap_1().child(conn_picker).children(model_picker).into_any_element();
-        let custom = self.custom_model_row(Slot::Translate, cx);
         // Where the text goes, so nobody is surprised.
         let goes_to = match self.config.translation_request() {
             Ok(req) => trf("Übersetzt mit {} · {}. Nur der Text fertiger Zeilen geht dorthin, nie Audio.", &[&req.connection.name, &req.model]),
@@ -1753,9 +1742,8 @@ impl SettingsView {
                 &theme,
             ))
             .child(settings_row(tr("Übersetzen in"), Some(tr("Zeilen, die schon in dieser Sprache sind, bleiben wie sie sind.")), language_picker, &theme))
-            .child(settings_row(tr("Modell für Übersetzung"), Some(tr("Ein schnelles Modell reicht. Lokal (z. B. Ollama) bleibt alles auf diesem Rechner.")), model_control, &theme))
-            .children(custom)
             .child(div().text_xs().text_color(theme.muted_foreground).child(goes_to))
+            .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Das Modell wählst du unter KI & Transkription → Live-Notizen & Übersetzung.")))
     }
 
     /// Keeps both thinking levels valid for their models.
@@ -2370,11 +2358,35 @@ impl SettingsView {
         let ask_effort_row = (!ask_efforts.is_empty()).then(|| self.effort_row(Slot::Ask, &ask_efforts, cx));
         let summary_privacy = self.privacy_line(&summary_id, cx);
         let ask_privacy = self.privacy_line(&ask_id, cx);
+        ui::card(cx)
+            .child(div().font_semibold().child(tr("Zusammenfassungen & Fragen")))
+            .child(ui::section_title(tr("ZUSAMMENFASSUNGEN"), cx))
+            .child(row(tr("Verbindung"), None, summary_conn_picker))
+            .child(row(
+                tr("Modell"),
+                Some(tr(if live_list { "Liste vom Anbieter" } else { "Eingebaute Liste (Schlüssel fehlt oder offline)" })),
+                summary_model_picker,
+            ))
+            .children(summary_custom)
+            .children(summary_effort_row)
+            .child(summary_privacy)
+            .child(div().h(px(1.)).bg(theme.border))
+            .child(ui::section_title(tr("FRAGEN (ASK)"), cx))
+            .child(row(tr("Verbindung"), Some(tr("Für „Frag deine Besprechungen“")), ask_conn_picker))
+            .children(ask_model_picker.map(|p| row(tr("Modell"), None, p)))
+            .children(ask_custom)
+            .children(ask_effort_row)
+            .child(ask_privacy)
+    }
+
+    /// What happens with summaries (language, automatic); the model is
+    /// picked under "KI & Transkription".
+    fn render_summary_options(&mut self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
         let auto = Switch::new("set-auto-sum").checked(self.config.auto_summary).on_change(cx.listener(|this, v: &bool, _, cx| {
             this.config.auto_summary = *v;
             this.save(cx);
         }));
-
         let summary_language = {
             let current = self.config.summary_language.clone();
             let mut items: Vec<Choice> = vec![
@@ -2393,65 +2405,77 @@ impl SettingsView {
             };
             self.picker("summary-language", label, items, cx)
         };
-
         ui::card(cx)
-            .child(div().font_semibold().child(tr("Zusammenfassungen & Fragen")))
-            .child(ui::section_title(tr("ZUSAMMENFASSUNGEN"), cx))
-            .child(row(tr("Verbindung"), None, summary_conn_picker))
-            .child(row(
-                tr("Modell"),
-                Some(tr(if live_list { "Liste vom Anbieter" } else { "Eingebaute Liste (Schlüssel fehlt oder offline)" })),
-                summary_model_picker,
-            ))
-            .children(summary_custom)
-            .children(summary_effort_row)
-            .child(row(tr("Sprache der Zusammenfassung"), None, summary_language))
-            .child(summary_privacy)
-            .child(row(tr("Automatisch nach jeder Aufnahme"), None, auto.into_any_element()))
-            .child(div().h(px(1.)).bg(theme.border))
-            .child(ui::section_title(tr("FRAGEN (ASK)"), cx))
-            .child(row(tr("Verbindung"), Some(tr("Für „Frag deine Besprechungen“")), ask_conn_picker))
-            .children(ask_model_picker.map(|p| row(tr("Modell"), None, p)))
-            .children(ask_custom)
-            .children(ask_effort_row)
-            .child(ask_privacy)
+            .child(div().font_semibold().child(tr("Zusammenfassungen")))
+            .child(settings_row(tr("Automatisch nach jeder Aufnahme"), None, auto.into_any_element(), &theme))
+            .child(settings_row(tr("Sprache der Zusammenfassung"), None, summary_language, &theme))
+            .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Das Modell wählst du unter KI & Transkription → Zusammenfassungen & Fragen.")))
     }
 
-    /// The companion's models (live notes and answers), its own card in
-    /// "KI & Transkription"; `None` without a companion.
-    fn render_ai_companion(&mut self, cx: &mut Context<Self>) -> Option<Div> {
-        let name = self.config.character()?.name();
+    /// The fast models: the companion's live notes and answers (only with
+    /// a companion) and live translation.
+    fn render_fast_models(&mut self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme().clone();
         let conns = self.config.connections.clone();
-        let separate = !self.config.companion_notes_provider.is_empty();
-        let notes_id = self.config.companion_notes_provider.clone();
-        let label = match self.config.notes_request() {
-            Ok(req) if separate => format!("{} · {}", req.connection.name, self.model_label(&req.connection.id, &req.model)),
-            _ if separate => self.config.connection(&notes_id).map_or(notes_id.clone(), |c| self.conn_label(c)),
-            _ => tr("Wie Fragen (Ask)").to_string(),
-        };
-        let mut items: Vec<Choice> = vec![(tr("Wie Fragen (Ask)").into(), !separate, Some(Pick::NotesConn(None)))];
-        items.extend(conns.iter().map(|c| (self.conn_label(c), separate && c.id == notes_id, Some(Pick::NotesConn(Some(c.id.clone()))))));
-        let conn_picker = self.picker("mori-notes-conn", label, items, cx);
-        let model_picker = separate.then(|| {
-            let model = self.config.notes_request().map(|r| r.model).unwrap_or_default();
-            let items = self.model_choices(Slot::Notes, &notes_id, &model);
-            self.picker("mori-notes-model", self.model_label(&notes_id, &model), items, cx)
-        });
-        let picker = h_flex().flex_wrap().gap_1().child(conn_picker).children(model_picker).into_any_element();
-        let notes_custom = self.custom_model_row(Slot::Notes, cx);
-        Some(
-            ui::card(cx)
-                .child(div().font_semibold().child(tr("Begleiterin")))
-                .child(div().text_xs().text_color(theme.muted_foreground).child(trf("Der Chat mit {} nutzt die Verbindung für Fragen.", &[&name])))
+        let companion = self.config.character().map(|c| c.name().to_string()).map(|name| {
+            let separate = !self.config.companion_notes_provider.is_empty();
+            let notes_id = self.config.companion_notes_provider.clone();
+            let label = match self.config.notes_request() {
+                Ok(req) if separate => format!("{} · {}", req.connection.name, self.model_label(&req.connection.id, &req.model)),
+                _ if separate => self.config.connection(&notes_id).map_or(notes_id.clone(), |c| self.conn_label(c)),
+                _ => tr("Wie Fragen (Ask)").to_string(),
+            };
+            let mut items: Vec<Choice> = vec![(tr("Wie Fragen (Ask)").into(), !separate, Some(Pick::NotesConn(None)))];
+            items.extend(conns.iter().map(|c| (self.conn_label(c), separate && c.id == notes_id, Some(Pick::NotesConn(Some(c.id.clone()))))));
+            let conn_picker = self.picker("mori-notes-conn", label, items, cx);
+            let model_picker = separate.then(|| {
+                let model = self.config.notes_request().map(|r| r.model).unwrap_or_default();
+                let items = self.model_choices(Slot::Notes, &notes_id, &model);
+                self.picker("mori-notes-model", self.model_label(&notes_id, &model), items, cx)
+            });
+            let picker = h_flex().flex_wrap().gap_1().child(conn_picker).children(model_picker).into_any_element();
+            v_flex()
+                .gap_3()
+                .child(ui::section_title(tr("BEGLEITERIN").to_string(), cx))
                 .child(settings_row(
-                    tr("Modell für Live-Notizen"),
-                    Some(&trf("Auch für Live-Antworten von {}. Ein schnelles Modell reicht; gedacht wird dabei so wenig wie möglich.", &[&name])),
+                    tr("Live-Notizen und -Antworten"),
+                    Some(&trf("Ein schnelles Modell reicht; gedacht wird dabei so wenig wie möglich. Der Chat mit {} nutzt die Verbindung für Fragen.", &[&name])),
                     picker,
                     &theme,
                 ))
-                .children(notes_custom),
-        )
+                .children(self.custom_model_row(Slot::Notes, cx))
+                .child(div().h(px(1.)).bg(theme.border))
+        });
+
+        let separate = !self.config.translation_provider.is_empty();
+        let conn_id = self.config.translation_provider.clone();
+        let label = match self.config.translation_request() {
+            Ok(req) if separate => format!("{} · {}", req.connection.name, self.model_label(&req.connection.id, &req.model)),
+            _ if separate => self.config.connection(&conn_id).map_or(conn_id.clone(), |c| self.conn_label(c)),
+            _ => tr("Wie Live-Notizen").to_string(),
+        };
+        let mut items: Vec<Choice> = vec![(tr("Wie Live-Notizen").into(), !separate, Some(Pick::TranslateConn(None)))];
+        items.extend(conns.iter().map(|c| (self.conn_label(c), separate && c.id == conn_id, Some(Pick::TranslateConn(Some(c.id.clone()))))));
+        let conn_picker = self.picker("translation-conn", label, items, cx);
+        let model_picker = separate.then(|| {
+            let model = self.config.translation_request().map(|r| r.model).unwrap_or_default();
+            let items = self.model_choices(Slot::Translate, &conn_id, &model);
+            self.picker("translation-model", self.model_label(&conn_id, &model), items, cx)
+        });
+        let model_control = h_flex().flex_wrap().gap_1().child(conn_picker).children(model_picker).into_any_element();
+        let custom = self.custom_model_row(Slot::Translate, cx);
+
+        ui::card(cx)
+            .child(div().font_semibold().child(tr(if companion.is_some() { "Live-Notizen & Übersetzung" } else { "Live-Übersetzung" })))
+            .children(companion)
+            .when(self.config.character().is_some(), |el| el.child(ui::section_title(tr("LIVE-ÜBERSETZUNG").to_string(), cx)))
+            .child(settings_row(
+                tr("Modell für Übersetzung"),
+                Some(tr("Ein schnelles Modell reicht. Lokal (z. B. Ollama) bleibt alles auf diesem Rechner. Ein- und ausschalten unter KI-Funktionen.")),
+                model_control,
+                &theme,
+            ))
+            .children(custom)
     }
 
     fn stt_hint(&self, choice: &SttChoice) -> String {
@@ -2613,7 +2637,8 @@ impl SettingsView {
             )))
     }
 
-    fn render_processing(&mut self, cx: &mut Context<Self>) -> Div {
+    /// Local / Hybrid / Cloud, and what the last click couldn't switch.
+    fn render_mode(&mut self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme().clone();
         let mode = self.config.mode();
         let tile = |m: Mode, icon: IconName, text: &'static str, cx: &mut Context<Self>| {
@@ -2675,7 +2700,11 @@ impl SettingsView {
                         .outline()
                         .icon(IconName::Plus)
                         .label(tr("Füge eine lokale Verbindung hinzu (z. B. Ollama)"))
-                        .on_click(cx.listener(|this, _, window, cx| this.open_form(None, "ollama", window, cx))),
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_form(None, "ollama", window, cx);
+                            // The form opens in "Verbindungen", at the bottom of the page.
+                            this.scroll.scroll_to_bottom();
+                        })),
                 );
             } else {
                 for c in locals {
@@ -2722,6 +2751,18 @@ impl SettingsView {
             );
         }
 
+        ui::card(cx)
+            .child(div().font_semibold().child(tr("Wo verarbeitet wird")))
+            .child(div().text_xs().text_color(theme.muted_foreground).child(tr(
+                "Stellt die Transkription passend ein. Die Modelle darunter kannst du danach einzeln ändern.",
+            )))
+            .child(tiles)
+            .children(hint)
+    }
+
+    /// Which engines transcribe live and after the recording.
+    fn render_transcription(&mut self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
         let live = self.config.live_engine.clone();
         let fin = self.config.final_engine.clone();
         let live_picker = self.stt_picker(Slot::Live, "stt-live", cx);
@@ -2733,9 +2774,7 @@ impl SettingsView {
         let row = |label: &str, hint: Option<&str>, control: AnyElement| settings_row(label, hint, control, &theme);
 
         ui::card(cx)
-            .child(div().font_semibold().child(tr("Verarbeitung")))
-            .child(tiles)
-            .children(hint)
+            .child(div().font_semibold().child(tr("Transkription")))
             .child(row(tr("Live-Transkription"), Some(&live_hint), live_picker))
             .children(live_custom)
             .when(!live.is_local(), |el| {
@@ -3275,13 +3314,42 @@ impl Render for SettingsView {
             wide: false,
             element: self.render_live_captions(cx).into_any_element(),
         });
-        // ── KI & Transkription ──
+        // ── KI & Transkription: where it runs, then the models, then the
+        // connections they come from ──
         cards.push(Card {
             category: Category::Ki,
-            title: "Entscheidungslog",
-            keywords: "entscheidungen entscheidungslog log beschlüsse decisions decision log",
+            title: "Modus",
+            keywords: "modus mode verarbeitung processing lokal local hybrid cloud gpu wo where",
+            wide: true,
+            element: self.render_mode(cx).into_any_element(),
+        });
+        cards.push(Card {
+            category: Category::Ki,
+            title: "Transkription",
+            keywords: "transkription transcription modell model whisper groq openai live feinschliff final stt kosten cost gpu audio",
             wide: false,
-            element: self.render_decision_log(cx).into_any_element(),
+            element: self.render_transcription(cx).into_any_element(),
+        });
+        cards.push(Card {
+            category: Category::Ki,
+            title: "Zusammenfassungen & Fragen",
+            keywords: "ki ai zusammenfassung zusammenfassungen summary summaries fragen ask modell model denktiefe thinking effort reasoning claude openai ollama deepseek lokal local cloud",
+            wide: false,
+            element: self.render_ai_use(cx).into_any_element(),
+        });
+        cards.push(Card {
+            category: Category::Ki,
+            title: "Live-Notizen & Übersetzung",
+            keywords: "begleiterin companion mori tsumugi hoshi jin kaito live notizen notes antworten answers übersetzung translation modell model schnell fast",
+            wide: false,
+            element: self.render_fast_models(cx).into_any_element(),
+        });
+        cards.push(Card {
+            category: Category::Ki,
+            title: "Suche",
+            keywords: "suche search bedeutung meaning semantisch semantic embedding embeddings vektoren vectors e5 modell model openai together ollama lokal local cloud neu einbetten re-embed index",
+            wide: false,
+            element: self.render_search(cx).into_any_element(),
         });
         cards.push(Card {
             category: Category::Ki,
@@ -3290,51 +3358,36 @@ impl Render for SettingsView {
             wide: true,
             element: self.render_connections(cx).into_any_element(),
         });
-        cards.push(Card {
-            category: Category::Ki,
-            title: "Verarbeitung",
-            keywords: "verarbeitung processing modus mode lokal local hybrid cloud whisper groq openai transkription transcription live feinschliff final stt kosten cost gpu audio",
-            wide: true,
-            element: self.render_processing(cx).into_any_element(),
-        });
 
+        // ── KI-Funktionen: what the models are used for ──
         cards.push(Card {
-            category: Category::Ki,
+            category: Category::KiFunktionen,
+            title: "Zusammenfassungen",
+            keywords: "zusammenfassung zusammenfassungen summary summaries sprache language automatisch automatic nach jeder aufnahme after every recording",
+            wide: false,
+            element: self.render_summary_options(cx).into_any_element(),
+        });
+        cards.push(Card {
+            category: Category::KiFunktionen,
             title: "Live-Übersetzung",
             keywords: "übersetzung übersetzen live sprache sprachen untertitel translation translate live language languages captions subtitles dolmetscher interpreter",
             wide: false,
             element: self.render_translation(cx).into_any_element(),
         });
         cards.push(Card {
-            category: Category::Ki,
+            category: Category::KiFunktionen,
+            title: "Entscheidungslog",
+            keywords: "entscheidungen entscheidungslog log beschlüsse decisions decision log",
+            wide: false,
+            element: self.render_decision_log(cx).into_any_element(),
+        });
+        cards.push(Card {
+            category: Category::KiFunktionen,
             title: "Glossar",
             keywords: "glossar glossary begriffe terms wörter words vokabular vocabulary namen names fachbegriffe jargon schreibweise spelling korrektur korrigieren correction correct fix falsch verstanden misheard whisper hinweis hint prompt jira",
             wide: true,
             element: self.render_glossary(cx).into_any_element(),
         });
-        cards.push(Card {
-            category: Category::Ki,
-            title: "Suche",
-            keywords: "suche search bedeutung meaning semantisch semantic embedding embeddings vektoren vectors e5 openai together ollama lokal local cloud neu einbetten re-embed index",
-            wide: false,
-            element: self.render_search(cx).into_any_element(),
-        });
-        cards.push(Card {
-            category: Category::Ki,
-            title: "Zusammenfassungen & Fragen",
-            keywords: "ki ai zusammenfassung zusammenfassungen summary summaries fragen ask modell model denktiefe thinking effort reasoning automatisch automatic claude openai ollama deepseek lokal local cloud",
-            wide: false,
-            element: self.render_ai_use(cx).into_any_element(),
-        });
-        if let Some(companion) = self.render_ai_companion(cx) {
-            cards.push(Card {
-                category: Category::Ki,
-                title: "Begleiterin",
-                keywords: "begleiterin companion mori tsumugi hoshi jin kaito live notizen notes antworten answers chat modell model schnell fast",
-                wide: false,
-                element: companion.into_any_element(),
-            });
-        }
         // ── Darstellung ──
         let ui_lang = self.config.ui_language.clone();
         let lang_button = |id: &'static str, label: &'static str, value: &'static str, cx: &mut Context<Self>| {
