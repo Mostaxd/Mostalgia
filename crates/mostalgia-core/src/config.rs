@@ -18,8 +18,11 @@ pub struct Config {
     pub system_device: Option<String>,
     pub record_mic: bool,
     pub record_system: bool,
-    /// "de", "en" or "auto".
+    /// A Whisper code like "de", or "auto".
     pub language: String,
+    /// The fixed languages picked last, newest first (at most two), for the
+    /// shortcuts in the recording language menu.
+    pub recent_languages: Vec<String>,
     /// Languages spoken in the user's meetings (Whisper codes like "de");
     /// with "auto", detection only chooses among these. Empty = any.
     pub meeting_languages: Vec<String>,
@@ -306,6 +309,9 @@ impl Mode {
     }
 }
 
+/// How many recently used languages the recording menu offers.
+pub const RECENT_LANGUAGES: usize = 2;
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -315,6 +321,7 @@ impl Default for Config {
             record_mic: true,
             record_system: true,
             language: "auto".into(),
+            recent_languages: Vec::new(),
             meeting_languages: Vec::new(),
             whisper_model: None,
             vad_threshold: vad::DEFAULT_THRESHOLD,
@@ -572,6 +579,31 @@ impl Config {
     /// Where the live answer helper looks (unknown values: both).
     pub fn answer_sources(&self) -> crate::assist::Sources {
         crate::assist::Sources::parse(&self.companion_answer_sources).unwrap_or_default()
+    }
+
+    /// Remembers `code` as the language used last (not "auto").
+    pub fn note_recent_language(&mut self, code: &str) {
+        if code == "auto" || code.is_empty() {
+            return;
+        }
+        self.recent_languages.retain(|c| c != code);
+        self.recent_languages.insert(0, code.to_string());
+        self.recent_languages.truncate(RECENT_LANGUAGES);
+    }
+
+    /// The shortcuts in the recording language menu: the languages used
+    /// last, topped up from the meeting languages, then German and English.
+    pub fn quick_languages(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for code in self.recent_languages.iter().chain(&self.meeting_languages).map(String::as_str).chain(["de", "en"]) {
+            if out.len() == RECENT_LANGUAGES {
+                break;
+            }
+            if code != "auto" && !code.is_empty() && !out.iter().any(|c| c == code) {
+                out.push(code.to_string());
+            }
+        }
+        out
     }
 
     /// The fixed summary language, if one is set ("app" resolves to the UI language).
@@ -865,5 +897,21 @@ mod tests {
         assert_eq!(c.translation_target(), "de");
         c.translation_language = "ar".into();
         assert_eq!(c.translation_target(), "ar");
+    }
+
+    #[test]
+    fn recent_languages_newest_first_and_topped_up() {
+        let mut c = Config::default();
+        assert_eq!(c.quick_languages(), ["de", "en"]);
+        c.meeting_languages = vec!["ar".into()];
+        assert_eq!(c.quick_languages(), ["ar", "de"]);
+        c.note_recent_language("fr");
+        c.note_recent_language("auto");
+        assert_eq!(c.quick_languages(), ["fr", "ar"]);
+        c.note_recent_language("es");
+        c.note_recent_language("fr");
+        c.note_recent_language("it");
+        assert_eq!(c.recent_languages, ["it", "fr"]);
+        assert_eq!(c.quick_languages(), ["it", "fr"]);
     }
 }
