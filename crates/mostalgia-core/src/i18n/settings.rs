@@ -123,6 +123,7 @@ pub const EN: &[(&str, &str)] = &[
     ("Automatisch erkennen", "Detect automatically"),
     ("Empfohlen: „Automatisch erkennen“ – erkennt die Sprache der Besprechung selbst.", "Recommended: “Detect automatically” – picks up the language the meeting is held in."),
     ("Empfohlen: erkennt die Sprache der Besprechung selbst", "Recommended: picks up the language the meeting is held in"),
+    ("Auch vor jeder Aufnahme wählbar. Liegt die Erkennung daneben, ist eine feste Sprache zuverlässiger.", "Can also be picked before each recording. If detection guesses wrong, a fixed language is more reliable."),
     ("Sprache der Zusammenfassung", "Summary language"),
     ("Wie in der Besprechung", "Same as the meeting"),
     ("In App-Sprache", "App language"),

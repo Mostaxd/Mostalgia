@@ -56,6 +56,20 @@ pub fn native_name(code: &str) -> String {
         .unwrap_or_else(|| crate::summary::language_name(code))
 }
 
+/// Every language Whisper knows, as (code, name): the common ones first,
+/// then the rest by name.
+pub fn all() -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = COMMON.iter().map(|(c, n)| (c.to_string(), n.to_string())).collect();
+    let mut rest: Vec<(String, String)> = (0..100)
+        .filter_map(whisper_rs::get_lang_str)
+        .filter(|code| !COMMON.iter().any(|(c, _)| c == code))
+        .map(|code| (code.to_string(), native_name(code)))
+        .collect();
+    rest.sort_by(|a, b| a.1.cmp(&b.1));
+    out.extend(rest);
+    out
+}
+
 /// A starting set for "Languages spoken in my meetings": the app's
 /// language, what earlier meetings were in (most frequent first), German
 /// and English; only languages Whisper knows, each once. (Earlier
