@@ -646,9 +646,70 @@ impl RecordingView {
         cx.notify();
     }
 
+    /// The language the next recording is transcribed in ("auto": detect).
+    fn set_language(&mut self, code: String, cx: &mut Context<Self>) {
+        self.config.recent_languages = Config::load().recent_languages;
+        self.config.note_recent_language(&code);
+        self.config.language = code;
+        self.save_config();
+        cx.notify();
+    }
+
+    /// Remembers a language picked during a recording for the shortcuts
+    /// in the language menu, without changing the default.
+    fn note_recent_language(&mut self, code: &str) {
+        let mut disk = Config::load();
+        disk.note_recent_language(code);
+        self.config.recent_languages = disk.recent_languages.clone();
+        if let Err(e) = disk.save() {
+            eprintln!("[mostalgia] saving settings: {e:#}");
+        }
+    }
+
+    /// "Sprache: Automatisch erkennen ▾" before a recording: detect, the
+    /// two languages used last, then every language Whisper knows.
+    fn setup_language_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+        use mostalgia_core::language::native_name;
+        let current = self.config.language.clone();
+        let label = if current == "auto" { tr("Automatisch erkennen").to_string() } else { native_name(&current) };
+        let quick = self.config.quick_languages();
+        let weak = cx.entity().downgrade();
+        Button::new("setup-language")
+            .small()
+            .outline()
+            .icon(IconName::Globe)
+            .label(label)
+            .dropdown_caret(true)
+            .tooltip(tr("Die Erkennung liegt manchmal daneben – eine feste Sprache ist zuverlässiger."))
+            .dropdown_menu(move |menu, _, _| {
+                let mut menu = menu.scrollable(true).max_h(px(420.));
+                let item = |menu: gpui_kit::component::menu::PopupMenu, code: &str, label: String| {
+                    let weak = weak.clone();
+                    let code = code.to_string();
+                    menu.item(PopupMenuItem::new(label).checked(current == code).on_click(move |_, _, cx| {
+                        weak.update(cx, |this, cx| this.set_language(code.clone(), cx)).ok();
+                    }))
+                };
+                menu = item(menu, "auto", tr("Automatisch erkennen").to_string());
+                menu = menu.separator().label(tr("Zuletzt verwendet"));
+                for code in &quick {
+                    menu = item(menu, code, native_name(code));
+                }
+                menu = menu.separator().label(tr("Alle Sprachen"));
+                for (code, name) in mostalgia_core::language::all().into_iter().filter(|(c, _)| !quick.contains(c)) {
+                    menu = item(menu, &code, name);
+                }
+                menu
+            })
+            .into_any_element()
+    }
+
     /// Transcribes `sources` in `code` from their next utterance on
     /// (`None`: detect again).
     fn pick_language(&mut self, sources: &[Source], code: Option<String>, cx: &mut Context<Self>) {
+        if let Some(code) = &code {
+            self.note_recent_language(code);
+        }
         let Phase::Recording(live) = &mut self.phase else { return };
         for &source in sources {
             if let Some(recorder) = &live.recorder {
@@ -669,7 +730,7 @@ impl RecordingView {
     /// applies from the next utterance on. One button while both sources
     /// agree.
     fn language_picker(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        use mostalgia_core::language::{COMMON, native_name};
+        use mostalgia_core::language::native_name;
         let Phase::Recording(live) = &self.phase else { return Vec::new() };
         if self.config.language != "auto" {
             return Vec::new();
@@ -734,8 +795,9 @@ impl RecordingView {
                         if !allowed.is_empty() {
                             menu = menu.separator().label(tr("Weitere Sprachen"));
                         }
-                        for (code, name) in COMMON.iter().filter(|(c, _)| !shown.iter().any(|s| s == c)) {
-                            menu = item(menu, Some(code.to_string()), name.to_string(), manual && current.as_deref() == Some(*code));
+                        for (code, name) in mostalgia_core::language::all().into_iter().filter(|(c, _)| !shown.contains(c)) {
+                            let checked = manual && current.as_deref() == Some(code.as_str());
+                            menu = item(menu, Some(code), name, checked);
                         }
                         menu
                     })
@@ -1229,6 +1291,7 @@ impl RecordingView {
     }
 
     fn render_setup(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let language_menu = self.setup_language_menu(cx);
         let theme = cx.theme();
         let source_row = |id: &'static str, icon: IconName, title: &'static str, detail: String, on: bool, cx: &mut Context<Self>| {
             let theme = cx.theme();
@@ -1261,19 +1324,6 @@ impl RecordingView {
             tr("Aus – deine Stimme wird nicht aufgenommen (bei erkannten Anrufen immer an)").into()
         };
         let sys_detail = self.config.system_device.clone().unwrap_or_else(|| tr("Alles, was gerade abgespielt wird").into());
-        let lang = self.config.language.clone();
-        let lang_button = |code: &'static str, label: &'static str, cx: &mut Context<Self>| {
-            Button::new(SharedString::from(format!("lang-{code}")))
-                .label(label)
-                .small()
-                .when(lang == code, |b| b.primary())
-                .when(lang != code, |b| b.ghost())
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.config.language = code.into();
-                    this.save_config();
-                    cx.notify();
-                }))
-        };
 
         v_flex()
             .size_full()
@@ -1308,10 +1358,9 @@ impl RecordingView {
                                 h_flex()
                                     .flex_wrap()
                                     .gap_1()
+                                    .items_center()
                                     .child(div().text_sm().text_color(cx.theme().muted_foreground).mr_2().child(tr("Sprache")))
-                                    .child(lang_button("de", "Deutsch", cx))
-                                    .child(lang_button("en", "English", cx))
-                                    .child(lang_button("auto", tr("Automatisch erkennen"), cx).tooltip(tr("Empfohlen: erkennt die Sprache der Besprechung selbst"))),
+                                    .child(language_menu),
                             )
                             .child(
                                 Switch::new("labels")

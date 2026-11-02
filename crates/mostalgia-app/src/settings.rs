@@ -553,6 +553,8 @@ impl SettingsView {
         self.config.companion_pos = disk.companion_pos;
         self.config.companion_desktop_pos = disk.companion_desktop_pos;
         self.config.companion_hidden = disk.companion_hidden;
+        // Picked in the recording screen too.
+        self.config.recent_languages = disk.recent_languages;
         if let Err(e) = self.config.save() {
             eprintln!("[mostalgia] saving settings: {e:#}");
         }
@@ -2037,6 +2039,8 @@ enum Pick {
     Custom(Slot, String),
     /// "meeting", "app" or a language code.
     SummaryLanguage(String),
+    /// The language recordings are transcribed in (a code, or "auto").
+    Language(String),
 }
 
 /// Fixed choices for the summary language (code, name in that language).
@@ -2144,6 +2148,26 @@ fn chip(text: impl Into<SharedString>, color: Hsla, theme: &gpui_kit::component:
 
 // ── KI & Transkription: cards ──
 impl SettingsView {
+    /// The language recordings are transcribed in: detect, the two used
+    /// last, then every language Whisper knows.
+    fn language_picker(&self, cx: &mut Context<Self>) -> AnyElement {
+        use mostalgia_core::language::native_name;
+        let current = self.config.language.clone();
+        let quick = self.config.quick_languages();
+        let mut items: Vec<Choice> = vec![(tr("Automatisch erkennen").into(), current == "auto", Some(Pick::Language("auto".into())))];
+        items.push((tr("Zuletzt verwendet").into(), false, None));
+        items.extend(quick.iter().map(|c| (native_name(c), current == *c, Some(Pick::Language(c.clone())))));
+        items.push((tr("Alle Sprachen").into(), false, None));
+        items.extend(
+            mostalgia_core::language::all()
+                .into_iter()
+                .filter(|(c, _)| !quick.contains(c))
+                .map(|(c, name)| (name, current == c, Some(Pick::Language(c)))),
+        );
+        let label = if current == "auto" { tr("Automatisch erkennen").to_string() } else { native_name(&current) };
+        self.picker("set-language", label, items, cx)
+    }
+
     fn pick(&mut self, pick: Pick, window: &mut Window, cx: &mut Context<Self>) {
         match pick {
             Pick::SummaryConn(id) => self.set_summary_connection(id, cx),
@@ -2158,6 +2182,15 @@ impl SettingsView {
             Pick::Custom(slot, conn) => self.open_custom_model(slot, conn, window, cx),
             Pick::SummaryLanguage(code) => {
                 self.config.summary_language = code;
+                self.save(cx);
+            }
+            Pick::Language(code) => {
+                let mut disk = Config::load();
+                disk.note_recent_language(&code);
+                if let Err(e) = disk.save() {
+                    eprintln!("[mostalgia] saving settings: {e:#}");
+                }
+                self.config.language = code;
                 self.save(cx);
             }
         }
@@ -2333,27 +2366,6 @@ impl SettingsView {
 
         let summary_custom = self.custom_model_row(Slot::Summary, cx);
         let ask_custom = self.custom_model_row(Slot::Ask, cx);
-        // The companion's live notes (and live answers) have their own model.
-        let companion = self.config.character().map(|c| c.name());
-        let notes_picker = companion.is_some().then(|| {
-            let separate = !self.config.companion_notes_provider.is_empty();
-            let notes_id = self.config.companion_notes_provider.clone();
-            let label = match self.config.notes_request() {
-                Ok(req) if separate => format!("{} · {}", req.connection.name, self.model_label(&req.connection.id, &req.model)),
-                _ if separate => self.config.connection(&notes_id).map_or(notes_id.clone(), |c| self.conn_label(c)),
-                _ => tr("Wie Fragen (Ask)").to_string(),
-            };
-            let mut items: Vec<Choice> = vec![(tr("Wie Fragen (Ask)").into(), !separate, Some(Pick::NotesConn(None)))];
-            items.extend(conns.iter().map(|c| (self.conn_label(c), separate && c.id == notes_id, Some(Pick::NotesConn(Some(c.id.clone()))))));
-            let conn_picker = self.picker("mori-notes-conn", label, items, cx);
-            let model_picker = separate.then(|| {
-                let model = self.config.notes_request().map(|r| r.model).unwrap_or_default();
-                let items = self.model_choices(Slot::Notes, &notes_id, &model);
-                self.picker("mori-notes-model", self.model_label(&notes_id, &model), items, cx)
-            });
-            h_flex().flex_wrap().gap_1().child(conn_picker).children(model_picker).into_any_element()
-        });
-        let notes_custom = companion.is_some().then(|| self.custom_model_row(Slot::Notes, cx)).flatten();
         let summary_effort_row = (!summary_efforts.is_empty()).then(|| self.effort_row(Slot::Summary, &summary_efforts, cx));
         let ask_effort_row = (!ask_efforts.is_empty()).then(|| self.effort_row(Slot::Ask, &ask_efforts, cx));
         let summary_privacy = self.privacy_line(&summary_id, cx);
@@ -2403,17 +2415,43 @@ impl SettingsView {
             .children(ask_custom)
             .children(ask_effort_row)
             .child(ask_privacy)
-            .when_some(companion.zip(notes_picker), |el, (name, picker)| {
-                el.child(div().h(px(1.)).bg(theme.border))
-                    .child(ui::section_title(tr("BEGLEITERIN"), cx))
-                    .child(div().text_xs().text_color(theme.muted_foreground).child(trf("Der Chat mit {} nutzt die Verbindung für Fragen.", &[&name])))
-                    .child(row(
-                        tr("Modell für Live-Notizen"),
-                        Some(&trf("Auch für Live-Antworten von {}. Ein schnelles Modell reicht; gedacht wird dabei so wenig wie möglich.", &[&name])),
-                        picker,
-                    ))
-                    .children(notes_custom)
-            })
+    }
+
+    /// The companion's models (live notes and answers), its own card in
+    /// "KI & Transkription"; `None` without a companion.
+    fn render_ai_companion(&mut self, cx: &mut Context<Self>) -> Option<Div> {
+        let name = self.config.character()?.name();
+        let theme = cx.theme().clone();
+        let conns = self.config.connections.clone();
+        let separate = !self.config.companion_notes_provider.is_empty();
+        let notes_id = self.config.companion_notes_provider.clone();
+        let label = match self.config.notes_request() {
+            Ok(req) if separate => format!("{} · {}", req.connection.name, self.model_label(&req.connection.id, &req.model)),
+            _ if separate => self.config.connection(&notes_id).map_or(notes_id.clone(), |c| self.conn_label(c)),
+            _ => tr("Wie Fragen (Ask)").to_string(),
+        };
+        let mut items: Vec<Choice> = vec![(tr("Wie Fragen (Ask)").into(), !separate, Some(Pick::NotesConn(None)))];
+        items.extend(conns.iter().map(|c| (self.conn_label(c), separate && c.id == notes_id, Some(Pick::NotesConn(Some(c.id.clone()))))));
+        let conn_picker = self.picker("mori-notes-conn", label, items, cx);
+        let model_picker = separate.then(|| {
+            let model = self.config.notes_request().map(|r| r.model).unwrap_or_default();
+            let items = self.model_choices(Slot::Notes, &notes_id, &model);
+            self.picker("mori-notes-model", self.model_label(&notes_id, &model), items, cx)
+        });
+        let picker = h_flex().flex_wrap().gap_1().child(conn_picker).children(model_picker).into_any_element();
+        let notes_custom = self.custom_model_row(Slot::Notes, cx);
+        Some(
+            ui::card(cx)
+                .child(div().font_semibold().child(tr("Begleiterin")))
+                .child(div().text_xs().text_color(theme.muted_foreground).child(trf("Der Chat mit {} nutzt die Verbindung für Fragen.", &[&name])))
+                .child(settings_row(
+                    tr("Modell für Live-Notizen"),
+                    Some(&trf("Auch für Live-Antworten von {}. Ein schnelles Modell reicht; gedacht wird dabei so wenig wie möglich.", &[&name])),
+                    picker,
+                    &theme,
+                ))
+                .children(notes_custom),
+        )
     }
 
     fn stt_hint(&self, choice: &SttChoice) -> String {
@@ -3003,7 +3041,6 @@ impl SettingsView {
 
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let lang = self.config.language.clone();
         let threshold = self.config.vad_threshold;
         let choice = |id: &'static str, label: &'static str, on: bool, cx: &mut Context<Self>, f: fn(&mut Config)| {
             Button::new(id)
@@ -3049,13 +3086,8 @@ impl Render for SettingsView {
             .child(title("Sprache & Erkennung"))
             .child(row(
                 tr("Sprache"),
-                Some(tr("Empfohlen: „Automatisch erkennen“ – erkennt die Sprache der Besprechung selbst.")),
-                h_flex()
-                    .gap_1()
-                    .child(choice("set-de", "Deutsch", lang == "de", cx, |c| c.language = "de".into()))
-                    .child(choice("set-en", "English", lang == "en", cx, |c| c.language = "en".into()))
-                    .child(choice("set-auto", "Automatisch erkennen", lang == "auto", cx, |c| c.language = "auto".into()))
-                    .into_any_element(),
+                Some(tr("Auch vor jeder Aufnahme wählbar. Liegt die Erkennung daneben, ist eine feste Sprache zuverlässiger.")),
+                self.language_picker(cx),
             ))
             .child(self.meeting_languages(cx))
             .child(row(
@@ -3290,10 +3322,19 @@ impl Render for SettingsView {
         cards.push(Card {
             category: Category::Ki,
             title: "Zusammenfassungen & Fragen",
-            keywords: "ki ai zusammenfassung zusammenfassungen summary summaries fragen ask modell model denktiefe thinking effort reasoning automatisch automatic claude openai ollama deepseek lokal local cloud begleiterin companion mori tsumugi hoshi live notizen notes antworten answers chat",
+            keywords: "ki ai zusammenfassung zusammenfassungen summary summaries fragen ask modell model denktiefe thinking effort reasoning automatisch automatic claude openai ollama deepseek lokal local cloud",
             wide: false,
             element: self.render_ai_use(cx).into_any_element(),
         });
+        if let Some(companion) = self.render_ai_companion(cx) {
+            cards.push(Card {
+                category: Category::Ki,
+                title: "Begleiterin",
+                keywords: "begleiterin companion mori tsumugi hoshi jin kaito live notizen notes antworten answers chat modell model schnell fast",
+                wide: false,
+                element: companion.into_any_element(),
+            });
+        }
         // ── Darstellung ──
         let ui_lang = self.config.ui_language.clone();
         let lang_button = |id: &'static str, label: &'static str, value: &'static str, cx: &mut Context<Self>| {
