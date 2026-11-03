@@ -331,9 +331,7 @@ impl Captions {
             }
             return;
         };
-        let (pointer, position) = (x.pointer(), x.position());
-        eprintln!("[captions] drag start (resize {resize}): pointer {pointer:?}, window {position:?}");
-        let (Ok((px_, py_, _)), Ok(origin)) = (pointer, position) else { return };
+        let (Ok((px_, py_, _)), Ok(origin)) = (x.pointer(), x.position()) else { return };
         let scale = window.scale_factor();
         let b = window.bounds().size;
         let size = ((f32::from(b.width) * scale).round() as i32, (f32::from(b.height) * scale).round() as i32);
@@ -376,9 +374,6 @@ impl Captions {
     fn end_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.drag.take().is_none() {
             return;
-        }
-        if let Some(x) = &self.x {
-            eprintln!("[captions] drag end: pointer {:?}, window {:?}", x.pointer(), x.position());
         }
         self.save_place(window);
         cx.notify();
