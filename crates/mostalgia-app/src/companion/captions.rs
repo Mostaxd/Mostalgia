@@ -178,8 +178,10 @@ impl Captions {
                 let scale = window.scale_factor();
                 let (w, h) = config.live_captions_size.unwrap_or(DEFAULT_SIZE);
                 let size = ((w * scale) as i32, (h * scale) as i32);
-                let origin = config.live_captions_pos.unwrap_or_else(|| {
-                    let monitors = x.monitors();
+                let monitors = x.monitors();
+                // The saved place, unless its monitor is gone (unplugged).
+                let on_screen = |p: &(i32, i32)| monitors.iter().any(|m| m.rect.contains(p.0 + size.0 / 2, p.1 + size.1 / 2));
+                let origin = config.live_captions_pos.filter(|p| monitors.is_empty() || on_screen(p)).unwrap_or_else(|| {
                     let m = monitors.iter().find(|m| m.primary).or(monitors.first()).map(|m| m.rect).unwrap_or(Rect { x: 0, y: 0, w: 1920, h: 1080 });
                     default_origin(x.work_area_on(&m), size)
                 });
@@ -320,7 +322,9 @@ impl Captions {
             }
             return;
         };
-        let (Ok((px_, py_, _)), Ok(origin)) = (x.pointer(), x.position()) else { return };
+        let (pointer, position) = (x.pointer(), x.position());
+        eprintln!("[captions] drag start (resize {resize}): pointer {pointer:?}, window {position:?}");
+        let (Ok((px_, py_, _)), Ok(origin)) = (pointer, position) else { return };
         let scale = window.scale_factor();
         let b = window.bounds().size;
         let size = ((f32::from(b.width) * scale).round() as i32, (f32::from(b.height) * scale).round() as i32);
@@ -348,8 +352,11 @@ impl Captions {
             r.w = (f32::from(b.width) * scale).round() as i32;
             r.h = (f32::from(b.height) * scale).round() as i32;
         }
-        let _ = x.move_resize(r);
+        if let Err(e) = x.move_resize(r) {
+            eprintln!("[captions] moving: {e:#}");
+        }
         if !down {
+            eprintln!("[captions] drag end: pointer ({px_}, {py_}), asked for {r:?}, now at {:?}", x.position());
             self.drag = None;
             self.save_place(window);
             cx.notify();
