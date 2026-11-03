@@ -280,6 +280,23 @@ impl MeetingView {
         }
     }
 
+    /// Puts only the transcript or only the notes on the clipboard.
+    fn copy_part(&mut self, transcript: bool, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui_kit::component::WindowExt as _;
+        use gpui_kit::component::notification::Notification;
+        let Some(m) = &self.meeting else { return };
+        let (text, done) = if transcript {
+            (mostalgia_core::export::transcript_lines(m), tr("Transkript kopiert"))
+        } else {
+            (mostalgia_core::export::note_list(m), tr("Notizen kopiert"))
+        };
+        if text.trim().is_empty() {
+            return;
+        }
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        window.push_notification(Notification::success(done), cx);
+    }
+
     /// Screenshots: "Copy recap" clicked.
     #[doc(hidden)]
     pub fn demo_copy_recap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1843,7 +1860,15 @@ impl MeetingView {
             })
             .child(div().flex_1())
             .when(!m.notes.is_empty(), |el| {
-                el.child(export_parts_menu(
+                el.child(
+                    Button::new("notes-copy")
+                        .xsmall()
+                        .ghost()
+                        .icon(IconName::Copy)
+                        .label(tr("Notizen kopieren"))
+                        .on_click(cx.listener(|this, _, window, cx| this.copy_part(false, window, cx))),
+                )
+                .child(export_parts_menu(
                     mostalgia_core::export::Parts::NOTES,
                     Button::new("notes-export").xsmall().ghost().icon(IconName::Download).label(tr("Notizen exportieren")),
                 ))
@@ -2339,6 +2364,20 @@ impl MeetingView {
                     }))
             })
             .child(div().flex_1())
+            .when(!m.segments.is_empty(), |el| {
+                el.child(
+                    Button::new("transcript-copy")
+                        .xsmall()
+                        .ghost()
+                        .icon(IconName::Copy)
+                        .label(tr("Transkript kopieren"))
+                        .on_click(cx.listener(|this, _, window, cx| this.copy_part(true, window, cx))),
+                )
+                .child(export_parts_menu(
+                    mostalgia_core::export::Parts::TRANSCRIPT,
+                    Button::new("transcript-export").xsmall().ghost().icon(IconName::Download).label(tr("Transkript exportieren")),
+                ))
+            })
             .when(!imported, |el| el.child(
                 Button::new("retranscribe-tab")
                     .xsmall()
@@ -2864,6 +2903,9 @@ fn export_menu(m: &Meeting, button: Button) -> impl IntoElement {
     }
     if m.summary.is_some() {
         groups.push((tr("Nur Zusammenfassung"), Parts::SUMMARY));
+    }
+    if !m.segments.is_empty() {
+        groups.push((tr("Nur Transkript"), Parts::TRANSCRIPT));
     }
     button.dropdown_menu(move |menu, _, _| {
         let mut menu = menu;
