@@ -20,7 +20,8 @@ use mostalgia_core::playback::{self, Player};
 use mostalgia_core::store::{Meeting, Store};
 use mostalgia_core::i18n::{self, tr, trf};
 use mostalgia_core::glossary::{self, Glossary};
-use mostalgia_core::{Source, cloud_stt, companion, finalize, paths, recap, summary, voices};
+use mostalgia_core::connections::Connection;
+use mostalgia_core::{Source, cloud_stt, companion, finalize, llm, paths, recap, summary, voices};
 
 use crate::recording::SharedEngine;
 use crate::processing;
@@ -78,6 +79,22 @@ struct EngineOption {
     cost: Option<f64>,
 }
 
+/// One connection's models in the "regenerate summary" dialog.
+struct ModelGroup {
+    conn: Connection,
+    models: Vec<llm::ModelInfo>,
+    /// The provider's own list arrived (else the built-in one is shown).
+    live: bool,
+}
+
+/// The "regenerate summary" dialog: every configured AI connection with its
+/// models; the one from the settings is preselected.
+struct Resummarize {
+    groups: Vec<ModelGroup>,
+    /// (connection id, model id)
+    selected: (String, String),
+}
+
 struct Retranscribe {
     options: Vec<EngineOption>,
     selected: usize,
@@ -113,6 +130,8 @@ pub struct MeetingView {
     engine: Option<SharedEngine>,
     /// The "transcribe again" dialog, while open.
     retranscribe: Option<Retranscribe>,
+    /// The "regenerate summary" dialog, while open.
+    resummarize: Option<Resummarize>,
     /// Engine label while transcribing again.
     retranscribing: Option<SharedString>,
     /// Why the last "transcribe again" failed.
@@ -174,6 +193,7 @@ impl MeetingView {
             flash: None,
             engine: None,
             retranscribe: None,
+            resummarize: None,
             retranscribing: None,
             transcribe_error: None,
             selected: Vec::new(),
@@ -478,11 +498,107 @@ impl MeetingView {
         }
     }
 
+    /// Summarizes with the connection and model from the settings.
     fn summarize(&mut self, cx: &mut Context<Self>) {
+        match Config::load().summary_request() {
+            Ok(req) => self.summarize_with(req, cx),
+            Err(e) => {
+                self.error = Some(format!("{e:#}").into());
+                cx.notify();
+            }
+        }
+    }
+
+    /// Opens the "regenerate summary" dialog: the configured connections
+    /// with their models (the provider's list once it arrives), the
+    /// settings' model preselected.
+    fn open_resummarize(&mut self, cx: &mut Context<Self>) {
         if self.summarizing {
             return;
         }
-        let req = match Config::load().summary_request().and_then(|req| req.connection.require_key().map(|_| req)) {
+        let config = Config::load();
+        let mut groups: Vec<ModelGroup> = config
+            .connections
+            .iter()
+            .filter(|c| c.is_configured())
+            .map(|c| ModelGroup { conn: c.clone(), models: llm::fallback_models(c), live: false })
+            .collect();
+        // The settings' choice is always listed, even when its connection
+        // isn't ready (starting it then says why).
+        let mut selected = (config.summary_provider.clone(), config.summary_model.clone());
+        if let Some(conn) = config.connection(&selected.0) {
+            if !groups.iter().any(|g| g.conn.id == conn.id) {
+                groups.insert(0, ModelGroup { conn: conn.clone(), models: llm::fallback_models(conn), live: false });
+            }
+        }
+        if !selected.1.is_empty()
+            && let Some(g) = groups.iter_mut().find(|g| g.conn.id == selected.0)
+            && !g.models.iter().any(|m| m.id == selected.1)
+        {
+            g.models.insert(0, llm::ModelInfo::new(&selected.1, &selected.1, Vec::new()));
+        }
+        if !groups.iter().any(|g| g.conn.id == selected.0 && g.models.iter().any(|m| m.id == selected.1)) {
+            if let Some((g, m)) = groups.iter().find_map(|g| g.models.first().map(|m| (g, m))) {
+                selected = (g.conn.id.clone(), m.id.clone());
+            }
+        }
+        for g in &groups {
+            let conn = g.conn.clone();
+            let task = cx.background_spawn(async move {
+                let key = conn.require_key().ok()?;
+                llm::list_models(&conn, key.as_deref()).ok()
+            });
+            let id = g.conn.id.clone();
+            cx.spawn(async move |this, cx| {
+                let Some(models) = task.await else { return };
+                this.update(cx, |this, cx| {
+                    let Some(d) = &mut this.resummarize else { return };
+                    let Some(g) = d.groups.iter_mut().find(|g| g.conn.id == id) else { return };
+                    let mut models = models;
+                    // Keep the chosen one even if the provider doesn't list it.
+                    if d.selected.0 == id && !d.selected.1.is_empty() && !models.iter().any(|m| m.id == d.selected.1) {
+                        models.insert(0, llm::ModelInfo::new(&d.selected.1, &d.selected.1, Vec::new()));
+                    }
+                    g.models = models;
+                    g.live = true;
+                    if d.selected.1.is_empty()
+                        && d.selected.0 == id
+                        && let Some(m) = g.models.first()
+                    {
+                        d.selected.1 = m.id.clone();
+                    }
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
+        self.resummarize = Some(Resummarize { groups, selected });
+        cx.notify();
+    }
+
+    /// Regenerates the summary with the model picked in the dialog (the
+    /// settings stay as they are).
+    fn start_resummarize(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.resummarize.take() else { return };
+        let (conn_id, model) = dialog.selected;
+        let config = Config::load();
+        let Some(connection) = dialog.groups.into_iter().find(|g| g.conn.id == conn_id).map(|g| g.conn) else { return };
+        if model.is_empty() {
+            self.error = Some(trf("{}: kein Modell gewählt", &[&connection.name]).into());
+            cx.notify();
+            return;
+        }
+        let effort = mostalgia_core::config::effort_for(&connection, &model, &config.summary_effort);
+        let req = summary::SummaryRequest { connection, model, language: config.summary_language_code(), effort };
+        self.summarize_with(req, cx);
+    }
+
+    fn summarize_with(&mut self, req: summary::SummaryRequest, cx: &mut Context<Self>) {
+        if self.summarizing {
+            return;
+        }
+        let req = match req.connection.require_key().map(|_| req) {
             Ok(req) => req,
             Err(e) => {
                 // Errors from here already name the connection.
@@ -880,6 +996,148 @@ impl MeetingView {
                                         .icon(IconName::RefreshCw)
                                         .label(tr("Transkribieren"))
                                         .on_click(cx.listener(|this, _, _, cx| this.start_retranscribe(cx))),
+                                ),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn render_resummarize_dialog(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let dialog = self.resummarize.as_ref()?;
+        let theme = cx.theme().clone();
+        let mut list = v_flex().id("summary-model-options").gap_2().min_h_0().overflow_y_scroll();
+        let mut row_index = 0usize;
+        for g in &dialog.groups {
+            let (icon, place) = if g.conn.is_local() {
+                (IconName::HardDrive, trf("Bleibt lokal ({})", &[&g.conn.name]))
+            } else {
+                (IconName::Globe, trf("Text der Besprechung geht an {} (Cloud)", &[&g.conn.name]))
+            };
+            list = list.child(
+                h_flex()
+                    .pt_1()
+                    .gap_2()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(div().font_semibold().child(g.conn.name.clone()))
+                    .child(Icon::new(icon).xsmall())
+                    .child(div().flex_1().min_w_0().truncate().child(place)),
+            );
+            if g.models.is_empty() {
+                list = list.child(div().px_3().text_xs().text_color(theme.muted_foreground).child(if g.live {
+                    tr("Keine Modelle gefunden")
+                } else {
+                    tr("Modelle werden geladen …")
+                }));
+            }
+            for m in &g.models {
+                let selected = dialog.selected.0 == g.conn.id && dialog.selected.1 == m.id;
+                let pick = (g.conn.id.clone(), m.id.clone());
+                let sub = (m.display_name != m.id).then(|| m.id.clone());
+                list = list.child(
+                    h_flex()
+                        .id(("summary-model-option", row_index))
+                        .gap_3()
+                        .px_3()
+                        .py_2()
+                        .rounded(theme.radius)
+                        .border(ui::border_width(cx))
+                        .border_color(if selected { theme.primary } else { theme.border })
+                        .when(selected, |el| el.bg(theme.primary.opacity(0.06)))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme.muted.opacity(0.5)))
+                        .child(
+                            div()
+                                .flex_none()
+                                .size(px(16.))
+                                .rounded_full()
+                                .border_2()
+                                .border_color(if selected { theme.primary } else { theme.muted_foreground })
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .when(selected, |el| el.child(div().size(px(6.)).rounded_full().bg(theme.primary))),
+                        )
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .child(div().text_sm().font_medium().child(m.display_name.clone()))
+                                .children(sub.map(|id| div().text_xs().text_color(theme.muted_foreground).truncate().child(id))),
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(d) = &mut this.resummarize {
+                                d.selected = pick.clone();
+                                cx.notify();
+                            }
+                        })),
+                );
+                row_index += 1;
+            }
+        }
+        if dialog.groups.is_empty() {
+            list = list.child(div().text_sm().text_color(theme.muted_foreground).child(tr("Keine KI-Verbindung eingerichtet — in den Einstellungen hinzufügen.")));
+        }
+        let can_start = !dialog.selected.1.is_empty() && dialog.groups.iter().any(|g| g.conn.id == dialog.selected.0);
+        Some(
+            div()
+                .id("resummarize-overlay")
+                .absolute()
+                .inset_0()
+                .bg(gpui_kit::black().opacity(0.45))
+                .flex()
+                .items_center()
+                .justify_center()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.resummarize = None;
+                    cx.notify();
+                }))
+                .child(
+                    v_flex()
+                        .id("resummarize-dialog")
+                        .w(px(480. * ui::ui_scale()))
+                        .max_w(relative(0.9))
+                        .max_h(relative(0.9))
+                        .p_5()
+                        .gap_3()
+                        .rounded(theme.radius_lg)
+                        .border(ui::border_width(cx))
+                        .border_color(theme.border)
+                        .bg(theme.background)
+                        .shadow_lg()
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(Icon::new(IconName::RefreshCw).text_color(theme.primary))
+                                .child(div().text_lg().font_semibold().child(tr("Zusammenfassung neu erstellen"))),
+                        )
+                        .child(div().text_sm().text_color(theme.muted_foreground).child(tr("Mit welchem Modell soll die Zusammenfassung neu erstellt werden? Die Einstellungen bleiben, wie sie sind.")))
+                        .child(list)
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .text_xs()
+                                .text_color(theme.warning)
+                                .child(Icon::new(IconName::TriangleAlert).xsmall())
+                                .child(tr("Ersetzt die Zusammenfassung.")),
+                        )
+                        .child(
+                            h_flex()
+                                .justify_end()
+                                .gap_2()
+                                .child(Button::new("resummarize-cancel").ghost().label(tr("Abbrechen")).on_click(cx.listener(|this, _, _, cx| {
+                                    this.resummarize = None;
+                                    cx.notify();
+                                })))
+                                .child(
+                                    Button::new("resummarize-start")
+                                        .primary()
+                                        .icon(IconName::Sparkles)
+                                        .label(tr("Neu erstellen"))
+                                        .disabled(!can_start)
+                                        .on_click(cx.listener(|this, _, _, cx| this.start_resummarize(cx))),
                                 ),
                         ),
                 )
@@ -2006,7 +2264,7 @@ impl MeetingView {
                                 .ghost()
                                 .icon(IconName::RefreshCw)
                                 .label(tr("Neu erstellen"))
-                                .on_click(cx.listener(|this, _, _, cx| this.summarize(cx))),
+                                .on_click(cx.listener(|this, _, _, cx| this.open_resummarize(cx))),
                         )
                         .child(export_parts_menu(
                             mostalgia_core::export::Parts::SUMMARY,
@@ -2424,7 +2682,7 @@ impl Render for MeetingView {
         };
         let header = self.render_header(&m, cx);
         let status = self.render_transcript_status(&m, cx);
-        let dialog = self.render_retranscribe_dialog(cx);
+        let dialog = self.render_retranscribe_dialog(cx).or_else(|| self.render_resummarize_dialog(cx));
         if m.is_text_import() && self.tab > 2 {
             self.tab = 1;
         }
