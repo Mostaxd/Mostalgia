@@ -341,7 +341,7 @@ pub const EN: &[(&str, &str)] = &[
     ("Übersetzt mit {} · {}. Nur der Text fertiger Zeilen geht dorthin, nie Audio.", "Translated by {} · {}. Only the text of finished lines goes there, never audio."),
     ("Live-Übersetzung", "Live translation"),
     ("Während der Aufnahme übersetzen", "Translate while recording"),
-    ("Jede fertige Zeile erscheint zusätzlich übersetzt, im Fenster und in den Live-Untertiteln. Während einer Aufnahme auch über „Übersetzen“ schaltbar.", "Each finished line also appears translated, in the window and in the live captions. During a recording you can also switch it with “Translate”."),
+    ("Jede fertige Zeile erscheint zusätzlich übersetzt, im Fenster und in den Live-Untertiteln. Während einer Aufnahme auch über „Übersetzen“ schaltbar. Übersetzt wird der Text mit dem KI-Modell, nicht mit Whisper: Whisper übersetzt nur ins Englische, und das Turbo-Modell wurde ohne Übersetzungen trainiert.", "Each finished line also appears translated, in the window and in the live captions. During a recording you can also switch it with “Translate”. The text is translated by the AI model, not by Whisper: Whisper only translates into English, and the turbo model was trained without translations."),
     ("Übersetzen in", "Translate into"),
     ("Zeilen, die schon in dieser Sprache sind, bleiben wie sie sind.", "Lines already in this language stay as they are."),
     ("Modell für Übersetzung", "Model for translation"),

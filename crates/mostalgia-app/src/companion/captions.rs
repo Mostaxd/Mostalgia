@@ -8,7 +8,13 @@
 //! that ("Live" brings it back). A line's star flags it: the app adds a
 //! bookmark there. Mic and pause switches, "open Mostalgia", opacity; it
 //! moves by its top bar and resizes at the corner; place and size are
-//! remembered.
+//! remembered. It moves and resizes itself, following the pointer, like
+//! Mori on the desktop: window managers ignore a move request from a
+//! window that never takes focus (and Windows has none).
+//!
+//! Two looks (Settings): a box with the last lines, or subtitles: only the
+//! newest lines, centred over a transparent window, the bar showing on
+//! hover.
 
 use std::time::{Duration, Instant};
 
@@ -30,6 +36,53 @@ use crate::{AppAssets, load_fonts, ui};
 pub const DEFAULT_SIZE: (f32, f32) = (560., 140.);
 /// Opacity steps of its button.
 const OPACITIES: [f32; 4] = [1.0, 0.92, 0.8, 0.65];
+/// Smallest size (logical px).
+const MIN_SIZE: (f32, f32) = (300., 110.);
+/// Lines shown as subtitles (the newest, counting the one being spoken).
+const SUBTITLE_LINES: usize = 2;
+
+/// A move or resize by hand: pointer and window (root pixels) when it began.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Drag {
+    Move { pointer: (i32, i32), origin: (i32, i32) },
+    Resize { pointer: (i32, i32), origin: (i32, i32), size: (i32, i32) },
+}
+
+/// Where the window goes for the pointer at `now` during `drag`: its
+/// rectangle, never smaller than `min` (root pixels).
+fn drag_rect(drag: Drag, now: (i32, i32), min: (i32, i32)) -> Rect {
+    match drag {
+        Drag::Move { pointer, origin } => {
+            Rect { x: origin.0 + now.0 - pointer.0, y: origin.1 + now.1 - pointer.1, w: 0, h: 0 }
+        }
+        Drag::Resize { pointer, origin, size } => Rect {
+            x: origin.0,
+            y: origin.1,
+            w: (size.0 + now.0 - pointer.0).max(min.0),
+            h: (size.1 + now.1 - pointer.1).max(min.1),
+        },
+    }
+}
+
+/// How it looks (from the config).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Look {
+    subtitles: bool,
+    text: f32,
+    speakers: bool,
+    translation_only: bool,
+}
+
+impl Look {
+    fn of(config: &Config) -> Self {
+        Self {
+            subtitles: config.captions_subtitles(),
+            text: config.captions_text_size(),
+            speakers: config.live_captions_speakers,
+            translation_only: config.live_captions_translation_only,
+        }
+    }
+}
 
 /// Where it goes by default: bottom middle of the monitor, above the
 /// panel, away from Mori (who starts top right).
@@ -67,7 +120,7 @@ pub fn run(demo: bool) {
             is_movable: true,
             is_resizable: true,
             is_minimizable: false,
-            window_min_size: Some(size(px(300.), px(110.))),
+            window_min_size: Some(size(px(MIN_SIZE.0), px(MIN_SIZE.1))),
             window_background: WindowBackgroundAppearance::Transparent,
             window_decorations: Some(WindowDecorations::Server),
             app_id: Some("io.github.mostaxd.Mostalgia.Captions".into()),
@@ -104,6 +157,12 @@ pub struct Captions {
     opacity: f32,
     /// Last saved place and size.
     saved: Option<((i32, i32), (f32, f32))>,
+    /// Being moved or resized by hand.
+    drag: Option<Drag>,
+    /// The app saw the pointer move during the drag (from then on a button
+    /// found up ends it, should the release itself be missed).
+    drag_moved: bool,
+    look: Look,
     checked_at: Instant,
     demo: Option<Instant>,
 }
@@ -114,7 +173,12 @@ impl Captions {
         let x = window_id(window).and_then(|id| X11::connect(id).ok());
         match &x {
             Some(x) => {
-                if let Err(e) = x.setup_window().and_then(|_| x.no_input_focus()) {
+                // Linux: no "never takes focus" hint. GNOME (XWayland) then
+                // delivers no clicks to it at all, so it can't be dragged.
+                let setup = x.setup_window();
+                #[cfg(not(target_os = "linux"))]
+                let setup = setup.and_then(|_| x.no_input_focus());
+                if let Err(e) = setup {
                     eprintln!("[captions] window setup: {e:#}");
                 }
                 #[cfg(target_os = "macos")]
@@ -122,8 +186,10 @@ impl Captions {
                 let scale = window.scale_factor();
                 let (w, h) = config.live_captions_size.unwrap_or(DEFAULT_SIZE);
                 let size = ((w * scale) as i32, (h * scale) as i32);
-                let origin = config.live_captions_pos.unwrap_or_else(|| {
-                    let monitors = x.monitors();
+                let monitors = x.monitors();
+                // The saved place, unless its monitor is gone (unplugged).
+                let on_screen = |p: &(i32, i32)| monitors.iter().any(|m| m.rect.contains(p.0 + size.0 / 2, p.1 + size.1 / 2));
+                let origin = config.live_captions_pos.filter(|p| monitors.is_empty() || on_screen(p)).unwrap_or_else(|| {
                     let m = monitors.iter().find(|m| m.primary).or(monitors.first()).map(|m| m.rect).unwrap_or(Rect { x: 0, y: 0, w: 1920, h: 1080 });
                     default_origin(x.work_area_on(&m), size)
                 });
@@ -133,10 +199,17 @@ impl Captions {
         }
         cx.observe_window_appearance(window, |_, window, cx| ui::apply_theme(window, cx)).detach();
         cx.spawn_in(window, async move |this, cx| {
+            let mut dragging = false;
             loop {
-                cx.background_executor().timer(Duration::from_millis(60)).await;
-                if this.update_in(cx, |this, window, cx| this.poll(window, cx)).is_err() {
-                    break;
+                // Following the pointer smoothly while it's dragged.
+                cx.background_executor().timer(Duration::from_millis(if dragging { 8 } else { 60 })).await;
+                match this.update_in(cx, |this, window, cx| {
+                    this.poll(window, cx);
+                    this.drag_step(false, window, cx);
+                    this.drag.is_some()
+                }) {
+                    Ok(d) => dragging = d,
+                    Err(_) => break,
                 }
             }
         })
@@ -156,6 +229,9 @@ impl Captions {
             follow: true,
             opacity: config.live_captions_opacity.clamp(0.4, 1.0),
             saved: None,
+            drag: None,
+            drag_moved: false,
+            look: Look::of(&config),
             checked_at: Instant::now(),
             demo: demo.then(Instant::now),
         }
@@ -208,6 +284,7 @@ impl Captions {
                     mostalgia_core::i18n::set_lang(mostalgia_core::i18n::resolve(&config.ui_language));
                     ui::apply_theme(window, cx);
                     self.opacity = config.live_captions_opacity.clamp(0.4, 1.0);
+                    self.look = Look::of(&config);
                 }
                 ToMori::Quit => {
                     self.save_place(window);
@@ -233,13 +310,73 @@ impl Captions {
             self.follow = false;
             cx.notify();
         }
-        if self.checked_at.elapsed() > Duration::from_secs(2) {
+        if self.drag.is_none() && self.checked_at.elapsed() > Duration::from_secs(2) {
             self.checked_at = Instant::now();
             self.save_place(window);
         }
         if changed {
             cx.notify();
         }
+    }
+
+    /// A press on the bar (move) or the corner (resize): from now on the
+    /// window follows the pointer until the button is up. Without a handle
+    /// on the window, the window manager is asked to do it.
+    fn start_drag(&mut self, resize: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(x) = &self.x else {
+            if resize {
+                window.start_window_resize(ResizeEdge::BottomRight);
+            } else {
+                window.start_window_move();
+            }
+            return;
+        };
+        let (Ok((px_, py_, _)), Ok(origin)) = (x.pointer(), x.position()) else { return };
+        let scale = window.scale_factor();
+        let b = window.bounds().size;
+        let size = ((f32::from(b.width) * scale).round() as i32, (f32::from(b.height) * scale).round() as i32);
+        self.drag_moved = false;
+        self.drag = Some(if resize {
+            Drag::Resize { pointer: (px_, py_), origin, size }
+        } else {
+            Drag::Move { pointer: (px_, py_), origin }
+        });
+        cx.notify();
+    }
+
+    /// Moves or resizes to the pointer while dragged (on each mouse move,
+    /// and between them); ends at the release, or once the pointer moved
+    /// and the button is found up.
+    fn drag_step(&mut self, moved: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(drag), Some(x)) = (self.drag, &self.x) else { return };
+        self.drag_moved |= moved;
+        let Ok((px_, py_, down)) = x.pointer() else {
+            self.drag = None;
+            return;
+        };
+        let scale = window.scale_factor();
+        let min = ((MIN_SIZE.0 * scale) as i32, (MIN_SIZE.1 * scale) as i32);
+        let mut r = drag_rect(drag, (px_, py_), min);
+        if let Drag::Move { .. } = drag {
+            let b = window.bounds().size;
+            r.w = (f32::from(b.width) * scale).round() as i32;
+            r.h = (f32::from(b.height) * scale).round() as i32;
+        }
+        if let Err(e) = x.move_resize(r) {
+            eprintln!("[captions] moving: {e:#}");
+        }
+        if !down && self.drag_moved {
+            self.end_drag(window, cx);
+        }
+    }
+
+    /// The button is up: the drag is over, and the new place saved.
+    fn end_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.drag.take().is_none() {
+            return;
+        }
+        self.save_place(window);
+        cx.notify();
     }
 
     /// Remembers where it is and how big (when that changed).
@@ -304,6 +441,12 @@ impl Captions {
         let at = l.at;
         let flagged = self.flagged.iter().any(|f| (*f - at).abs() < 0.01);
         let translation = if interim { None } else { self.translations.iter().rev().find(|(t, _)| (*t - at).abs() < 0.01).map(|(_, t)| t.clone()) };
+        let look = self.look;
+        // Only the translation, once it's there.
+        let (text, translation) = match translation {
+            Some(t) if look.translation_only => (t, None),
+            t => (l.text.clone(), t),
+        };
         let group = SharedString::from(format!("caption-line-{ix}"));
         h_flex()
             .id(("caption", ix))
@@ -314,24 +457,26 @@ impl Captions {
             .px_1()
             .rounded(theme.radius)
             .hover(|s| s.bg(theme.muted.opacity(0.5)))
-            .child(
-                div()
-                    .flex_none()
-                    .min_w(px(56.))
-                    .text_size(ui::transcript_rems(0.8))
-                    .font_semibold()
-                    .text_color(ui::speaker_color(&l.speaker, cx))
-                    .child(ui::speaker_display(&l.speaker)),
-            )
+            .when(look.speakers, |el| {
+                el.child(
+                    div()
+                        .flex_none()
+                        .min_w(px(56.))
+                        .text_size(ui::transcript_rems(0.8 * look.text))
+                        .font_semibold()
+                        .text_color(ui::speaker_color(&l.speaker, cx))
+                        .child(ui::speaker_display(&l.speaker)),
+                )
+            })
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
-                    .text_size(ui::transcript_rems(0.95))
+                    .text_size(ui::transcript_rems(0.95 * look.text))
                     .when(interim, |el| el.text_color(theme.muted_foreground).italic())
-                    .child(ui::bidi_text(l.text.clone(), true))
+                    .child(ui::bidi_text(text, true))
                     .when_some(translation, |el, t| {
-                        el.child(ui::bidi_text(t, true).italic().text_color(theme.muted_foreground).text_size(ui::transcript_rems(0.9)))
+                        el.child(ui::bidi_text(t, true).italic().text_color(theme.muted_foreground).text_size(ui::transcript_rems(0.9 * look.text)))
                     }),
             )
             .when(!interim, |el| {
@@ -354,16 +499,75 @@ impl Captions {
 }
 
 impl Render for Captions {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.look.subtitles {
+            return self.render_subtitles(window, cx).into_any_element();
+        }
+        let theme = cx.theme().clone();
+        let lines = self.lines.clone();
+        let interim = self.interim.clone();
+        let n = lines.len();
+        let header = self.render_bar(cx);
+        v_flex()
+            .id("captions")
+            .size_full()
+            .relative()
+            .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, window, cx| this.drag_step(true, window, cx)))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, window, cx| this.end_drag(window, cx)))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, window, cx| this.end_drag(window, cx)))
+            .font(ui::ui_font(cx))
+            .rounded(theme.radius_lg)
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.background.opacity(self.opacity))
+            .text_color(theme.foreground)
+            .overflow_hidden()
+            .child(header)
+            .when_some(self.stalled, |el, secs| el.child(stalled_banner(secs, cx)))
+            .child(
+                v_flex()
+                    .id("captions-lines")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll)
+                    .px_2()
+                    .py_1()
+                    .gap_1()
+                    .when(lines.is_empty() && interim.is_empty(), |el| {
+                        el.child(div().py_4().text_center().text_sm().text_color(theme.muted_foreground).child(tr("Warte auf die ersten Worte …")))
+                    })
+                    .children(lines.iter().enumerate().map(|(i, l)| self.render_line(i, l, false, cx)))
+                    .children(interim.iter().enumerate().map(|(i, l)| self.render_line(n + i, l, true, cx))),
+            )
+            .child(self.resize_grip(cx))
+            .into_any_element()
+    }
+}
+
+/// "Live transcription stuck for N s".
+fn stalled_banner(secs: u64, cx: &App) -> Div {
+    let theme = cx.theme();
+    h_flex()
+        .flex_none()
+        .px_2()
+        .py_1()
+        .gap_1p5()
+        .bg(theme.warning.opacity(0.15))
+        .text_xs()
+        .child(Icon::new(IconName::TriangleAlert).xsmall().text_color(theme.warning))
+        .child(trf("Die Live-Transkription hängt seit {} s", &[&secs]))
+}
+
+impl Captions {
+    /// The top bar: moves the window; timer, mic, pause, opacity, app.
+    fn render_bar(&mut self, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = cx.theme().clone();
         let live = self.live.clone();
         let paused = live.as_ref().is_some_and(|l| l.paused);
         let mic_on = live.as_ref().and_then(|l| l.sources).is_none_or(|s| s[0]);
         let elapsed = live.as_ref().map_or(0., |l| l.elapsed_secs);
-        let lines = self.lines.clone();
-        let interim = self.interim.clone();
-        let n = lines.len();
-        let header = h_flex()
+        h_flex()
             .id("captions-bar")
             .flex_none()
             .h(px(30.))
@@ -372,8 +576,8 @@ impl Render for Captions {
             .border_b_1()
             .border_color(theme.border.opacity(0.6))
             .cursor_move()
-            // Moving it by its bar (the window manager does the move).
-            .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
+            // Moving it by its bar (buttons keep their clicks).
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.start_drag(false, window, cx)))
             .child(super::controls::sparkles(theme.primary, !Config::load().reduce_motion, paused))
             .child(div().text_xs().font_family(theme.mono_font_family.clone()).text_color(theme.muted_foreground).child(ui::hms(elapsed)))
             .child(div().flex_1())
@@ -416,64 +620,94 @@ impl Render for Captions {
                         cx.notify();
                     })),
             )
-            .child(Button::new("captions-app").xsmall().ghost().icon(IconName::AppWindow).tooltip(tr("Mostalgia öffnen")).on_click(|_, _, _| send(&FromMori::ShowApp)));
+            .child(Button::new("captions-app").xsmall().ghost().icon(IconName::AppWindow).tooltip(tr("Mostalgia öffnen")).on_click(|_, _, _| send(&FromMori::ShowApp)))
+    }
+
+    /// The corner grip: resizes the window.
+    fn resize_grip(&mut self, cx: &mut Context<Self>) -> Stateful<Div> {
+        div()
+            .id("captions-resize")
+            .absolute()
+            .right_0()
+            .bottom_0()
+            .size(px(14.))
+            .cursor(CursorStyle::ResizeUpLeftDownRight)
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.start_drag(true, window, cx)))
+    }
+
+    /// Subtitles: the newest lines centred at the bottom of a transparent
+    /// window, each on a dark band; the bar and the grip show on hover.
+    fn render_subtitles(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
+        let theme = cx.theme().clone();
+        let look = self.look;
+        let mut shown: Vec<(WireLine, bool)> = self.lines.iter().map(|l| (l.clone(), false)).chain(self.interim.iter().map(|l| (l.clone(), true))).collect();
+        let skip = shown.len().saturating_sub(SUBTITLE_LINES);
+        shown.drain(..skip);
+        // Bar and grip stay while dragged or hovered.
+        let pinned = self.drag.is_some();
+        let bar = self.render_bar(cx).rounded(theme.radius).border_1().border_color(theme.border).bg(theme.background.opacity(0.92));
+        let grip = self.resize_grip(cx);
+        let band = gpui_kit::hsla(0., 0., 0.05, (self.opacity * 0.8).clamp(0.35, 0.85));
+        let lines = shown.into_iter().map(|(l, interim)| {
+            let translation = if interim { None } else { self.translations.iter().rev().find(|(t, _)| (*t - l.at).abs() < 0.01).map(|(_, t)| t.clone()) };
+            let (text, translation) = match translation {
+                Some(t) if look.translation_only => (t, None),
+                t => (l.text.clone(), t),
+            };
+            v_flex()
+                .max_w_full()
+                .items_center()
+                .px_3()
+                .py_1()
+                .rounded(theme.radius)
+                .bg(band)
+                .text_center()
+                .text_color(gpui_kit::white())
+                .text_size(ui::transcript_rems(1.25 * look.text))
+                .when(interim, |el| el.text_color(gpui_kit::white().opacity(0.75)))
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_baseline()
+                        .flex_wrap()
+                        .justify_center()
+                        .when(look.speakers, |el| {
+                            el.child(div().flex_none().font_semibold().text_color(ui::speaker_color(&l.speaker, cx)).child(ui::speaker_display(&l.speaker)))
+                        })
+                        .child(ui::bidi_text(text, true)),
+                )
+                .when_some(translation, |el, t| el.child(ui::bidi_text(t, true).italic().text_color(gpui_kit::white().opacity(0.85)).text_size(ui::transcript_rems(1.1 * look.text))))
+        }).collect::<Vec<_>>();
         v_flex()
+            .id("captions-subtitles")
+            .group("captions")
             .size_full()
             .relative()
+            .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, window, cx| this.drag_step(true, window, cx)))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, window, cx| this.end_drag(window, cx)))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, window, cx| this.end_drag(window, cx)))
             .font(ui::ui_font(cx))
-            .rounded(theme.radius_lg)
-            .border_1()
-            .border_color(theme.border)
-            .bg(theme.background.opacity(self.opacity))
             .text_color(theme.foreground)
-            .overflow_hidden()
-            .child(header)
-            .when_some(self.stalled, |el, secs| {
-                el.child(
-                    h_flex()
-                        .flex_none()
-                        .px_2()
-                        .py_1()
-                        .gap_1p5()
-                        .bg(theme.warning.opacity(0.15))
-                        .text_xs()
-                        .child(Icon::new(IconName::TriangleAlert).xsmall().text_color(theme.warning))
-                        .child(trf("Die Live-Transkription hängt seit {} s", &[&secs])),
-                )
-            })
-            .child(
-                v_flex()
-                    .id("captions-lines")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
-                    .px_2()
-                    .py_1()
-                    .gap_1()
-                    .when(lines.is_empty() && interim.is_empty(), |el| {
-                        el.child(div().py_4().text_center().text_sm().text_color(theme.muted_foreground).child(tr("Warte auf die ersten Worte …")))
-                    })
-                    .children(lines.iter().enumerate().map(|(i, l)| self.render_line(i, l, false, cx)))
-                    .children(interim.iter().enumerate().map(|(i, l)| self.render_line(n + i, l, true, cx))),
-            )
-            .child(
-                // The corner grip (the window manager resizes).
-                div()
-                    .id("captions-resize")
-                    .absolute()
-                    .right_0()
-                    .bottom_0()
-                    .size(px(14.))
-                    .cursor(CursorStyle::ResizeUpLeftDownRight)
-                    .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_resize(ResizeEdge::BottomRight)),
-            )
+            .child(div().when(!pinned, |d| d.invisible().group_hover("captions", |s| s.visible())).child(bar))
+            .when_some(self.stalled, |el, secs| el.child(stalled_banner(secs, cx).rounded(theme.radius)))
+            .child(v_flex().flex_1().min_h_0().justify_end().items_center().gap_1().pb_2().overflow_hidden().children(lines))
+            .child(div().when(!pinned, |d| d.invisible().group_hover("captions", |s| s.visible())).child(grip))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Rect, default_origin, next_opacity};
+    use super::{Drag, Rect, default_origin, drag_rect, next_opacity};
+
+    #[test]
+    fn a_drag_follows_the_pointer() {
+        let moved = drag_rect(Drag::Move { pointer: (100, 100), origin: (500, 800) }, (130, 90), (300, 110));
+        assert_eq!((moved.x, moved.y), (530, 790));
+        let resized = drag_rect(Drag::Resize { pointer: (100, 100), origin: (500, 800), size: (560, 140) }, (140, 120), (300, 110));
+        assert_eq!(resized, Rect { x: 500, y: 800, w: 600, h: 160 });
+        let small = drag_rect(Drag::Resize { pointer: (100, 100), origin: (500, 800), size: (560, 140) }, (-400, 0), (300, 110));
+        assert_eq!((small.w, small.h), (300, 110), "never below the smallest size");
+    }
 
     #[test]
     fn opacity_cycles() {

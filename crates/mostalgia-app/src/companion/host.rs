@@ -197,6 +197,12 @@ impl Drop for DesktopHost {
 fn spawn(arg: &str) -> anyhow::Result<Running> {
     // After an update on Windows: the old program (renamed), not the new one.
     let exe = mostalgia_core::self_update::own_exe()?;
+    // Linux: rebuilt or reinstalled while running, the old file is gone
+    // and its path ends in " (deleted)"; the new one is at the same path.
+    let exe = match exe.to_str().and_then(|p| p.strip_suffix(" (deleted)")) {
+        Some(p) => std::path::PathBuf::from(p),
+        None => exe,
+    };
     // Only the app itself knows `--mori` / `--captions`: started from an
     // example (the screenshot tool), the child would be another screenshot
     // run, which starts her again, and so on.
