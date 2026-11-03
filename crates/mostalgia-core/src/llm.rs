@@ -465,6 +465,9 @@ fn openai(
     extra: &Value,
     on_delta: &mut dyn FnMut(&str),
 ) -> Result<Completion> {
+    if let Some(root) = ollama_root(conn) {
+        return ollama(conn, &root, model, system, messages, extra, on_delta);
+    }
     let mut all = vec![json!({ "role": "system", "content": system })];
     all.extend(messages.iter().map(|m| json!({ "role": m.role, "content": m.content })));
     let mut body = json!({
@@ -540,9 +543,95 @@ fn openai(
     Ok(Completion { text, model: served, effort: effort.map(str::to_string), usage })
 }
 
+/// The native API root of an Ollama server (its OpenAI-compatible `/v1`
+/// stripped), `None` for anything else.
+fn ollama_root(conn: &Connection) -> Option<String> {
+    let base = conn.base();
+    let ollama = conn.preset == "ollama" || base.contains(":11434");
+    ollama.then(|| base.strip_suffix("/v1").unwrap_or(base).to_string())
+}
+
+/// Context window to ask Ollama for: the prompt (about 3 characters per
+/// token, generously) plus room for the answer and a thinking model's
+/// reasoning, in steps of 4096. Ollama's default window (2048–8192
+/// tokens, depending on version and memory) cuts a meeting summary off.
+fn ollama_ctx(prompt_chars: usize) -> u32 {
+    const ANSWER_ROOM: usize = 12_288;
+    let need = prompt_chars / 3 + ANSWER_ROOM;
+    (need.div_ceil(4096) * 4096).clamp(16_384, 131_072) as u32
+}
+
+/// A chat on Ollama's native `/api/chat`: unlike its OpenAI-compatible
+/// endpoint it takes the context window (`num_ctx`), so long transcripts
+/// aren't cut off. Thinking goes to `message.thinking` and is not part of
+/// the answer. From `extra` (OpenAI-style), `max_tokens` becomes
+/// `num_predict` and a JSON `response_format` becomes `format: "json"`.
+fn ollama(conn: &Connection, root: &str, model: &str, system: &str, messages: &[Message], extra: &Value, on_delta: &mut dyn FnMut(&str)) -> Result<Completion> {
+    let mut all = vec![json!({ "role": "system", "content": system })];
+    all.extend(messages.iter().map(|m| json!({ "role": m.role, "content": m.content })));
+    let chars = system.len() + messages.iter().map(|m| m.content.len()).sum::<usize>();
+    let mut options = json!({ "num_ctx": ollama_ctx(chars) });
+    if let Some(n) = extra["max_tokens"].as_u64() {
+        options["num_predict"] = json!(n);
+    }
+    let mut body = json!({ "model": model, "stream": true, "messages": all, "options": options });
+    if extra["response_format"]["type"].as_str().is_some_and(|t| t.starts_with("json")) {
+        body["format"] = json!("json");
+    }
+    let resp = http(1800)?.post(format!("{root}/api/chat")).json(&body).send().map_err(|e| unreachable(conn, e))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(api_error(conn, status, &resp.text().unwrap_or_default()));
+    }
+    let mut text = String::new();
+    let mut served = model.to_string();
+    let mut finish = String::new();
+    let mut usage = None;
+    for line in BufReader::new(resp).lines() {
+        let line = line.with_context(|| trf("{}: Antwort konnte nicht gelesen werden", &[&conn.name]))?;
+        let Ok(chunk) = serde_json::from_str::<Value>(line.trim()) else { continue };
+        if let Some(msg) = chunk["error"].as_str() {
+            bail!("{}: {}", conn.name, msg);
+        }
+        if let Some(m) = chunk["model"].as_str() {
+            served = m.to_string();
+        }
+        let delta = chunk["message"]["content"].as_str().unwrap_or_default();
+        if !delta.is_empty() {
+            on_delta(delta);
+            text.push_str(delta);
+        }
+        if chunk["done"].as_bool() == Some(true) {
+            finish = chunk["done_reason"].as_str().unwrap_or_default().to_string();
+            usage = chunk["prompt_eval_count"].as_u64().map(|input| Usage { input, output: chunk["eval_count"].as_u64().unwrap_or(0), ..Usage::default() });
+            break;
+        }
+    }
+    if finish == "length" {
+        bail!("{}", trf("{}: Antwort abgeschnitten (length)", &[&conn.name]));
+    }
+    Ok(Completion { text, model: served, effort: None, usage })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ollama_gets_its_native_api_and_room() {
+        let mut c = Connection { preset: "ollama".into(), base_url: "http://localhost:11434/v1/".into(), ..Connection::default() };
+        assert_eq!(ollama_root(&c).as_deref(), Some("http://localhost:11434"));
+        c.preset = "custom".into();
+        c.base_url = "http://192.168.1.5:11434/v1".into();
+        assert_eq!(ollama_root(&c).as_deref(), Some("http://192.168.1.5:11434"));
+        c.base_url = "http://localhost:1234/v1".into();
+        assert_eq!(ollama_root(&c), None);
+        assert_eq!(ollama_ctx(0), 16_384);
+        // A 2-hour transcript (~120k chars) gets its prompt plus answer room.
+        let ctx = ollama_ctx(120_000);
+        assert!(ctx >= 40_000 + 12_288 && ctx % 4096 == 0, "{ctx}");
+        assert_eq!(ollama_ctx(10_000_000), 131_072);
+    }
 
     #[test]
     fn spots_servers_that_reject_json_mode() {

@@ -55,8 +55,11 @@ pub struct Parts {
 }
 
 impl Parts {
-    /// Everything: summary, notes, chat and transcript.
-    pub const ALL: Parts = Parts { summary: true, notes: true, chat: true, transcript: true };
+    /// Everything that belongs to the meeting: summary, notes and
+    /// transcript. The chat with the companion is a conversation about the
+    /// meeting, not part of it, so it stays out.
+    pub const ALL: Parts = Parts { summary: true, notes: true, chat: false, transcript: true };
+    pub const TRANSCRIPT: Parts = Parts { summary: false, notes: false, chat: false, transcript: true };
     pub const NOTES: Parts = Parts { summary: false, notes: true, chat: false, transcript: false };
     pub const SUMMARY: Parts = Parts { summary: true, notes: false, chat: false, transcript: false };
     /// Summary and notes, what goes into the documents drive.
@@ -69,12 +72,13 @@ impl Parts {
             Parts::NOTES => "notes",
             Parts::SUMMARY => "summary",
             Parts::SUMMARY_NOTES => "summary-notes",
+            Parts::TRANSCRIPT => "transcript",
             _ => "all",
         }
     }
 
     pub fn parse(id: &str) -> Parts {
-        [Parts::NOTES, Parts::SUMMARY, Parts::SUMMARY_NOTES].into_iter().find(|p| p.id() == id).unwrap_or(Parts::ALL)
+        [Parts::NOTES, Parts::SUMMARY, Parts::SUMMARY_NOTES, Parts::TRANSCRIPT].into_iter().find(|p| p.id() == id).unwrap_or(Parts::ALL)
     }
 
     /// The formats that fit: subtitles only with the transcript.
@@ -184,6 +188,16 @@ pub fn markdown_parts(m: &Meeting, parts: Parts) -> String {
     out.truncate(out.trim_end().len());
     out.push('\n');
     out
+}
+
+/// The transcript alone, for the clipboard: "[0:27] Anna: …" per line.
+pub fn transcript_lines(m: &Meeting) -> String {
+    m.segments.iter().map(|s| format!("[{}] {}: {}\n", format_ts(s.start_secs), i18n::speaker(s.speaker_label()), s.text)).collect()
+}
+
+/// The companion's notes alone, for the clipboard: one "- …" per note.
+pub fn note_list(m: &Meeting) -> String {
+    note_lines(m).into_iter().map(|l| format!("- {l}\n")).collect()
 }
 
 pub fn text(m: &Meeting) -> String {
