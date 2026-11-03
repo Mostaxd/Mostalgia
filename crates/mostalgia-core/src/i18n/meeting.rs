@@ -55,6 +55,8 @@ pub const EN: &[(&str, &str)] = &[
     ("Zusammenfassung neu erstellen", "Regenerate summary"),
     ("Mit welchem Modell soll die Zusammenfassung neu erstellt werden? Die Einstellungen bleiben, wie sie sind.", "Which model should write the summary again? Your settings stay as they are."),
     ("Ersetzt die Zusammenfassung.", "Replaces the summary."),
+    ("Erstellen", "Create"),
+    ("Mit welchem Modell soll die Zusammenfassung erstellt werden? Die Einstellungen bleiben, wie sie sind.", "Which model should write the summary? Your settings stay as they are."),
     ("Modelle werden geladen …", "Loading models …"),
     ("Keine Modelle gefunden", "No models found"),
     ("Keine KI-Verbindung eingerichtet — in den Einstellungen hinzufügen.", "No AI connection set up — add one in Settings."),
