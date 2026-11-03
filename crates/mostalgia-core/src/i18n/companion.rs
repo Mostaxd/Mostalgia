@@ -174,5 +174,12 @@ pub const EN: &[(&str, &str)] = &[
     ("Mostalgia öffnen", "Open Mostalgia"),
     ("Warte auf die ersten Worte …", "Waiting for the first words …"),
     ("Schwebendes Untertitel-Fenster", "Floating caption window"),
+    ("Box", "Box"),
+    ("Untertitel", "Subtitles"),
+    ("Aussehen", "Look"),
+    ("Sprecher anzeigen", "Show speakers"),
+    ("Nur die Übersetzung", "Translation only"),
+    ("Box: ein Fenster mit den letzten Zeilen zum Zurückscrollen. Untertitel: nur die neuesten Zeilen, frei schwebend wie im Film; die Leiste erscheint, wenn die Maus darüber ist.", "Box: a window with the latest lines to scroll back through. Subtitles: only the newest lines, floating freely like in a film; the bar shows when the mouse is over it."),
+    ("Mit Live-Übersetzung: statt der Zeile ihre Übersetzung zeigen, sobald sie da ist.", "With live translation: show a line's translation instead of the line, once it's there."),
     ("Während einer Aufnahme ein kleines Fenster über allen anderen (auch über Teams oder Zoom) mit den letzten Zeilen. Zeilen per Lesezeichen markieren, Mikrofon und Pause schalten – ohne den Fokus wegzunehmen. Verschiebbar an der oberen Leiste, Größe an der Ecke.", "During a recording, a small window above all others (also above Teams or Zoom) with the latest lines. Flag lines with a bookmark, switch the mic or pause – without taking the focus. Move it by its top bar, resize it at the corner."),
 ];
