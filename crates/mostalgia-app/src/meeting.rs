@@ -280,6 +280,23 @@ impl MeetingView {
         }
     }
 
+    /// Puts only the transcript or only the notes on the clipboard.
+    fn copy_part(&mut self, transcript: bool, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui_kit::component::WindowExt as _;
+        use gpui_kit::component::notification::Notification;
+        let Some(m) = &self.meeting else { return };
+        let (text, done) = if transcript {
+            (mostalgia_core::export::transcript_lines(m), tr("Transkript kopiert"))
+        } else {
+            (mostalgia_core::export::note_list(m), tr("Notizen kopiert"))
+        };
+        if text.trim().is_empty() {
+            return;
+        }
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        window.push_notification(Notification::success(done), cx);
+    }
+
     /// Screenshots: "Copy recap" clicked.
     #[doc(hidden)]
     pub fn demo_copy_recap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1080,6 +1097,7 @@ impl MeetingView {
             list = list.child(div().text_sm().text_color(theme.muted_foreground).child(tr("Keine KI-Verbindung eingerichtet — in den Einstellungen hinzufügen.")));
         }
         let can_start = !dialog.selected.1.is_empty() && dialog.groups.iter().any(|g| g.conn.id == dialog.selected.0);
+        let has_summary = self.meeting.as_ref().is_some_and(|m| m.summary.is_some());
         Some(
             div()
                 .id("resummarize-overlay")
@@ -1111,18 +1129,28 @@ impl MeetingView {
                             h_flex()
                                 .gap_2()
                                 .child(Icon::new(IconName::RefreshCw).text_color(theme.primary))
-                                .child(div().text_lg().font_semibold().child(tr("Zusammenfassung neu erstellen"))),
+                                .child(div().text_lg().font_semibold().child(if has_summary {
+                                    tr("Zusammenfassung neu erstellen")
+                                } else {
+                                    tr("Zusammenfassung erstellen")
+                                })),
                         )
-                        .child(div().text_sm().text_color(theme.muted_foreground).child(tr("Mit welchem Modell soll die Zusammenfassung neu erstellt werden? Die Einstellungen bleiben, wie sie sind.")))
+                        .child(div().text_sm().text_color(theme.muted_foreground).child(if has_summary {
+                            tr("Mit welchem Modell soll die Zusammenfassung neu erstellt werden? Die Einstellungen bleiben, wie sie sind.")
+                        } else {
+                            tr("Mit welchem Modell soll die Zusammenfassung erstellt werden? Die Einstellungen bleiben, wie sie sind.")
+                        }))
                         .child(list)
-                        .child(
-                            h_flex()
-                                .gap_2()
-                                .text_xs()
-                                .text_color(theme.warning)
-                                .child(Icon::new(IconName::TriangleAlert).xsmall())
-                                .child(tr("Ersetzt die Zusammenfassung.")),
-                        )
+                        .when(has_summary, |el| {
+                            el.child(
+                                h_flex()
+                                    .gap_2()
+                                    .text_xs()
+                                    .text_color(theme.warning)
+                                    .child(Icon::new(IconName::TriangleAlert).xsmall())
+                                    .child(tr("Ersetzt die Zusammenfassung.")),
+                            )
+                        })
                         .child(
                             h_flex()
                                 .justify_end()
@@ -1135,7 +1163,7 @@ impl MeetingView {
                                     Button::new("resummarize-start")
                                         .primary()
                                         .icon(IconName::Sparkles)
-                                        .label(tr("Neu erstellen"))
+                                        .label(if has_summary { tr("Neu erstellen") } else { tr("Erstellen") })
                                         .disabled(!can_start)
                                         .on_click(cx.listener(|this, _, _, cx| this.start_resummarize(cx))),
                                 ),
@@ -1832,7 +1860,15 @@ impl MeetingView {
             })
             .child(div().flex_1())
             .when(!m.notes.is_empty(), |el| {
-                el.child(export_parts_menu(
+                el.child(
+                    Button::new("notes-copy")
+                        .xsmall()
+                        .ghost()
+                        .icon(IconName::Copy)
+                        .label(tr("Notizen kopieren"))
+                        .on_click(cx.listener(|this, _, window, cx| this.copy_part(false, window, cx))),
+                )
+                .child(export_parts_menu(
                     mostalgia_core::export::Parts::NOTES,
                     Button::new("notes-export").xsmall().ghost().icon(IconName::Download).label(tr("Notizen exportieren")),
                 ))
@@ -2297,7 +2333,7 @@ impl MeetingView {
                         .icon(IconName::Sparkles)
                         .label(tr("Zusammenfassung erstellen"))
                         .disabled(m.segments.is_empty())
-                        .on_click(cx.listener(|this, _, _, cx| this.summarize(cx))),
+                        .on_click(cx.listener(|this, _, _, cx| this.open_resummarize(cx))),
                 )
                 .into_any_element(),
         }
@@ -2328,6 +2364,20 @@ impl MeetingView {
                     }))
             })
             .child(div().flex_1())
+            .when(!m.segments.is_empty(), |el| {
+                el.child(
+                    Button::new("transcript-copy")
+                        .xsmall()
+                        .ghost()
+                        .icon(IconName::Copy)
+                        .label(tr("Transkript kopieren"))
+                        .on_click(cx.listener(|this, _, window, cx| this.copy_part(true, window, cx))),
+                )
+                .child(export_parts_menu(
+                    mostalgia_core::export::Parts::TRANSCRIPT,
+                    Button::new("transcript-export").xsmall().ghost().icon(IconName::Download).label(tr("Transkript exportieren")),
+                ))
+            })
             .when(!imported, |el| el.child(
                 Button::new("retranscribe-tab")
                     .xsmall()
@@ -2853,6 +2903,9 @@ fn export_menu(m: &Meeting, button: Button) -> impl IntoElement {
     }
     if m.summary.is_some() {
         groups.push((tr("Nur Zusammenfassung"), Parts::SUMMARY));
+    }
+    if !m.segments.is_empty() {
+        groups.push((tr("Nur Transkript"), Parts::TRANSCRIPT));
     }
     button.dropdown_menu(move |menu, _, _| {
         let mut menu = menu;
