@@ -173,7 +173,12 @@ impl Captions {
         let x = window_id(window).and_then(|id| X11::connect(id).ok());
         match &x {
             Some(x) => {
-                if let Err(e) = x.setup_window().and_then(|_| x.no_input_focus()) {
+                // Linux: no "never takes focus" hint. GNOME (XWayland) then
+                // delivers no clicks to it at all, so it can't be dragged.
+                let setup = x.setup_window();
+                #[cfg(not(target_os = "linux"))]
+                let setup = setup.and_then(|_| x.no_input_focus());
+                if let Err(e) = setup {
                     eprintln!("[captions] window setup: {e:#}");
                 }
                 #[cfg(target_os = "macos")]
