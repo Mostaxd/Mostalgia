@@ -159,6 +159,9 @@ pub struct Captions {
     saved: Option<((i32, i32), (f32, f32))>,
     /// Being moved or resized by hand.
     drag: Option<Drag>,
+    /// The app saw the pointer move during the drag (from then on a button
+    /// found up ends it, should the release itself be missed).
+    drag_moved: bool,
     look: Look,
     checked_at: Instant,
     demo: Option<Instant>,
@@ -197,7 +200,7 @@ impl Captions {
                 cx.background_executor().timer(Duration::from_millis(if dragging { 8 } else { 60 })).await;
                 match this.update_in(cx, |this, window, cx| {
                     this.poll(window, cx);
-                    this.drag_step(window, cx);
+                    this.drag_step(false, window, cx);
                     this.drag.is_some()
                 }) {
                     Ok(d) => dragging = d,
@@ -222,6 +225,7 @@ impl Captions {
             opacity: config.live_captions_opacity.clamp(0.4, 1.0),
             saved: None,
             drag: None,
+            drag_moved: false,
             look: Look::of(&config),
             checked_at: Instant::now(),
             demo: demo.then(Instant::now),
@@ -328,6 +332,7 @@ impl Captions {
         let scale = window.scale_factor();
         let b = window.bounds().size;
         let size = ((f32::from(b.width) * scale).round() as i32, (f32::from(b.height) * scale).round() as i32);
+        self.drag_moved = false;
         self.drag = Some(if resize {
             Drag::Resize { pointer: (px_, py_), origin, size }
         } else {
@@ -336,10 +341,12 @@ impl Captions {
         cx.notify();
     }
 
-    /// Moves or resizes to the pointer while dragged; done once the
-    /// button is up (then the new place is saved).
-    fn drag_step(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Moves or resizes to the pointer while dragged (on each mouse move,
+    /// and between them); ends at the release, or once the pointer moved
+    /// and the button is found up.
+    fn drag_step(&mut self, moved: bool, window: &mut Window, cx: &mut Context<Self>) {
         let (Some(drag), Some(x)) = (self.drag, &self.x) else { return };
+        self.drag_moved |= moved;
         let Ok((px_, py_, down)) = x.pointer() else {
             self.drag = None;
             return;
@@ -355,12 +362,21 @@ impl Captions {
         if let Err(e) = x.move_resize(r) {
             eprintln!("[captions] moving: {e:#}");
         }
-        if !down {
-            eprintln!("[captions] drag end: pointer ({px_}, {py_}), asked for {r:?}, now at {:?}", x.position());
-            self.drag = None;
-            self.save_place(window);
-            cx.notify();
+        if !down && self.drag_moved {
+            self.end_drag(window, cx);
         }
+    }
+
+    /// The button is up: the drag is over, and the new place saved.
+    fn end_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.drag.take().is_none() {
+            return;
+        }
+        if let Some(x) = &self.x {
+            eprintln!("[captions] drag end: pointer {:?}, window {:?}", x.pointer(), x.position());
+        }
+        self.save_place(window);
+        cx.notify();
     }
 
     /// Remembers where it is and how big (when that changed).
@@ -493,8 +509,12 @@ impl Render for Captions {
         let n = lines.len();
         let header = self.render_bar(cx);
         v_flex()
+            .id("captions")
             .size_full()
             .relative()
+            .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, window, cx| this.drag_step(true, window, cx)))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, window, cx| this.end_drag(window, cx)))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, window, cx| this.end_drag(window, cx)))
             .font(ui::ui_font(cx))
             .rounded(theme.radius_lg)
             .border_1()
@@ -663,6 +683,9 @@ impl Captions {
             .group("captions")
             .size_full()
             .relative()
+            .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, window, cx| this.drag_step(true, window, cx)))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, window, cx| this.end_drag(window, cx)))
+            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _: &MouseUpEvent, window, cx| this.end_drag(window, cx)))
             .font(ui::ui_font(cx))
             .text_color(theme.foreground)
             .child(div().when(!pinned, |d| d.invisible().group_hover("captions", |s| s.visible())).child(bar))
