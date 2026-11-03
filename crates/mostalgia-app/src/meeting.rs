@@ -1080,6 +1080,7 @@ impl MeetingView {
             list = list.child(div().text_sm().text_color(theme.muted_foreground).child(tr("Keine KI-Verbindung eingerichtet — in den Einstellungen hinzufügen.")));
         }
         let can_start = !dialog.selected.1.is_empty() && dialog.groups.iter().any(|g| g.conn.id == dialog.selected.0);
+        let has_summary = self.meeting.as_ref().is_some_and(|m| m.summary.is_some());
         Some(
             div()
                 .id("resummarize-overlay")
@@ -1111,18 +1112,28 @@ impl MeetingView {
                             h_flex()
                                 .gap_2()
                                 .child(Icon::new(IconName::RefreshCw).text_color(theme.primary))
-                                .child(div().text_lg().font_semibold().child(tr("Zusammenfassung neu erstellen"))),
+                                .child(div().text_lg().font_semibold().child(if has_summary {
+                                    tr("Zusammenfassung neu erstellen")
+                                } else {
+                                    tr("Zusammenfassung erstellen")
+                                })),
                         )
-                        .child(div().text_sm().text_color(theme.muted_foreground).child(tr("Mit welchem Modell soll die Zusammenfassung neu erstellt werden? Die Einstellungen bleiben, wie sie sind.")))
+                        .child(div().text_sm().text_color(theme.muted_foreground).child(if has_summary {
+                            tr("Mit welchem Modell soll die Zusammenfassung neu erstellt werden? Die Einstellungen bleiben, wie sie sind.")
+                        } else {
+                            tr("Mit welchem Modell soll die Zusammenfassung erstellt werden? Die Einstellungen bleiben, wie sie sind.")
+                        }))
                         .child(list)
-                        .child(
-                            h_flex()
-                                .gap_2()
-                                .text_xs()
-                                .text_color(theme.warning)
-                                .child(Icon::new(IconName::TriangleAlert).xsmall())
-                                .child(tr("Ersetzt die Zusammenfassung.")),
-                        )
+                        .when(has_summary, |el| {
+                            el.child(
+                                h_flex()
+                                    .gap_2()
+                                    .text_xs()
+                                    .text_color(theme.warning)
+                                    .child(Icon::new(IconName::TriangleAlert).xsmall())
+                                    .child(tr("Ersetzt die Zusammenfassung.")),
+                            )
+                        })
                         .child(
                             h_flex()
                                 .justify_end()
@@ -1135,7 +1146,7 @@ impl MeetingView {
                                     Button::new("resummarize-start")
                                         .primary()
                                         .icon(IconName::Sparkles)
-                                        .label(tr("Neu erstellen"))
+                                        .label(if has_summary { tr("Neu erstellen") } else { tr("Erstellen") })
                                         .disabled(!can_start)
                                         .on_click(cx.listener(|this, _, _, cx| this.start_resummarize(cx))),
                                 ),
@@ -2297,7 +2308,7 @@ impl MeetingView {
                         .icon(IconName::Sparkles)
                         .label(tr("Zusammenfassung erstellen"))
                         .disabled(m.segments.is_empty())
-                        .on_click(cx.listener(|this, _, _, cx| this.summarize(cx))),
+                        .on_click(cx.listener(|this, _, _, cx| this.open_resummarize(cx))),
                 )
                 .into_any_element(),
         }
