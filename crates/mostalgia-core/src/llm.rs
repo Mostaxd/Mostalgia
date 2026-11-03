@@ -25,7 +25,7 @@ pub struct ModelInfo {
 }
 
 impl ModelInfo {
-    fn new(id: &str, name: &str, efforts: Vec<String>) -> Self {
+    pub fn new(id: &str, name: &str, efforts: Vec<String>) -> Self {
         Self { id: id.into(), display_name: name.into(), efforts }
     }
 }
