@@ -1150,6 +1150,7 @@ impl MostalgiaApp {
             this.companion.update(cx, |c, cx| c.reload_config(cx));
             this.sync_mori(true);
             this.mori_host.send(&crate::companion::ipc::ToMori::ReloadConfig);
+            this.caption_host.send(&crate::companion::ipc::ToMori::ReloadConfig);
             cx.notify();
         });
         self._subscriptions.push(sub);
@@ -1191,6 +1192,7 @@ impl MostalgiaApp {
             s.update(cx, |s, cx| s.reload_text_scale(cx));
         }
         self.mori_host.send(&crate::companion::ipc::ToMori::ReloadConfig);
+        self.caption_host.send(&crate::companion::ipc::ToMori::ReloadConfig);
         cx.notify();
     }
 
