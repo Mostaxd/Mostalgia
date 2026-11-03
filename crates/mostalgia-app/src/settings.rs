@@ -1737,7 +1737,7 @@ impl SettingsView {
             .child(div().font_semibold().child(tr("Live-Übersetzung")))
             .child(settings_row(
                 tr("Während der Aufnahme übersetzen"),
-                Some(tr("Jede fertige Zeile erscheint zusätzlich übersetzt, im Fenster und in den Live-Untertiteln. Während einer Aufnahme auch über „Übersetzen“ schaltbar.")),
+                Some(tr("Jede fertige Zeile erscheint zusätzlich übersetzt, im Fenster und in den Live-Untertiteln. Während einer Aufnahme auch über „Übersetzen“ schaltbar. Übersetzt wird der Text mit dem KI-Modell, nicht mit Whisper: Whisper übersetzt nur ins Englische, und das Turbo-Modell wurde ohne Übersetzungen trainiert.")),
                 switch,
                 &theme,
             ))
