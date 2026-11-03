@@ -4155,14 +4155,67 @@ fn days_label(n: u32) -> String {
 impl SettingsView {
     fn render_live_captions(&mut self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme().clone();
-        let switch = Switch::new("set-live-captions").checked(self.config.live_captions).on_change(cx.listener(|this, v: &bool, _, cx| {
+        let on = self.config.live_captions;
+        let switch = Switch::new("set-live-captions").checked(on).on_change(cx.listener(|this, v: &bool, _, cx| {
             this.config.live_captions = *v;
             this.save(cx);
         }));
-        ui::card(cx).child(div().font_semibold().child(tr("Live-Untertitel"))).child(settings_row(
+        let card = ui::card(cx).child(div().font_semibold().child(tr("Live-Untertitel"))).child(settings_row(
             tr("Schwebendes Untertitel-Fenster"),
             Some(tr("Während einer Aufnahme ein kleines Fenster über allen anderen (auch über Teams oder Zoom) mit den letzten Zeilen. Zeilen per Lesezeichen markieren, Mikrofon und Pause schalten – ohne den Fokus wegzunehmen. Verschiebbar an der oberen Leiste, Größe an der Ecke.")),
             switch.into_any_element(),
+            &theme,
+        ));
+        if !on {
+            return card;
+        }
+        let subtitles = self.config.captions_subtitles();
+        let styles = [("box", "Box", false), ("subtitles", "Untertitel", true)].map(|(id, label, sub)| {
+            Button::new(SharedString::from(format!("captions-style-{id}")))
+                .small()
+                .label(tr(label))
+                .when(sub == subtitles, |b| b.primary())
+                .when(sub != subtitles, |b| b.ghost())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.config.live_captions_style = id.into();
+                    this.save(cx);
+                }))
+                .into_any_element()
+        });
+        let size = self.config.captions_text_size();
+        let step = |id: &'static str, icon: IconName, delta: f32, cx: &mut Context<Self>| {
+            let (lo, hi) = mostalgia_core::config::CAPTIONS_TEXT_RANGE;
+            let to = ((size + delta) * 10.).round() / 10.;
+            Button::new(id).small().outline().icon(icon).disabled(to < lo - 0.001 || to > hi + 0.001).on_click(cx.listener(move |this, _, _, cx| {
+                this.config.live_captions_text_size = to;
+                this.save(cx);
+            }))
+        };
+        let stepper = h_flex()
+            .gap_1()
+            .child(step("captions-text-less", IconName::Minus, -0.1, cx))
+            .child(div().min_w(rems(4.5)).text_center().text_sm().font_medium().child(percent(size)))
+            .child(step("captions-text-more", IconName::Plus, 0.1, cx));
+        let speakers = Switch::new("set-captions-speakers").checked(self.config.live_captions_speakers).on_change(cx.listener(|this, v: &bool, _, cx| {
+            this.config.live_captions_speakers = *v;
+            this.save(cx);
+        }));
+        let only = Switch::new("set-captions-translation-only").checked(self.config.live_captions_translation_only).on_change(cx.listener(|this, v: &bool, _, cx| {
+            this.config.live_captions_translation_only = *v;
+            this.save(cx);
+        }));
+        card.child(settings_row(
+            tr("Aussehen"),
+            Some(tr("Box: ein Fenster mit den letzten Zeilen zum Zurückscrollen. Untertitel: nur die neuesten Zeilen, frei schwebend wie im Film; die Leiste erscheint, wenn die Maus darüber ist.")),
+            h_flex().flex_wrap().gap_1().children(styles).into_any_element(),
+            &theme,
+        ))
+        .child(settings_row(tr("Textgröße"), None, stepper.into_any_element(), &theme))
+        .child(settings_row(tr("Sprecher anzeigen"), None, speakers.into_any_element(), &theme))
+        .child(settings_row(
+            tr("Nur die Übersetzung"),
+            Some(tr("Mit Live-Übersetzung: statt der Zeile ihre Übersetzung zeigen, sobald sie da ist.")),
+            only.into_any_element(),
             &theme,
         ))
     }

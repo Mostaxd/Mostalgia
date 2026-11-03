@@ -197,6 +197,17 @@ pub struct Config {
     pub live_captions_size: Option<(f32, f32)>,
     /// Its background opacity, 0.4–1.0.
     pub live_captions_opacity: f32,
+    /// How it looks: "box" (a small window with the last lines) or
+    /// "subtitles" (just the newest lines floating over the screen, like
+    /// film subtitles, with the controls showing on hover).
+    pub live_captions_style: String,
+    /// Its text size (1.0 = 100 %, 0.8–2.0, on top of the app's).
+    pub live_captions_text_size: f32,
+    /// Who spoke, before each line.
+    pub live_captions_speakers: bool,
+    /// With live translation on: only the translation, not the original
+    /// line under it (the original shows until its translation is back).
+    pub live_captions_translation_only: bool,
 
     // ── Live translation ──
     /// Translate finished lines while recording (text only, by the
@@ -251,6 +262,8 @@ pub const CARD_STAGGER_MAX: f32 = 15.;
 pub const UI_SCALE_RANGE: (f32, f32) = (0.8, 1.5);
 pub const UI_SCALE_STEPS: &[f32] = &[0.8, 0.9, 1.0, 1.1, 1.15, 1.2, 1.3, 1.4, 1.5];
 /// Transcript text size (on top of the app's).
+/// Live captions' text size (1.0 = 100 %).
+pub const CAPTIONS_TEXT_RANGE: (f32, f32) = (0.8, 2.0);
 pub const TRANSCRIPT_SCALE_RANGE: (f32, f32) = (0.9, 1.5);
 pub const TRANSCRIPT_SCALE_STEPS: &[f32] = &[0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5];
 
@@ -385,6 +398,10 @@ impl Default for Config {
             live_captions_pos: None,
             live_captions_size: None,
             live_captions_opacity: 0.92,
+            live_captions_style: "box".into(),
+            live_captions_text_size: 1.0,
+            live_captions_speakers: true,
+            live_captions_translation_only: false,
             live_translation: false,
             translation_language: String::new(),
             translation_provider: String::new(),
@@ -490,6 +507,16 @@ impl Config {
     /// Transcript text size, clamped to [`TRANSCRIPT_SCALE_RANGE`].
     pub fn transcript_scale(&self) -> f32 {
         clamp_or(self.transcript_scale, TRANSCRIPT_SCALE_RANGE, 1.)
+    }
+
+    /// The live captions' text size, clamped to [`CAPTIONS_TEXT_RANGE`].
+    pub fn captions_text_size(&self) -> f32 {
+        clamp_or(self.live_captions_text_size, CAPTIONS_TEXT_RANGE, 1.)
+    }
+
+    /// Whether the live captions float as subtitles (else a box).
+    pub fn captions_subtitles(&self) -> bool {
+        self.live_captions_style == "subtitles"
     }
 
     /// Ctrl+= / Ctrl+- : one step bigger or smaller; Ctrl+0 (`None`): back
