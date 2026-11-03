@@ -120,6 +120,7 @@ impl X11 {
 
     /// Never takes keyboard focus (clicks still work): the live captions
     /// mustn't take it from the call window (ICCCM WM_HINTS input = false).
+    #[allow(dead_code)]
     pub fn no_input_focus(&self) -> Result<()> {
         self.conn.change_property32(PropMode::REPLACE, self.window, AtomEnum::WM_HINTS, AtomEnum::WM_HINTS, &[1, 0, 0, 0, 0, 0, 0, 0, 0])?;
         self.conn.flush()?;
