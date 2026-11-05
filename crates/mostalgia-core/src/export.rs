@@ -277,7 +277,9 @@ pub fn docx_parts(m: &Meeting, parts: Parts, path: &Path) -> Result<()> {
         .add_paragraph(Paragraph::new().add_run(Run::new().add_text(header(m)).color("666666").size(20)));
     if let Some(body) = summary_body(m).filter(|_| parts.summary) {
         for line in body.lines().map(str::trim_end) {
-            doc = doc.add_paragraph(if let Some(h) = line.strip_prefix("## ") {
+            doc = doc.add_paragraph(if let Some(h) = line.strip_prefix("### ") {
+                Paragraph::new().add_run(Run::new().add_text(h).bold().size(24))
+            } else if let Some(h) = line.strip_prefix("## ") {
                 Paragraph::new().add_run(Run::new().add_text(h).bold().size(28))
             } else if let Some(item) = line.strip_prefix("- [ ] ") {
                 para([vec![Run::new().add_text("☐ ").size(22)], runs(item, 22)].concat())
@@ -351,7 +353,7 @@ mod tests {
                 origin: "live".into(),
             }],
             chat: Vec::new(),
-            summary: Some(Summary { provider: "p".into(), model: "m".into(), effort: None, created_at: Local::now(), markdown: "# Weekly sync\n\n## Kernpunkte\n- Launch date".into() }),
+            summary: Some(Summary { provider: "p".into(), model: "m".into(), effort: None, created_at: Local::now(), markdown: "# Weekly sync\n\n## Kernpunkte\n- Launch date".into(), template: Default::default() }),
             transcript_engine: None,
             transcript_error: None,
             companion: "mori".into(),
