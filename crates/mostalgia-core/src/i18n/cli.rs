@@ -1,6 +1,7 @@
 //! English for the `mostalgia` command-line tool.
 
 pub const EN: &[(&str, &str)] = &[
+    ("Unbekannte Vorlage {} (standard, detailed, talk, lecture)", "Unknown template {} (standard, detailed, talk, lecture)"),
     ("Besprechung #{} samt Audiodateien gelöscht.", "Deleted meeting #{} including its audio files."),
     ("Lade Modell {} …", "Loading model {} …"),
     ("Nutze GPU: {}", "Using GPU: {}"),

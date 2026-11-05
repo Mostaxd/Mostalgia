@@ -77,6 +77,9 @@ struct SummaryChoice {
     /// Thinking level: low, medium, high, xhigh or max (where the model supports it)
     #[arg(long)]
     effort: Option<String>,
+    /// Summary template: standard, detailed, talk or lecture
+    #[arg(long)]
+    template: Option<String>,
 }
 
 impl SummaryChoice {
@@ -86,7 +89,13 @@ impl SummaryChoice {
             Some(id) => {
                 let connection = connection(&config, id)?;
                 let model = if config.summary_provider == connection.id { config.summary_model.clone() } else { connection.preset().default_model.to_string() };
-                summary::SummaryRequest { connection, model, language: config.summary_language_code(), effort: None }
+                summary::SummaryRequest {
+                    connection,
+                    model,
+                    language: config.summary_language_code(),
+                    effort: None,
+                    template: summary::Template::parse(&config.summary_template),
+                }
             }
             None => config.summary_request()?,
         };
@@ -106,6 +115,12 @@ impl SummaryChoice {
             None => config.summary_effort.clone(),
         };
         req.effort = mostalgia_core::config::effort_for(&req.connection, &req.model, &effort);
+        if let Some(t) = &self.template {
+            req.template = summary::Template::ALL
+                .into_iter()
+                .find(|x| x.id() == t)
+                .ok_or_else(|| anyhow::anyhow!("{}", trf("Unbekannte Vorlage {} (standard, detailed, talk, lecture)", &[&format!("{t:?}")])))?;
+        }
         Ok(req)
     }
 }
@@ -875,9 +890,13 @@ fn summarize(store: &Store, id: i64, req: &summary::SummaryRequest, required: bo
         )
     );
     let t = std::time::Instant::now();
-    let s = summary::summarize(req, &meeting)?;
+    let s = summary::summarize_with_progress(req, &meeting, &mut |done, total| {
+        if done + 1 < total {
+            eprintln!("[mostalgia] {}", trf("Lange Aufnahme: lese Teil {} von {} …", &[&(done + 1), &(total - 1)]));
+        }
+    })?;
     eprintln!("[mostalgia] {}", trf("Zusammenfassung dauerte {} s", &[&format!("{:.1}", t.elapsed().as_secs_f64())]));
-    store.save_summary(id, &s.provider, &s.model, s.effort.as_deref(), &s.markdown)?;
+    store.save_summary_with(id, &s.provider, &s.model, s.effort.as_deref(), &s.markdown, s.template)?;
     if let Some(title) = s.title.as_ref().filter(|_| !keep_title) {
         store.set_title(id, title)?;
     }

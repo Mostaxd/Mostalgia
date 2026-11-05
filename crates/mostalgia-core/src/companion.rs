@@ -1398,7 +1398,7 @@ mod tests {
 
     #[test]
     fn every_persona_names_her_and_is_truthful_about_the_model() {
-        let req = SummaryRequest { connection: crate::connections::default_connections().remove(0), model: "some-model-7".into(), language: None, effort: None };
+        let req = SummaryRequest { connection: crate::connections::default_connections().remove(0), model: "some-model-7".into(), language: None, effort: None, template: Default::default() };
         for c in Character::ALL {
             let p = persona_for(c, &req);
             assert!(p.starts_with(&format!("You are {}, the note-taking companion", c.name())), "{p}");
@@ -1421,7 +1421,7 @@ mod tests {
 
     #[test]
     fn focus_goes_into_the_stable_system_prompt() {
-        let req = SummaryRequest { connection: crate::connections::default_connections().remove(0), model: "m".into(), language: None, effort: None };
+        let req = SummaryRequest { connection: crate::connections::default_connections().remove(0), model: "m".into(), language: None, effort: None, template: Default::default() };
         for style in NoteStyle::ALL {
             let plain = notes_system(NotesMode::Live, style, "  ");
             assert!(!plain.contains("focus on"));

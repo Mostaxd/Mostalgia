@@ -66,6 +66,9 @@ pub struct Config {
     /// Language summaries are written in: "meeting" (the language spoken,
     /// as transcribed or detected), "app" (the UI language) or a code like "en".
     pub summary_language: String,
+    /// Summary template id ("standard", "detailed", "talk", "lecture"; see
+    /// [`crate::summary::Template`]).
+    pub summary_template: String,
     /// Summarize automatically after each recording (needs an API key).
     pub auto_summary: bool,
     /// App theme id ("system" follows GNOME's light/dark setting).
@@ -354,6 +357,7 @@ impl Default for Config {
             summary_model: crate::summary::DEFAULT_MODEL.into(),
             summary_effort: crate::summary::DEFAULT_EFFORT.into(),
             summary_language: "meeting".into(),
+            summary_template: "standard".into(),
             auto_summary: true,
             theme: "system".into(),
             font: String::new(),
@@ -427,7 +431,13 @@ impl Config {
     pub fn summary_request(&self) -> Result<crate::summary::SummaryRequest> {
         let connection = self.summary_connection()?;
         let effort = effort_for(&connection, &self.summary_model, &self.summary_effort);
-        Ok(crate::summary::SummaryRequest { connection, model: self.summary_model.clone(), language: self.summary_language_code(), effort })
+        Ok(crate::summary::SummaryRequest {
+            connection,
+            model: self.summary_model.clone(),
+            language: self.summary_language_code(),
+            effort,
+            template: crate::summary::Template::parse(&self.summary_template),
+        })
     }
 
     /// Connection, model and thinking level for "ask your meetings".
@@ -443,7 +453,7 @@ impl Config {
             .with_context(|| crate::i18n::trf("KI-Verbindung \"{}\" gibt es nicht mehr — in den Einstellungen wählen", &[&self.ask_provider]))?;
         let model = if self.ask_model.is_empty() { self.summary_model.clone() } else { self.ask_model.clone() };
         let effort = effort_for(&connection, &model, &self.ask_effort);
-        Ok(crate::summary::SummaryRequest { connection, model, language: self.summary_language_code(), effort })
+        Ok(crate::summary::SummaryRequest { connection, model, language: self.summary_language_code(), effort, template: Default::default() })
     }
 
     /// When Mori looks for live notes. Older configs: a number of seconds in
@@ -560,7 +570,7 @@ impl Config {
                 }
             };
             anyhow::ensure!(!model.is_empty(), "{}", crate::i18n::trf("{}: kein Modell für Live-Notizen gewählt", &[&connection.name]));
-            crate::summary::SummaryRequest { connection, model, language: self.summary_language_code(), effort: None }
+            crate::summary::SummaryRequest { connection, model, language: self.summary_language_code(), effort: None, template: Default::default() }
         };
         req.effort = None;
         Ok(req)
@@ -588,7 +598,7 @@ impl Config {
             }
         };
         anyhow::ensure!(!model.is_empty(), "{}", crate::i18n::trf("{}: kein Modell für Live-Übersetzung gewählt", &[&connection.name]));
-        Ok(crate::summary::SummaryRequest { connection, model, language: None, effort: None })
+        Ok(crate::summary::SummaryRequest { connection, model, language: None, effort: None, template: Default::default() })
     }
 
     /// The language live translation writes in: the chosen one, else the

@@ -142,7 +142,9 @@ pub fn rtl_markdown(markdown: &str, cx: &App) -> Div {
     let mut out = v_flex().w_full().gap_2();
     for line in markdown.lines().map(str::trim_end) {
         let clean = line.replace("**", "");
-        out = out.child(if let Some(h) = clean.strip_prefix("## ") {
+        out = out.child(if let Some(h) = clean.strip_prefix("### ") {
+            bidi_text(h.to_string(), true).mt_2().font_semibold()
+        } else if let Some(h) = clean.strip_prefix("## ") {
             bidi_text(h.to_string(), true).mt_3().text_xl().font_semibold()
         } else if let Some(h) = clean.strip_prefix("# ") {
             bidi_text(h.to_string(), true).text_2xl().font_semibold()
