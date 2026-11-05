@@ -1,7 +1,8 @@
 name: CI
 
+# Runs only when started by hand (Actions → CI → Run workflow). Pushes, pull
+# requests and main don't build: only release tags do (release.yml).
 on:
-  push:
   workflow_dispatch:
 
 concurrency:

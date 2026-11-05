@@ -1,20 +1,12 @@
 name: Release
 
 # A tag like v0.3.0 builds the Linux AppImage, the Windows zip and the macOS
-# disk image and
-# attaches them to that tag's GitHub release (created if needed). Changes to
-# the packaging build them too, without releasing, so a broken package shows
-# up before the tag.
+# disk image and attaches them to that tag's GitHub release (created if
+# needed). This is the only automatic build; a test build of a branch can be
+# started by hand (Actions → Release → Run workflow).
 on:
   push:
     tags: ["v*"]
-    branches: ["**"]
-    paths:
-      - .github/workflows/release.yml
-      - scripts/build-appimage.sh
-      - scripts/build-windows.sh
-      - scripts/build-macos-app.sh
-      - packaging/**
   workflow_dispatch:
     inputs:
       release:
