@@ -9,7 +9,7 @@ use anyhow::Result;
 use chrono::{DateTime, Local, TimeZone};
 use rusqlite::{OptionalExtension, params};
 
-use crate::recap::{Part, clean, sections};
+use crate::recap::{Part, clean, summary_sections};
 use crate::store::{Meeting, Store};
 
 /// A decision found in a meeting.
@@ -57,7 +57,7 @@ fn words(text: &str) -> Vec<String> {
 /// The decisions in `m`'s summary, each with the line it came from.
 pub fn found_in(m: &Meeting) -> Vec<Found> {
     let Some(summary) = &m.summary else { return Vec::new() };
-    let lines: Vec<String> = sections(&summary.markdown).into_iter().filter(|(p, _, _)| *p == Part::Decisions).flat_map(|(_, _, l)| l).collect();
+    let lines: Vec<String> = summary_sections(summary).into_iter().filter(|(p, _, _)| *p == Part::Decisions).flat_map(|(_, _, l)| l).collect();
     let segment_words: Vec<Vec<String>> = m.segments.iter().map(|s| words(&s.text)).collect();
     lines
         .iter()

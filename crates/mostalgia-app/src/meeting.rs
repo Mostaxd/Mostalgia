@@ -93,6 +93,7 @@ struct Resummarize {
     groups: Vec<ModelGroup>,
     /// (connection id, model id)
     selected: (String, String),
+    template: summary::Template,
 }
 
 struct Retranscribe {
@@ -590,7 +591,8 @@ impl MeetingView {
             })
             .detach();
         }
-        self.resummarize = Some(Resummarize { groups, selected });
+        let template = summary::Template::parse(&config.summary_template);
+        self.resummarize = Some(Resummarize { groups, selected, template });
         cx.notify();
     }
 
@@ -607,7 +609,7 @@ impl MeetingView {
             return;
         }
         let effort = mostalgia_core::config::effort_for(&connection, &model, &config.summary_effort);
-        let req = summary::SummaryRequest { connection, model, language: config.summary_language_code(), effort };
+        let req = summary::SummaryRequest { connection, model, language: config.summary_language_code(), effort, template: dialog.template };
         self.summarize_with(req, cx);
     }
 
@@ -631,23 +633,33 @@ impl MeetingView {
         let id = self.id;
         let key = processing::Key::Summary(id);
         let title = self.meeting.as_ref().map(|m| m.title.clone()).unwrap_or_default();
-        processing::set(key, processing::Job { title, stage: tr("Zusammenfassung wird geschrieben …").to_string(), fraction: None });
+        processing::set(key, processing::Job { title: title.clone(), stage: tr("Zusammenfassung wird geschrieben …").to_string(), fraction: None });
         let provider = req.connection.name.clone();
         let failed_provider = provider.clone();
         let keep_title = self.keep_title;
+        let title_for_progress = title.clone();
         let task = cx.background_spawn(async move {
-            let result = summarize_meeting(id, &req, keep_title);
+            let result = summarize_meeting(id, &req, keep_title, &title_for_progress);
             match &result {
                 Ok(()) => processing::clear(key),
                 Err(e) => processing::fail(key, trf("Zusammenfassung mit {} fehlgeschlagen: {}", &[&failed_provider, &format!("{e:#}")])),
             }
             result
         });
-        fn summarize_meeting(id: i64, req: &summary::SummaryRequest, keep_title: bool) -> anyhow::Result<()> {
+        fn summarize_meeting(id: i64, req: &summary::SummaryRequest, keep_title: bool, title: &str) -> anyhow::Result<()> {
             let store = Store::open(&paths::database())?;
             let meeting = store.get(id)?.ok_or_else(|| anyhow::anyhow!(tr("Besprechung nicht gefunden")))?;
-            let s = summary::summarize(req, &meeting)?;
-            store.save_summary(id, &s.provider, &s.model, s.effort.as_deref(), &s.markdown)?;
+            // A long meeting is read in parts first; show how far that is.
+            let s = summary::summarize_with_progress(req, &meeting, &mut |done, total| {
+                let stage = if done + 1 < total {
+                    trf("Lange Aufnahme: lese Teil {} von {} …", &[&(done + 1), &(total - 1)])
+                } else {
+                    tr("Zusammenfassung wird geschrieben …").to_string()
+                };
+                let job = processing::Job { title: title.to_string(), stage, fraction: Some(done as f32 / total as f32) };
+                processing::set(processing::Key::Summary(id), job);
+            })?;
+            store.save_summary_with(id, &s.provider, &s.model, s.effort.as_deref(), &s.markdown, s.template)?;
             if let Some(title) = s.title.as_ref().filter(|_| !keep_title) {
                 store.set_title(id, title)?;
             }
@@ -1096,6 +1108,22 @@ impl MeetingView {
         if dialog.groups.is_empty() {
             list = list.child(div().text_sm().text_color(theme.muted_foreground).child(tr("Keine KI-Verbindung eingerichtet — in den Einstellungen hinzufügen.")));
         }
+        let mut templates = h_flex().gap_2().flex_wrap();
+        for (i, t) in summary::Template::ALL.into_iter().enumerate() {
+            let button = Button::new(("summary-template", i)).small().label(t.label());
+            let button = if dialog.template == t { button.primary() } else { button.outline() };
+            templates = templates.child(button.on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(d) = &mut this.resummarize {
+                    d.template = t;
+                    cx.notify();
+                }
+            })));
+        }
+        let template_row = v_flex()
+            .gap_1()
+            .child(div().text_xs().font_semibold().text_color(theme.muted_foreground).child(tr("Vorlage")))
+            .child(templates)
+            .child(div().text_xs().text_color(theme.muted_foreground).child(dialog.template.hint()));
         let can_start = !dialog.selected.1.is_empty() && dialog.groups.iter().any(|g| g.conn.id == dialog.selected.0);
         let has_summary = self.meeting.as_ref().is_some_and(|m| m.summary.is_some());
         Some(
@@ -1140,6 +1168,7 @@ impl MeetingView {
                         } else {
                             tr("Mit welchem Modell soll die Zusammenfassung erstellt werden? Die Einstellungen bleiben, wie sie sind.")
                         }))
+                        .child(template_row)
                         .child(list)
                         .when(has_summary, |el| {
                             el.child(

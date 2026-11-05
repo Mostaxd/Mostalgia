@@ -69,6 +69,20 @@ pub(crate) fn sections(markdown: &str) -> Vec<(Part, String, Vec<String>)> {
     out
 }
 
+/// A summary's sections as [`sections`] finds them. A template without the
+/// meeting sections (a talk's or a lecture's) has its first section as the
+/// summary and all others as key points, so its advice or key terms are
+/// never mistaken for decisions.
+pub(crate) fn summary_sections(summary: &crate::store::Summary) -> Vec<(Part, String, Vec<String>)> {
+    let mut out = sections(&summary.markdown);
+    if !summary.template.has_meeting_sections() {
+        for (i, s) in out.iter_mut().enumerate() {
+            s.0 = if i == 0 { Part::Summary } else { Part::Points };
+        }
+    }
+    out
+}
+
 /// Without citations ([[t:12]], [[d:3@4]]), timestamps ("(12:34)",
 /// "[00:12:34]"), links (their text stays) and bare URLs.
 pub fn clean(text: &str) -> String {
@@ -106,7 +120,7 @@ fn plain(line: &str) -> String {
 /// The recap, or `None` while the meeting has no summary.
 pub fn recap(m: &Meeting, length: Length, style: Style) -> Option<String> {
     let summary = m.summary.as_ref()?;
-    let sections = sections(&summary.markdown);
+    let sections = summary_sections(summary);
     let de = m.language.starts_with("de");
     let date = m.started_at.format(if de { "%d.%m.%Y, %H:%M" } else { "%Y-%m-%d, %H:%M" }).to_string();
     let mut people: Vec<&str> = Vec::new();
@@ -134,6 +148,18 @@ pub fn recap(m: &Meeting, length: Length, style: Style) -> Option<String> {
     };
     for (part, heading, lines) in sections.iter().filter(|(p, _, _)| wanted.contains(p)) {
         let mut lines: Vec<String> = lines.iter().map(|l| clean(l)).filter(|l| !l.is_empty() && l != "-").collect();
+        // Key points of a long meeting come under topic headings: a short
+        // recap lists the topics, a full one keeps them as bold lines.
+        let topics: Vec<String> = lines.iter().filter_map(|l| l.strip_prefix("### ")).map(|t| format!("- {}", t.trim())).collect();
+        if length == Length::Short && *part == Part::Points && !topics.is_empty() {
+            lines = topics;
+        } else {
+            for l in &mut lines {
+                if let Some(t) = l.strip_prefix("### ") {
+                    *l = format!("**{}**", t.trim());
+                }
+            }
+        }
         if length == Length::Short && *part == Part::Points && lines.len() > SHORT_POINTS {
             lines.truncate(SHORT_POINTS);
         }
@@ -189,7 +215,7 @@ mod tests {
             bookmarks: Vec::new(),
             notes: Vec::new(),
             chat: Vec::new(),
-            summary: markdown.map(|md| Summary { provider: "deepseek".into(), model: "m".into(), effort: None, created_at: Local::now(), markdown: md.into() }),
+            summary: markdown.map(|md| Summary { provider: "deepseek".into(), model: "m".into(), effort: None, created_at: Local::now(), markdown: md.into(), template: Default::default() }),
             transcript_engine: None,
             transcript_error: None,
             companion: "mori".into(),
@@ -225,6 +251,16 @@ mod tests {
         m.language = "fr".into();
         let r = recap(&m, Length::Short, Style::Plain).unwrap();
         assert_eq!(r, "Jira-Struktur\n2026-10-28, 13:01 · 87 min · Felix, Nora\n\nPoints clés\n• A\n\nDécisions\n• B\n\nActions\n☐ C — Owner: Léa\n");
+    }
+
+    #[test]
+    fn long_meetings_recap_their_topics() {
+        let md = "# Talk\n\n## Summary\nIdeas.\n\n## Key points\n### Wealth (0:00)\n- Own assets\n### Persuasion (24:10)\n- Tell stories\n\n## Decisions\n- None\n";
+        let m = meeting(Some(md));
+        let short = recap(&m, Length::Short, Style::Plain).unwrap();
+        assert!(short.contains("Key points\n• Wealth\n• Persuasion\n"), "{short}");
+        let full = recap(&m, Length::Full, Style::Markdown).unwrap();
+        assert!(full.contains("**Wealth**\n- Own assets\n**Persuasion**\n- Tell stories"), "{full}");
     }
 
     #[test]
