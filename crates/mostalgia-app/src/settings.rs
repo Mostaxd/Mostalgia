@@ -2027,6 +2027,8 @@ enum Pick {
     Custom(Slot, String),
     /// "meeting", "app" or a language code.
     SummaryLanguage(String),
+    /// A summary template id.
+    SummaryTemplate(String),
     /// The language recordings are transcribed in (a code, or "auto").
     Language(String),
 }
@@ -2170,6 +2172,10 @@ impl SettingsView {
             Pick::Custom(slot, conn) => self.open_custom_model(slot, conn, window, cx),
             Pick::SummaryLanguage(code) => {
                 self.config.summary_language = code;
+                self.save(cx);
+            }
+            Pick::SummaryTemplate(id) => {
+                self.config.summary_template = id;
                 self.save(cx);
             }
             Pick::Language(code) => {
@@ -2405,10 +2411,19 @@ impl SettingsView {
             };
             self.picker("summary-language", label, items, cx)
         };
+        let template = mostalgia_core::summary::Template::parse(&self.config.summary_template);
+        let summary_template = {
+            let items: Vec<Choice> = mostalgia_core::summary::Template::ALL
+                .into_iter()
+                .map(|t| (t.label().into(), t == template, Some(Pick::SummaryTemplate(t.id().into()))))
+                .collect();
+            self.picker("summary-template", template.label().into(), items, cx)
+        };
         ui::card(cx)
             .child(div().font_semibold().child(tr("Zusammenfassungen")))
             .child(settings_row(tr("Automatisch nach jeder Aufnahme"), None, auto.into_any_element(), &theme))
             .child(settings_row(tr("Sprache der Zusammenfassung"), None, summary_language, &theme))
+            .child(settings_row(tr("Vorlage der Zusammenfassung"), Some(template.hint()), summary_template, &theme))
             .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Das Modell wählst du unter KI & Transkription → Zusammenfassungen & Fragen.")))
     }
 

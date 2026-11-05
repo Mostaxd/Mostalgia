@@ -215,6 +215,8 @@ pub struct Summary {
     pub effort: Option<String>,
     pub created_at: DateTime<Local>,
     pub markdown: String,
+    /// The template that wrote it (see [`crate::summary::Template`]).
+    pub template: crate::summary::Template,
 }
 
 pub struct SearchHit {
@@ -235,7 +237,7 @@ pub struct NewMeeting<'a> {
     pub dir: &'a Path,
 }
 
-pub const SCHEMA_VERSION: i32 = 15;
+pub const SCHEMA_VERSION: i32 = 16;
 
 /// The oldest schema version whose Mostalgia can still use a library at
 /// `SCHEMA_VERSION`: raise it only when a migration changes something an
@@ -435,6 +437,8 @@ const MIGRATIONS: &[&str] = &[
     INSERT INTO embed_state (key, value) VALUES ('active', 'local:e5-small');
     ALTER TABLE passages ADD COLUMN embedding_next BLOB;
     ALTER TABLE doc_chunks ADD COLUMN embedding_next BLOB;",
+    // 16: which summary template wrote a summary (NULL: the standard one)
+    "ALTER TABLE summaries ADD COLUMN template TEXT;",
 ];
 
 /// Moves a meeting's current unpinned notes into a new archived version;
@@ -686,7 +690,7 @@ impl Store {
         let summary = self
             .conn
             .query_row(
-                "SELECT model, created_at, markdown, provider, effort FROM summaries WHERE meeting_id = ?1",
+                "SELECT model, created_at, markdown, provider, effort, template FROM summaries WHERE meeting_id = ?1",
                 [id],
                 |r| {
                     Ok(Summary {
@@ -695,6 +699,7 @@ impl Store {
                         markdown: r.get(2)?,
                         provider: r.get(3)?,
                         effort: r.get(4)?,
+                        template: crate::summary::Template::parse(&r.get::<_, Option<String>>(5)?.unwrap_or_default()),
                     })
                 },
             )
@@ -783,12 +788,27 @@ impl Store {
         effort: Option<&str>,
         markdown: &str,
     ) -> Result<()> {
+        self.save_summary_with(meeting_id, provider, model, effort, markdown, crate::summary::Template::Standard)
+    }
+
+    /// Like [`Self::save_summary`], remembering the template that wrote it.
+    pub fn save_summary_with(
+        &self,
+        meeting_id: i64,
+        provider: &str,
+        model: &str,
+        effort: Option<&str>,
+        markdown: &str,
+        template: crate::summary::Template,
+    ) -> Result<()> {
+        let template = (template != crate::summary::Template::Standard).then(|| template.id());
         self.conn.execute(
-            "INSERT INTO summaries (meeting_id, provider, model, effort, created_at, markdown)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO summaries (meeting_id, provider, model, effort, created_at, markdown, template)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(meeting_id) DO UPDATE SET provider = excluded.provider, model = excluded.model,
-                 effort = excluded.effort, created_at = excluded.created_at, markdown = excluded.markdown",
-            params![meeting_id, provider, model, effort, Local::now().timestamp(), markdown],
+                 effort = excluded.effort, created_at = excluded.created_at, markdown = excluded.markdown,
+                 template = excluded.template",
+            params![meeting_id, provider, model, effort, Local::now().timestamp(), markdown, template],
         )?;
         Ok(())
     }
