@@ -342,10 +342,18 @@ impl MeetingView {
     /// Just imported from text: the summary (if that's on, keeping a title
     /// the user gave), then the notes with the dialog's focus and style.
     pub fn after_text_import(&mut self, keep_title: bool, focus: String, style: companion::NoteStyle, cx: &mut Context<Self>) {
+        let summarize = Config::load().auto_summary;
+        self.after_import(summarize, true, keep_title, focus, style, cx);
+    }
+
+    /// After an import: the summary (when `summarize`) and the notes (when
+    /// `notes`) are written as far as they are set up, else the transcript
+    /// is shown.
+    pub fn after_import(&mut self, summarize: bool, notes: bool, keep_title: bool, focus: String, style: companion::NoteStyle, cx: &mut Context<Self>) {
         self.keep_title = keep_title;
         let config = Config::load();
-        let notes_ready = config.notes_request().is_ok_and(|r| r.connection.is_configured());
-        let summary_ready = config.auto_summary && config.summary_connection().is_ok_and(|c| c.is_configured());
+        let notes_ready = notes && config.notes_request().is_ok_and(|r| r.connection.is_configured());
+        let summary_ready = summarize && config.summary_connection().is_ok_and(|c| c.is_configured());
         if summary_ready && self.meeting.as_ref().is_some_and(|m| m.summary.is_none() && !m.segments.is_empty()) {
             self.pending_notes = notes_ready.then_some((focus, style));
             self.summarize(cx);
