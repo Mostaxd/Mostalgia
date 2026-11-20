@@ -50,9 +50,9 @@ const TINY_CLUSTER_SECS: f64 = 10.0;
 const SAME_VOICE: f32 = 0.85;
 /// The same for a video's sound (an import from a link): over studio
 /// sound and music different people are 0.88 alike and more, so only
-/// speakers this alike are one person. Measured on a TV show: 0.88 left 2
-/// of its 6–8 speakers, 0.95 all of them.
-const MEDIA_SAME_VOICE: f32 = 0.93;
+/// speakers this alike are one person. Measured on a TV show: 0.88 and
+/// 0.93 left 2–3 of its 6–8 speakers, 0.95 all of them.
+const MEDIA_SAME_VOICE: f32 = 0.95;
 
 pub fn speaker_name(index: usize) -> String {
     format!("Sprecher {}", index + 1)
