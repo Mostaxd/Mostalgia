@@ -21,8 +21,23 @@ use crate::audio::Source;
 const MAX_SAMPLES: usize = 12;
 /// Speech used for one print (more doesn't make it better, only slower).
 const MAX_LEARN_SECS: f64 = 90.0;
-/// Below this, a print is too unreliable to keep.
-pub const MIN_LEARN_SECS: f64 = 4.0;
+/// Below this, a print is too unreliable to keep (a few seconds depend
+/// too much on what was said, and one bad print can take a name later).
+/// The same as a real speaker's minimum in the speaker separation.
+pub const MIN_LEARN_SECS: f64 = 10.0;
+/// Line times are loose: this much of each line's start and end is left
+/// out, where the previous or next speaker can still be heard.
+const EDGE_SECS: f64 = 0.25;
+/// Pieces shorter than this (after cutting) carry too little voice.
+const MIN_PIECE_SECS: f64 = 1.0;
+/// Pieces at least this long get their own print, to find the ones that
+/// are someone else (a wrongly labelled line).
+const CHECK_PIECE_SECS: f64 = 2.0;
+/// A piece this much less like the speaker's voice than the typical
+/// piece is someone else's and is left out…
+const OUTLIER_MARGIN: f32 = 0.15;
+/// …and so is one under this, whatever the others are.
+const OUTLIER_FLOOR: f32 = 0.4;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Voices {
@@ -371,14 +386,14 @@ impl MeetingPrints {
     /// seconds of speech: `None` without such lines, no print when that is
     /// under [`MIN_LEARN_SECS`].
     fn of(&mut self, name: &str) -> Result<Option<(f64, Option<Vec<f32>>)>> {
-        let spans: Vec<(f64, f64)> = self
+        let lines: Vec<(f64, f64, bool)> = self
             .meeting
             .segments
             .iter()
-            .filter(|s| s.source == Source::System && s.speaker_label() == name)
-            .map(|s| (s.start_secs, s.end_secs))
+            .filter(|s| s.source == Source::System)
+            .map(|s| (s.start_secs, s.end_secs, s.speaker_label() == name))
             .collect();
-        if spans.is_empty() {
+        if !lines.iter().any(|l| l.2) {
             return Ok(None);
         }
         if self.track.is_none() {
@@ -386,13 +401,102 @@ impl MeetingPrints {
             anyhow::ensure!(path.exists(), "{}", crate::i18n::tr("Die Audiodateien dieser Besprechung gibt es nicht mehr"));
             self.track = Some(crate::finalize::read_wav(&path)?);
         }
-        let audio = gather(self.track.as_deref().unwrap_or_default(), &spans, MAX_LEARN_SECS);
-        let secs = audio.len() as f64 / SAMPLE_RATE as f64;
-        if secs < MIN_LEARN_SECS {
-            return Ok(Some((secs, None)));
-        }
-        Ok(Some((secs, Some(crate::diarize::voice_print(&audio)?))))
+        let track = self.track.as_deref().unwrap_or_default();
+        let pieces = clean_pieces(&lines);
+        Ok(Some(clean_print(track, &pieces, &|audio| crate::diarize::voice_print(audio).ok(), false)))
     }
+}
+
+/// `name`'s print in a saved meeting as a rename would learn it, telling
+/// on stderr which pieces were left out (read-only; for checking).
+pub fn probe_print(meeting_id: i64, name: &str) -> Result<Option<(f64, Option<Vec<f32>>)>> {
+    let mut prints = MeetingPrints::open(meeting_id)?;
+    let lines: Vec<(f64, f64, bool)> =
+        prints.meeting.segments.iter().filter(|s| s.source == Source::System).map(|s| (s.start_secs, s.end_secs, s.speaker_label() == name)).collect();
+    if !lines.iter().any(|l| l.2) {
+        return Ok(None);
+    }
+    prints.of(name)?;
+    let track = prints.track.as_deref().unwrap_or_default();
+    Ok(Some(clean_print(track, &clean_pieces(&lines), &|a| crate::diarize::voice_print(a).ok(), true)))
+}
+
+/// The parts of one speaker's lines (`lines`: start, end, whether it is
+/// theirs, for every line of the track) that hold only their voice: each
+/// line without its edges ([`EDGE_SECS`]) and without the time another
+/// speaker's line overlaps it, longest first.
+pub(crate) fn clean_pieces(lines: &[(f64, f64, bool)]) -> Vec<(f64, f64)> {
+    let others: Vec<(f64, f64)> = lines.iter().filter(|l| !l.2).map(|l| (l.0, l.1)).collect();
+    let mut pieces = Vec::new();
+    for &(start, end, mine) in lines {
+        if !mine {
+            continue;
+        }
+        let mut parts = vec![(start + EDGE_SECS, end - EDGE_SECS)];
+        for &(a, b) in &others {
+            parts = parts
+                .into_iter()
+                .flat_map(|(s, e)| if b <= s || a >= e { vec![(s, e)] } else { vec![(s, a), (b, e)] })
+                .collect();
+        }
+        pieces.extend(parts.into_iter().filter(|(s, e)| e - s >= MIN_PIECE_SECS));
+    }
+    pieces.sort_by(|a, b| (b.1 - b.0).total_cmp(&(a.1 - a.0)));
+    pieces
+}
+
+/// A print of `pieces` of `track` (up to [`MAX_LEARN_SECS`]) with the
+/// seconds it is made of, no print under [`MIN_LEARN_SECS`]. Pieces whose
+/// own print is clearly unlike the rest are someone else (a wrongly
+/// labelled line) and are left out. `print` makes a voice print of some
+/// audio; `debug` tells what was left out.
+pub(crate) fn clean_print(track: &[f32], pieces: &[(f64, f64)], print: &dyn Fn(&[f32]) -> Option<Vec<f32>>, debug: bool) -> (f64, Option<Vec<f32>>) {
+    let at = |t: f64| ((t.max(0.0) * SAMPLE_RATE as f64) as usize).min(track.len());
+    let mut kept: Vec<&[f32]> = Vec::new();
+    let mut total = 0usize;
+    let max = (MAX_LEARN_SECS * SAMPLE_RATE as f64) as usize;
+    for &(s, e) in pieces {
+        let (a, b) = (at(s), at(e));
+        if b > a && total < max {
+            let b = b.min(a + max - total);
+            kept.push(&track[a..b]);
+            total += b - a;
+        }
+    }
+    let secs_of = |k: &[&[f32]]| k.iter().map(|p| p.len()).sum::<usize>() as f64 / SAMPLE_RATE as f64;
+    let joined = |k: &[&[f32]]| k.concat();
+    let checkable = kept.iter().filter(|p| p.len() as f64 >= CHECK_PIECE_SECS * SAMPLE_RATE as f64).count();
+    if checkable >= 3 && secs_of(&kept) >= MIN_LEARN_SECS {
+        if let Some(whole) = print(&joined(&kept)) {
+            let sims: Vec<Option<f32>> = kept
+                .iter()
+                .map(|p| (p.len() as f64 >= CHECK_PIECE_SECS * SAMPLE_RATE as f64).then(|| print(p).map(|e| dot(&e, &whole))).flatten())
+                .collect();
+            let mut known: Vec<f32> = sims.iter().flatten().copied().collect();
+            known.sort_by(f32::total_cmp);
+            let typical = known.get(known.len() / 2).copied().unwrap_or(1.0);
+            let cut = (typical - OUTLIER_MARGIN).max(OUTLIER_FLOOR);
+            let before = kept.len();
+            let mut i = 0;
+            kept.retain(|_| {
+                let keep = sims[i].is_none_or(|s| s >= cut);
+                if debug && !keep {
+                    eprintln!("[voices] left out a piece {:.3} like the voice (typical {typical:.3})", sims[i].unwrap_or_default());
+                }
+                i += 1;
+                keep
+            });
+            if kept.len() == before {
+                let secs = secs_of(&kept);
+                return (secs, Some(whole));
+            }
+        }
+    }
+    let secs = secs_of(&kept);
+    if secs < MIN_LEARN_SECS {
+        return (secs, None);
+    }
+    (secs, print(&joined(&kept)))
 }
 
 /// The audio of `spans` (seconds) joined together, longest spans first,
@@ -589,6 +693,37 @@ mod tests {
         for l in ["Felix", "Sprecher Müller", "Speaker"] {
             assert!(!is_generic_label(l), "{l}");
         }
+    }
+
+    #[test]
+    fn clean_pieces_leave_out_edges_and_crosstalk() {
+        // Theirs 0–10 (someone else 4–5 over it), 20–21.2 (too short
+        // once its edges go), and someone else's 10–20.
+        let lines = [(0.0, 10.0, true), (4.0, 5.0, false), (10.0, 20.0, false), (20.0, 21.2, true)];
+        let pieces = clean_pieces(&lines);
+        assert_eq!(pieces.len(), 2);
+        assert!((pieces[0].0 - 5.0).abs() < 1e-9 && (pieces[0].1 - 9.75).abs() < 1e-9, "{pieces:?}");
+        assert!((pieces[1].0 - 0.25).abs() < 1e-9 && (pieces[1].1 - 4.0).abs() < 1e-9, "{pieces:?}");
+    }
+
+    #[test]
+    fn a_wrongly_labelled_piece_is_left_out() {
+        // A "track" whose value says whose voice it is: 1.0 one person,
+        // -1.0 someone else. Prints: the mean direction of that.
+        let sr = SAMPLE_RATE as usize;
+        let mut track = vec![1.0f32; sr * 40];
+        track[sr * 30..sr * 35].iter_mut().for_each(|x| *x = -1.0);
+        let print = |a: &[f32]| {
+            let m = a.iter().sum::<f32>() / a.len() as f32;
+            Some(normalize(vec![m, (1.0 - m * m).max(0.0).sqrt()]))
+        };
+        let pieces = [(0.0, 5.0), (5.0, 10.0), (10.0, 15.0), (30.0, 35.0)];
+        let (secs, p) = clean_print(&track, &pieces, &print, false);
+        assert!((secs - 15.0).abs() < 1e-6, "{secs}");
+        assert!(p.unwrap()[0] > 0.99);
+        // Too little left: no print.
+        let (secs, p) = clean_print(&track, &[(0.0, 4.0), (30.0, 35.0)], &print, false);
+        assert!(secs < MIN_LEARN_SECS && p.is_none());
     }
 
     #[test]
