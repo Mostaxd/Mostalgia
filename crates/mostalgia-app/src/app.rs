@@ -70,6 +70,8 @@ pub struct MostalgiaApp {
     captions_stalled: Option<Option<u64>>,
     /// "Import recording…": the file, its title and date being edited.
     import: Option<ImportDialog>,
+    /// "Import video link…": the link, its languages and whether to summarize.
+    link_import: Option<LinkDialog>,
     /// The offer to download missing models (first launch, or from
     /// Settings), and the download once it runs.
     model_offer: Option<ModelOffer>,
@@ -128,6 +130,19 @@ struct ImportDialog {
     path: std::path::PathBuf,
     title: Entity<InputState>,
     date: Entity<InputState>,
+    error: Option<SharedString>,
+}
+
+/// The dialog for a video link (YouTube and other sites yt-dlp knows).
+struct LinkDialog {
+    url: Entity<InputState>,
+    /// Languages to transcribe in: none detects as set in Settings, one is
+    /// used throughout, several are told apart.
+    languages: Vec<String>,
+    /// The languages offered as buttons (recent ones, then those picked
+    /// from "More").
+    offered: Vec<String>,
+    summarize: bool,
     error: Option<SharedString>,
 }
 
@@ -231,6 +246,7 @@ impl MostalgiaApp {
             caption_host: crate::companion::host::DesktopHost::captions(),
             captions_stalled: None,
             import: None,
+            link_import: None,
             model_offer: None,
             cleanup_days: None,
             delete_audio: true,
@@ -1586,6 +1602,246 @@ impl MostalgiaApp {
         )
     }
 
+    /// "Import video link…": a link from the clipboard is filled in.
+    fn open_link_import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let url = cx.new(|cx| InputState::new(window, cx).placeholder("https://www.youtube.com/watch?v=…"));
+        if let Some(link) = cx.read_from_clipboard().and_then(|c| c.text()).filter(|t| mostalgia_core::link_import::normalize(t).is_some()) {
+            url.update(cx, |s, cx| s.set_value(link.trim().to_string(), window, cx));
+        }
+        url.update(cx, |s, cx| s.focus(window, cx));
+        let config = mostalgia_core::config::Config::load();
+        let mut offered = config.quick_languages();
+        for code in &config.meeting_languages {
+            if !offered.contains(code) {
+                offered.push(code.clone());
+            }
+        }
+        // The language set for recordings is picked to start with.
+        let languages = if config.language == "auto" { Vec::new() } else { vec![config.language.clone()] };
+        for code in &languages {
+            if !offered.contains(code) {
+                offered.insert(0, code.clone());
+            }
+        }
+        self.link_import = Some(LinkDialog { url, languages, offered, summarize: config.auto_summary, error: None });
+        cx.notify();
+    }
+
+    fn toggle_link_language(&mut self, code: Option<String>, cx: &mut Context<Self>) {
+        let Some(dialog) = &mut self.link_import else { return };
+        match code {
+            None => dialog.languages.clear(),
+            Some(code) => {
+                if let Some(at) = dialog.languages.iter().position(|c| *c == code) {
+                    dialog.languages.remove(at);
+                } else {
+                    if !dialog.offered.contains(&code) {
+                        dialog.offered.push(code.clone());
+                    }
+                    dialog.languages.push(code);
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// Downloads, transcribes and saves the dialog's video in the
+    /// background with progress in the library, then opens it (with its
+    /// summary and notes when asked for).
+    fn start_link_import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::processing::{self, Job, Key};
+        use mostalgia_core::link_import::{self, Stage};
+        let Some(dialog) = &mut self.link_import else { return };
+        let typed = dialog.url.read(cx).value().to_string();
+        let Some(url) = link_import::normalize(&typed) else {
+            dialog.error = Some(tr("Das ist kein Link – z. B. https://www.youtube.com/watch?v=…").into());
+            cx.notify();
+            return;
+        };
+        let (languages, summarize) = (dialog.languages.clone(), dialog.summarize);
+        self.link_import = None;
+        let mut config = mostalgia_core::config::Config::load();
+        if !languages.is_empty() {
+            for code in languages.iter().rev() {
+                config.note_recent_language(code);
+            }
+            let mut disk = mostalgia_core::config::Config::load();
+            disk.recent_languages = config.recent_languages.clone();
+            if let Err(e) = disk.save() {
+                eprintln!("[mostalgia] saving settings: {e:#}");
+            }
+        }
+        link_import::apply_languages(&mut config, &languages);
+        let key = Key::Import(chrono::Local::now().timestamp_millis());
+        processing::set(key, Job { title: url.clone(), stage: tr("Video wird geladen …").to_string(), fraction: None });
+        cx.notify();
+        let task = cx.background_spawn(async move {
+            let vad = config.vad_model_path();
+            let opts = mostalgia_core::finalize::FinalPassOptions {
+                vad_model: vad.exists().then_some(vad),
+                diarize: config.diarize,
+                denoise_mic: false,
+                people: 0,
+                progress: mostalgia_core::finalize::Progress::new(move |stage| processing::stage(key, stage.label(), stage.fraction())),
+            };
+            let percent = |de: &'static str, f: Option<f32>| match f {
+                Some(f) => format!("{} {} %", tr(de), (f * 100.0) as u32),
+                None => tr(de).to_string(),
+            };
+            let report = move |stage: Stage| {
+                let (label, f) = match stage {
+                    Stage::Tool(f) => (percent("yt-dlp wird eingerichtet …", f), f),
+                    Stage::Downloading(f) => (percent("Video wird geladen …", f), f),
+                    Stage::Import(mostalgia_core::media_import::Stage::Reading(f)) => (percent("Audio wird gelesen …", f), f),
+                    Stage::Import(_) => return,
+                };
+                processing::stage(key, label, f);
+            };
+            let result = link_import::import(&url, chrono::Local::now(), || mostalgia_core::finalize::engine_for(&config, &config.final_engine), &opts, &config.language, &report);
+            processing::clear(key);
+            result.map_err(|e| trf("Import von {} fehlgeschlagen: {}", &[&url, &format!("{e:#}")]))
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            this.update_in(cx, |this, window, cx| {
+                match result {
+                    Ok((saved, _title)) => {
+                        if let Some(e) = &saved.error {
+                            eprintln!("[mostalgia] {e}");
+                        }
+                        this.reload(cx);
+                        this.open_meeting(saved.meeting_id, window, cx);
+                        if let Some(m) = this.meeting_view() {
+                            let config = mostalgia_core::config::Config::load();
+                            let (focus, style) = (config.companion_notes_focus.clone(), config.notes_style());
+                            // The video's own title stays.
+                            m.update(cx, |m, cx| m.after_import(summarize, summarize, true, focus, style, cx));
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[mostalgia] {e}");
+                        this.error = Some(e.into());
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn render_link_dialog(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use gpui_kit::component::menu::DropdownMenu;
+        use mostalgia_core::language::native_name;
+        let dialog = self.link_import.as_ref()?;
+        let theme = cx.theme().clone();
+        let weak = cx.entity().downgrade();
+        let auto = dialog.languages.is_empty();
+        let mut chips: Vec<AnyElement> = vec![
+            Button::new("link-lang-auto")
+                .small()
+                .icon(IconName::Globe)
+                .label(tr("Automatisch erkennen"))
+                .when(auto, |b| b.primary())
+                .when(!auto, |b| b.outline())
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_link_language(None, cx)))
+                .into_any_element(),
+        ];
+        for (i, code) in dialog.offered.iter().enumerate() {
+            let on = dialog.languages.contains(code);
+            let code = code.clone();
+            chips.push(
+                Button::new(("link-lang", i))
+                    .small()
+                    .label(native_name(&code))
+                    .when(on, |b| b.primary().icon(IconName::Check))
+                    .when(!on, |b| b.outline())
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_link_language(Some(code.clone()), cx)))
+                    .into_any_element(),
+            );
+        }
+        let offered = dialog.offered.clone();
+        chips.push(
+            Button::new("link-lang-more")
+                .small()
+                .ghost()
+                .label(tr("Weitere Sprachen"))
+                .dropdown_caret(true)
+                .dropdown_menu(move |menu, _, _| {
+                    let mut menu = menu.scrollable(true).max_h(px(420.));
+                    for (code, name) in mostalgia_core::language::all().into_iter().filter(|(c, _)| !offered.contains(c)) {
+                        let weak = weak.clone();
+                        menu = menu.item(PopupMenuItem::new(name).on_click(move |_, _, cx| {
+                            weak.update(cx, |this, cx| this.toggle_link_language(Some(code.clone()), cx)).ok();
+                        }));
+                    }
+                    menu
+                })
+                .into_any_element(),
+        );
+        let hint = match dialog.languages.len() {
+            0 => tr("Whisper erkennt die Sprache selbst (wie in den Einstellungen eingestellt)."),
+            1 => tr("Alles wird in dieser Sprache transkribiert – am zuverlässigsten, wenn nur sie gesprochen wird."),
+            _ => tr("Whisper wählt nur zwischen diesen Sprachen und wechselt, wenn das Video wechselt."),
+        };
+        Some(
+            div()
+                .id("link-overlay")
+                .absolute()
+                .inset_0()
+                .bg(gpui_kit::black().opacity(0.45))
+                .flex()
+                .items_center()
+                .justify_center()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.link_import = None;
+                    cx.notify();
+                }))
+                .child(
+                    v_flex()
+                        .id("link-dialog")
+                        .w(px(520. * ui::ui_scale()))
+                        .max_w(relative(0.9))
+                        .p_5()
+                        .gap_3()
+                        .rounded(theme.radius_lg)
+                        .border(ui::border_width(cx))
+                        .border_color(theme.border)
+                        .bg(theme.background)
+                        .shadow_lg()
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .child(h_flex().gap_2().items_start().child(Icon::new(IconName::TvMinimalPlay).flex_none().mt_1().text_color(theme.primary)).child(div().flex_1().min_w_0().text_lg().font_semibold().child(tr("Video-Link importieren"))))
+                        .child(v_flex().gap_1().child(div().text_sm().font_medium().child(tr("Link"))).child(Input::new(&dialog.url).small()))
+                        .child(div().text_xs().text_color(theme.muted_foreground).child(tr("YouTube und viele andere Seiten. Nur der Ton wird geladen.")))
+                        .child(v_flex().gap_1().child(div().text_sm().font_medium().child(tr("Gesprochene Sprache(n)"))).child(h_flex().flex_wrap().gap_1().children(chips)))
+                        .child(div().text_xs().text_color(theme.muted_foreground).child(hint))
+                        .child(
+                            gpui_kit::component::checkbox::Checkbox::new("link-summarize")
+                                .checked(dialog.summarize)
+                                .label(tr("Danach zusammenfassen"))
+                                .on_click(cx.listener(|this, v: &bool, _, cx| {
+                                    if let Some(d) = &mut this.link_import {
+                                        d.summarize = *v;
+                                    }
+                                    cx.notify();
+                                })),
+                        )
+                        .when_some(dialog.error.clone(), |el, e| el.child(div().p_2().rounded(theme.radius).bg(theme.danger.opacity(0.1)).text_color(theme.danger).text_sm().child(e)))
+                        .child(
+                            h_flex()
+                                .justify_end()
+                                .gap_2()
+                                .child(Button::new("link-cancel").ghost().label(tr("Abbrechen")).on_click(cx.listener(|this, _, _, cx| {
+                                    this.link_import = None;
+                                    cx.notify();
+                                })))
+                                .child(Button::new("link-start").primary().icon(IconName::Download).label(tr("Importieren")).on_click(cx.listener(|this, _, window, cx| this.start_link_import(window, cx)))),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     /// Asks to download the models that are missing (nothing when none are).
     pub fn offer_models(&mut self, cx: &mut Context<Self>) {
         if self.model_offer.as_ref().is_some_and(|o| o.running.is_some()) {
@@ -2168,6 +2424,14 @@ impl MostalgiaApp {
                                     .on_click(cx.listener(|this, _, window, cx| this.pick_import(window, cx))),
                             )
                             .child(
+                                Button::new("import-link")
+                                    .outline()
+                                    .icon(IconName::TvMinimalPlay)
+                                    .when(self.link_import.is_some(), |b| b.selected(true))
+                                    .tooltip(tr("Video-Link importieren … (YouTube und andere Seiten)"))
+                                    .on_click(cx.listener(|this, _, window, cx| this.open_link_import(window, cx))),
+                            )
+                            .child(
                                 Button::new("from-text")
                                     .outline()
                                     .icon(IconName::FileText)
@@ -2287,6 +2551,7 @@ impl Render for MostalgiaApp {
         let delete_dialog = self.render_delete_dialog(cx);
         let cleanup_dialog = self.render_cleanup_dialog(cx);
         let import_dialog = self.render_import_dialog(cx);
+        let link_dialog = self.render_link_dialog(cx);
         let models_dialog = self.render_models_dialog(cx);
         let theme = cx.theme();
         v_flex()
@@ -2317,6 +2582,7 @@ impl Render for MostalgiaApp {
             .children(delete_dialog)
             .children(cleanup_dialog)
             .children(import_dialog)
+            .children(link_dialog)
             .children(models_dialog)
             // Ctrl+wheel zooms instead of scrolling, wherever the mouse is.
             .child({

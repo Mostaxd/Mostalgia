@@ -117,4 +117,11 @@ pub const EN: &[(&str, &str)] = &[
     ("abgebrochen", "cancelled"),
     // Live translation
     ("{}: kein Modell für Live-Übersetzung gewählt", "{}: no model chosen for live translation"),
+    // Video link import
+    ("yt-dlp ließ sich nicht herunterladen", "yt-dlp could not be downloaded"),
+    ("Das heruntergeladene yt-dlp startet nicht", "The downloaded yt-dlp does not start"),
+    ("Für dieses System gibt es kein fertiges yt-dlp – bitte yt-dlp installieren", "There is no ready-made yt-dlp for this system – please install yt-dlp"),
+    ("yt-dlp lässt sich nicht starten", "yt-dlp can't be started"),
+    ("yt-dlp hat keine Datei geliefert", "yt-dlp delivered no file"),
+    ("Video", "Video"),
 ];
