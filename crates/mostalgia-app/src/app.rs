@@ -142,9 +142,17 @@ struct LinkDialog {
     /// The languages offered as buttons (recent ones, then those picked
     /// from "More").
     offered: Vec<String>,
+    /// How many people speak in the video, if the user said.
+    speakers: mostalgia_core::diarize::Speakers,
     summarize: bool,
     error: Option<SharedString>,
 }
+
+/// The speaker counts offered for a video: auto, exactly 1…6, 7 or more.
+const LINK_SPEAKERS: [mostalgia_core::diarize::Speakers; 8] = {
+    use mostalgia_core::diarize::Speakers::*;
+    [Auto, Exactly(1), Exactly(2), Exactly(3), Exactly(4), Exactly(5), Exactly(6), AtLeast(7)]
+};
 
 impl MostalgiaApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -1505,6 +1513,8 @@ impl MostalgiaApp {
                 diarize: config.diarize,
                 denoise_mic: false,
                 people: 0,
+                speakers: None,
+                media: false,
                 progress: mostalgia_core::finalize::Progress::new(move |stage| processing::stage(key, stage.label(), stage.fraction())),
             };
             let report = move |stage: Stage| {
@@ -1623,7 +1633,7 @@ impl MostalgiaApp {
                 offered.insert(0, code.clone());
             }
         }
-        self.link_import = Some(LinkDialog { url, languages, offered, summarize: config.auto_summary, error: None });
+        self.link_import = Some(LinkDialog { url, languages, offered, speakers: Default::default(), summarize: config.auto_summary, error: None });
         cx.notify();
     }
 
@@ -1658,7 +1668,7 @@ impl MostalgiaApp {
             cx.notify();
             return;
         };
-        let (languages, summarize) = (dialog.languages.clone(), dialog.summarize);
+        let (languages, summarize, speakers) = (dialog.languages.clone(), dialog.summarize, dialog.speakers);
         self.link_import = None;
         let mut config = mostalgia_core::config::Config::load();
         if !languages.is_empty() {
@@ -1682,6 +1692,8 @@ impl MostalgiaApp {
                 diarize: config.diarize,
                 denoise_mic: false,
                 people: 0,
+                speakers: Some(speakers),
+                media: true,
                 progress: mostalgia_core::finalize::Progress::new(move |stage| processing::stage(key, stage.label(), stage.fraction())),
             };
             let percent = |de: &'static str, f: Option<f32>| match f {
@@ -1779,6 +1791,31 @@ impl MostalgiaApp {
                 })
                 .into_any_element(),
         );
+        use mostalgia_core::diarize::Speakers;
+        let speaker_chips: Vec<AnyElement> = LINK_SPEAKERS
+            .iter()
+            .enumerate()
+            .map(|(i, &choice)| {
+                let on = dialog.speakers == choice;
+                let label = match choice {
+                    Speakers::Auto => tr("Automatisch").to_string(),
+                    Speakers::Exactly(n) => n.to_string(),
+                    Speakers::AtLeast(n) => format!("{n}+"),
+                };
+                Button::new(("link-speakers", i))
+                    .small()
+                    .label(label)
+                    .when(on, |b| b.primary())
+                    .when(!on, |b| b.outline())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(d) = &mut this.link_import {
+                            d.speakers = choice;
+                        }
+                        cx.notify();
+                    }))
+                    .into_any_element()
+            })
+            .collect();
         let hint = match dialog.languages.len() {
             0 => tr("Whisper erkennt die Sprache selbst (wie in den Einstellungen eingestellt)."),
             1 => tr("Alles wird in dieser Sprache transkribiert – am zuverlässigsten, wenn nur sie gesprochen wird."),
@@ -1815,6 +1852,8 @@ impl MostalgiaApp {
                         .child(div().text_xs().text_color(theme.muted_foreground).child(tr("YouTube und viele andere Seiten. Nur der Ton wird geladen.")))
                         .child(v_flex().gap_1().child(div().text_sm().font_medium().child(tr("Gesprochene Sprache(n)"))).child(h_flex().flex_wrap().gap_1().children(chips)))
                         .child(div().text_xs().text_color(theme.muted_foreground).child(hint))
+                        .child(v_flex().gap_1().child(div().text_sm().font_medium().child(tr("Wie viele sprechen?"))).child(h_flex().flex_wrap().gap_1().children(speaker_chips)))
+                        .child(div().text_xs().text_color(theme.muted_foreground).child(tr("Wer mitzählt, trennt die Stimmen besser – vor allem bei Musik oder Studioton.")))
                         .child(
                             gpui_kit::component::checkbox::Checkbox::new("link-summarize")
                                 .checked(dialog.summarize)

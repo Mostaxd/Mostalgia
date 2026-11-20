@@ -164,6 +164,8 @@ pub const EN: &[(&str, &str)] = &[
     ("YouTube und viele andere Seiten. Nur der Ton wird geladen.", "YouTube and many other sites. Only the sound is downloaded."),
     ("Gesprochene Sprache(n)", "Spoken language(s)"),
     ("Danach zusammenfassen", "Summarize afterwards"),
+    ("Wie viele sprechen?", "How many people speak?"),
+    ("Wer mitzählt, trennt die Stimmen besser – vor allem bei Musik oder Studioton.", "Saying how many tells the voices apart better – especially with music or studio sound."),
     ("Die Zusammenfassung gibt ihr danach einen passenden Titel.", "The summary gives it a fitting title afterwards."),
     ("Datum und Uhrzeit", "Date and time"),
     ("Aus den Metadaten der Datei, sonst ihrem Dateidatum.", "From the file's metadata, else its file date."),

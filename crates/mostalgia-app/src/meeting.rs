@@ -775,6 +775,8 @@ impl MeetingView {
                 diarize: config.diarize,
                 denoise_mic: config.denoise,
                 people,
+                speakers: None,
+                media: false,
                 progress: finalize::Progress::new(move |stage| processing::stage(key, stage.label(), stage.fraction())),
             };
             let cached = slot.as_ref().filter(|_| choice.is_local()).and_then(|s| s.lock().unwrap().take());
