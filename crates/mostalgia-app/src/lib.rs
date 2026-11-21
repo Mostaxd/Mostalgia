@@ -57,7 +57,7 @@ gpui_kit::assets::icon_assets!(pub ExtraIcons, [
     Eraser, Keyboard, MicOff, Palette, Pencil, Play, Plus, Radio, RefreshCw, Search, Settings, Sparkles, Square, Trash, TriangleAlert,
     Users, X, Sparkle, StickyNote, AppWindow, MonitorUp, Ellipsis, ChevronUp, Eye, EyeOff, Target, RotateCcw, WandSparkles, FaceSlightlySmiling, MessageCircle,
     Library, Upload, Lightbulb, ExternalLink, BookOpen, Copy, Folder, FolderPlus, FolderInput,
-    ListChecks, Replace, User, ArrowUpRight, Pin, PinOff, Minus,
+    ListChecks, Replace, User, ArrowUpRight, Pin, PinOff, Minus, TvMinimalPlay, Download,
 ]);
 
 /// The default GPUI Kit assets plus the extra Lucide icons the app uses.
