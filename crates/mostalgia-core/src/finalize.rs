@@ -114,6 +114,11 @@ pub struct FinalPassOptions {
     /// People in the call, counting you (a `diarize::PEOPLE_CHOICES`
     /// value; 0 = let the speaker separation decide).
     pub people: u8,
+    /// The system track's speakers as the user said, over `people`.
+    pub speakers: Option<crate::diarize::Speakers>,
+    /// The audio is a video's sound (studio sound, music), not a call:
+    /// speakers are joined only when very alike.
+    pub media: bool,
     /// Told how far the pass is.
     pub progress: Progress,
 }
@@ -235,8 +240,8 @@ fn final_pass_in(
             opts.progress.report(Stage::Speakers);
             let mut lines: Vec<&mut FinalSegment> = out[first..].iter_mut().collect();
             let has_mic = tracks.iter().any(|(s, _)| *s == Source::Mic);
-            let speakers = crate::diarize::Speakers::on_system_track(opts.people, has_mic);
-            if let Err(e) = crate::diarize::label_track(&samples, &mut lines, speakers) {
+            let speakers = opts.speakers.unwrap_or_else(|| crate::diarize::Speakers::on_system_track(opts.people, has_mic));
+            if let Err(e) = crate::diarize::label_track(&samples, &mut lines, speakers, opts.media) {
                 notes.push(crate::i18n::trf("Sprechertrennung übersprungen: {}", &[&format!("{e:#}")]));
             }
         }

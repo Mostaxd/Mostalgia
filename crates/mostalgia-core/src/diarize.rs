@@ -48,6 +48,11 @@ const TINY_CLUSTER_SECS: f64 = 10.0;
 /// same person 0.85–0.97, different people 0.65–0.81.
 /// `MOSTALGIA_SAME_VOICE` overrides it.
 const SAME_VOICE: f32 = 0.85;
+/// The same for a video's sound (an import from a link): over studio
+/// sound and music different people are 0.88 alike and more, so only
+/// speakers this alike are one person. Measured on a TV show: 0.88 and
+/// 0.93 left 2–3 of its 6–8 speakers, 0.95 all of them.
+const MEDIA_SAME_VOICE: f32 = 0.95;
 
 pub fn speaker_name(index: usize) -> String {
     format!("Sprecher {}", index + 1)
@@ -143,10 +148,15 @@ fn cluster_threshold() -> f32 {
 /// Splits a track into speakers and names the ones that are `known`
 /// voices (each name at most once).
 #[cfg(feature = "diarization")]
-pub fn separate(samples: &[f32], speakers: Speakers, known: &crate::voices::Voices) -> Result<Separation> {
+/// `media`: the track is a video's sound, not a call (see
+/// [`MEDIA_SAME_VOICE`]).
+pub fn separate(samples: &[f32], speakers: Speakers, known: &crate::voices::Voices, media: bool) -> Result<Separation> {
     let (seg_model, emb_model) = models().ok_or_else(|| anyhow!(crate::i18n::tr("Modelle für die Sprechertrennung fehlen — unter Einstellungen → System herunterladen")))?;
     let threshold = cluster_threshold();
-    let same_voice = std::env::var("MOSTALGIA_SAME_VOICE").ok().and_then(|v| v.parse().ok()).unwrap_or_else(|| same_voice(threshold));
+    let same_voice = std::env::var("MOSTALGIA_SAME_VOICE").ok().and_then(|v| v.parse().ok()).unwrap_or_else(|| {
+        let call = same_voice(threshold);
+        if media { call.max(MEDIA_SAME_VOICE) } else { call }
+    });
     let mut extractor = extractor(&emb_model, 4)?;
     let mut turns = run_diarization(&seg_model, &emb_model, threshold, -1, samples)?;
     let found = renumber(&mut turns);
@@ -214,11 +224,11 @@ fn time_gap(turns: &[Turn], a: usize, b: usize) -> f32 {
 /// speaker. Returns the number of speakers found; with only one that isn't
 /// a known voice, the lines are left unlabelled.
 #[cfg(feature = "diarization")]
-pub fn label_track(samples: &[f32], segments: &mut [&mut FinalSegment], speakers: Speakers) -> Result<usize> {
+pub fn label_track(samples: &[f32], segments: &mut [&mut FinalSegment], speakers: Speakers, media: bool) -> Result<usize> {
     if segments.is_empty() {
         return Ok(0);
     }
-    let sep = separate(samples, speakers, &crate::voices::Voices::for_matching())?;
+    let sep = separate(samples, speakers, &crate::voices::Voices::for_matching(), media)?;
     let count = sep.secs.len();
     if count < 2 && sep.names.iter().all(Option::is_none) {
         return Ok(count);
@@ -276,10 +286,15 @@ fn speaker_prints(turns: &[Turn], count: usize, samples: &[f32], extractor: &mut
 ///
 /// A tiny speaker (under [`TINY_CLUSTER_SECS`]) goes to the big one whose
 /// voice is closest, or, without a print, the one speaking nearest in time
-/// (`gap`). Then the two big speakers with the most alike voices are
-/// joined, again and again: down to `exactly` speakers when given,
+/// (`gap`). Then the two groups of big speakers with the most alike voices
+/// are joined, again and again: down to `exactly` speakers when given,
 /// otherwise while they are at least `same_voice` alike, but never below
 /// `at_least`. Empty when there are fewer big speakers than `at_least`.
+///
+/// Two groups are as alike as their members are on average (weighted by
+/// speech), not as their mean voices: the mean of a big group drifts
+/// toward an average voice that is close to everyone, so it kept
+/// swallowing other people one after the other.
 fn merge_plan(
     secs: &[f64],
     prints: &[Option<Vec<f32>>],
@@ -288,7 +303,7 @@ fn merge_plan(
     at_least: usize,
     same_voice: f32,
 ) -> Vec<usize> {
-    use crate::voices::{dot, normalize};
+    use crate::voices::dot;
     let count = secs.len();
     let print = |s: usize| prints.get(s).and_then(Option::as_ref);
     let big: Vec<usize> = (0..count).filter(|&s| secs[s] >= TINY_CLUSTER_SECS && print(s).is_some()).collect();
@@ -303,30 +318,38 @@ fn merge_plan(
         });
         target[s] = by_voice.unwrap_or_else(|| *big.iter().min_by(|a, b| gap(s, **a).total_cmp(&gap(s, **b))).unwrap());
     }
-    // Groups of big speakers, each with its speech-weighted mean print.
-    let mut groups: Vec<(Vec<usize>, Vec<f32>)> = big
-        .iter()
-        .map(|&b| (vec![b], print(b).unwrap().iter().map(|x| x * secs[b] as f32).collect()))
-        .collect();
+    let sim = |a: usize, b: usize| dot(print(a).unwrap(), print(b).unwrap());
+    // Average linkage, weighted by both members' speech.
+    let linkage = |x: &[usize], y: &[usize]| {
+        let (mut sum, mut weight) = (0.0f64, 0.0f64);
+        for &a in x {
+            for &b in y {
+                let w = secs[a] * secs[b];
+                sum += sim(a, b) as f64 * w;
+                weight += w;
+            }
+        }
+        if weight > 0.0 { (sum / weight) as f32 } else { f32::MIN }
+    };
+    let mut groups: Vec<Vec<usize>> = big.iter().map(|&b| vec![b]).collect();
     let goal = exactly.unwrap_or(at_least).max(1);
     while groups.len() > goal {
         let mut best = (0, 1, f32::MIN);
         for i in 0..groups.len() {
             for j in i + 1..groups.len() {
-                let sim = dot(&normalize(groups[i].1.clone()), &normalize(groups[j].1.clone()));
-                if sim > best.2 {
-                    best = (i, j, sim);
+                let s = linkage(&groups[i], &groups[j]);
+                if s > best.2 {
+                    best = (i, j, s);
                 }
             }
         }
         if exactly.is_none() && best.2 < same_voice {
             break;
         }
-        let (members, sum) = groups.remove(best.1);
-        groups[best.0].0.extend(members);
-        groups[best.0].1.iter_mut().zip(sum).for_each(|(a, b)| *a += b);
+        let members = groups.remove(best.1);
+        groups[best.0].extend(members);
     }
-    for (members, _) in &groups {
+    for members in &groups {
         let head = members[0];
         for t in target.iter_mut() {
             if members.contains(t) {
@@ -429,12 +452,12 @@ fn run_diarization(seg_model: &std::path::Path, emb_model: &std::path::Path, thr
 }
 
 #[cfg(not(feature = "diarization"))]
-pub fn label_track(_: &[f32], _: &mut [&mut FinalSegment], _: Speakers) -> Result<usize> {
+pub fn label_track(_: &[f32], _: &mut [&mut FinalSegment], _: Speakers, _: bool) -> Result<usize> {
     Err(anyhow!(crate::i18n::tr("ohne Sprechertrennung gebaut (Feature `diarization`)")))
 }
 
 #[cfg(not(feature = "diarization"))]
-pub fn separate(_: &[f32], _: Speakers, _: &crate::voices::Voices) -> Result<Separation> {
+pub fn separate(_: &[f32], _: Speakers, _: &crate::voices::Voices, _: bool) -> Result<Separation> {
     Err(anyhow!(crate::i18n::tr("ohne Sprechertrennung gebaut (Feature `diarization`)")))
 }
 
@@ -567,6 +590,20 @@ mod tests {
         assert!(merge_plan(&secs, &prints, gap, Some(4), 4, SAME_VOICE).is_empty());
         // Nothing big and nothing asked: left as it is.
         assert_eq!(merge_plan(&[2.0, 3.0], &[at(0.0), at(90.0)], gap, None, 1, SAME_VOICE), [0, 1]);
+    }
+
+    #[test]
+    fn a_joined_pair_does_not_swallow_a_third_voice() {
+        // 0 and 1 are 0.89 alike, 2 is 0.87 alike to each: their mean
+        // voice is 0.895 like 2, but 2 is another person.
+        let secs = [100.0, 100.0, 100.0];
+        let prints = [Some(vec![1.0, 0.0, 0.0]), Some(vec![0.89, 0.455961, 0.0]), Some(vec![0.87, 0.209887, 0.446148])];
+        assert_eq!(merge_plan(&secs, &prints, gap, None, 1, 0.88), [0, 0, 2]);
+    }
+
+    #[test]
+    fn video_sound_joins_only_very_alike_voices() {
+        assert!(MEDIA_SAME_VOICE > same_voice(0.4));
     }
 
     #[test]
