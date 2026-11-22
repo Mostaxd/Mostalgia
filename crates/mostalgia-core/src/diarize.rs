@@ -27,15 +27,19 @@ const CLUSTER_THRESHOLD: f32 = 0.5;
 const LIVE_MATCH: f32 = 0.55;
 /// Live: chunks shorter than this don't carry a reliable voice print.
 const LIVE_MIN_SECS: f64 = 1.5;
-/// Final pass: cosine similarity at which a speaker is a known voice.
+/// Final pass: cosine similarity at which a speaker is a known voice. A
+/// known person over calls is 0.93–0.99 like their saved voice, while a
+/// stranger can be 0.82–0.84 like someone saved; at 0.6 strangers got the
+/// name of the closest saved voice whenever no other was near.
 /// `MOSTALGIA_VOICE_MATCH` overrides it.
-const KNOWN_MATCH: f32 = 0.6;
+const KNOWN_MATCH: f32 = 0.88;
 /// …and by how much it must beat the next closest known voice: prints of
 /// different people over call audio can be 0.8 alike, so a speaker who is
 /// about as close to two names gets neither.
 const KNOWN_MARGIN: f32 = 0.08;
-/// Live: the same, for a voice heard only in short chunks so far.
-const LIVE_KNOWN_MATCH: f32 = 0.65;
+/// Live: the same, for a voice heard only in short chunks so far (their
+/// prints are less alike; the final pass names again).
+const LIVE_KNOWN_MATCH: f32 = 0.75;
 /// Final pass: speech per speaker used to compare with known voices.
 const MATCH_SECS: f64 = 60.0;
 /// Final pass: a "speaker" with less speech than this is a fragment of
