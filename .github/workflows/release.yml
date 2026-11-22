@@ -28,7 +28,9 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned: with Rust 1.100 sherpa-rs-sys's build script can't find
+      # target/<profile>/deps (new build-dir layout) and fails.
+      - uses: dtolnay/rust-toolchain@1.99.1
       - name: System packages
         run: |
           sudo apt-get update
@@ -96,7 +98,7 @@ jobs:
       HAS_NOTARY: ${{ secrets.MACOS_NOTARY_PASSWORD != '' }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
       - uses: Swatinem/rust-cache@v2
         with:
           key: dmg
@@ -162,7 +164,7 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
       # Whisper on the GPU needs the Vulkan SDK (headers, glslc, the import
       # library) to build; users only need their GPU driver. If installing
       # it fails, the zip is the CPU build instead of no zip at all.
