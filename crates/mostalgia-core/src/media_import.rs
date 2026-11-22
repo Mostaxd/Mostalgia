@@ -323,8 +323,13 @@ fn convert_native(src: &Path, dst: &Path, progress: &dyn Fn(Option<f32>)) -> Res
 
 /// ffmpeg / ffprobe, without a console window flashing up on Windows.
 fn tool(name: &str) -> Command {
+    quiet_command(tool_path(name))
+}
+
+/// `program`, without a console window flashing up on Windows.
+pub(crate) fn quiet_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     #[allow(unused_mut)]
-    let mut cmd = Command::new(tool_path(name));
+    let mut cmd = Command::new(program);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -337,7 +342,7 @@ fn tool(name: &str) -> Command {
 /// A tool's program: its name, found in PATH. On macOS also Homebrew's and
 /// MacPorts' folders, which an app started from the Finder doesn't have in
 /// its PATH.
-fn tool_path(name: &str) -> PathBuf {
+pub(crate) fn tool_path(name: &str) -> PathBuf {
     #[cfg(target_os = "macos")]
     {
         let in_path = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(name).is_file()));

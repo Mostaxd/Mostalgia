@@ -3,6 +3,7 @@
 //! `cargo run --release -p mostalgia-core --example diarize_probe -- <session dir> [auto|N|N+]…`
 //! where N is the number of people on the system track. Set
 //! `MOSTALGIA_DIARIZE_THRESHOLD` to try another clustering threshold, and
+//! `PROBE_MEDIA=1` to treat it as a video's sound, and
 //! `PROBE_DB=<copy of mostalgia.db> PROBE_MEETING=<id>` to print that
 //! meeting's system lines as the separation would label them. With
 //! `PROBE_APPLY=1` as well, those labels are written into that database
@@ -26,7 +27,7 @@ fn main() -> anyhow::Result<()> {
             m => Speakers::Exactly(m.parse()?),
         };
         let t = std::time::Instant::now();
-        let sep = separate(&samples, speakers, &known)?;
+        let sep = separate(&samples, speakers, &known, std::env::var_os("PROBE_MEDIA").is_some())?;
         println!("\n== {mode} ({speakers:?}): clustering found {}, after merging {} ({:.1}s)", sep.found, sep.secs.len(), t.elapsed().as_secs_f64());
         for i in 0..sep.secs.len() {
             let sims = sep.prints[i].as_ref().map(|p| known.similarities(p)).unwrap_or_default();

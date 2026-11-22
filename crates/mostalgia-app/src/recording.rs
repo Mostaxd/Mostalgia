@@ -1060,6 +1060,8 @@ impl RecordingView {
                     diarize: config.diarize,
                     denoise_mic: config.denoise,
                     people,
+                    speakers: None,
+                    media: false,
                     progress: finalize::Progress::new(move |stage| processing::stage(key, stage.label(), stage.fraction())),
                 };
                 processing::stage(key, tr("Transkript wird fertiggestellt …").to_string(), None);
@@ -1160,6 +1162,8 @@ impl RecordingView {
                 diarize: config.diarize,
                 denoise_mic: config.denoise,
                 people,
+                speakers: None,
+                media: false,
                 progress,
             };
             let language = config.language.as_str();
