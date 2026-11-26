@@ -457,6 +457,10 @@ pub fn save_recording(
     store.set_transcript_info(id, &engine_label, error.as_deref())?;
     store_detected_language(&store, id, language, engine)?;
     store.add_bookmarks(id, bookmarks)?;
+    // A recording linked to a Teams meeting is named after it.
+    if let Err(e) = crate::teams::ops::after_save(&crate::config::Config::load().teams, &store, id) {
+        eprintln!("[mostalgia] teams: {e:#}");
+    }
     if let Err(e) = crate::ask::index_meeting(id) {
         eprintln!("[mostalgia] search index: {e:#}");
     }

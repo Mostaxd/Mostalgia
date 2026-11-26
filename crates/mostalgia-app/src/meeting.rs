@@ -703,6 +703,8 @@ impl MeetingView {
                 processing::set(processing::Key::Summary(id), job);
             })?;
             store.save_summary_with(id, &s.provider, &s.model, s.effort.as_deref(), &s.markdown, s.template)?;
+            // A Teams meeting keeps its name from the calendar.
+            let keep_title = keep_title || mostalgia_core::teams::ops::keeps_title(&Config::load().teams, &meeting);
             if let Some(title) = s.title.as_ref().filter(|_| !keep_title) {
                 store.set_title(id, title)?;
             }

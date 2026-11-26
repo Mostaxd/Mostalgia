@@ -14,6 +14,7 @@ pub mod brief;
 pub mod calendar;
 pub mod graph;
 pub mod link;
+pub mod ops;
 pub mod vtt;
 
 use serde::{Deserialize, Serialize};

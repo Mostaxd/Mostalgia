@@ -185,6 +185,10 @@ fn clean(s: &str) -> String {
 /// invite), put before the glossary's own terms; see [`set_meeting_terms`].
 static MEETING_TERMS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
+/// Tests that set the meeting's words take turns.
+#[cfg(test)]
+pub(crate) static TERMS_LOCK: Mutex<()> = Mutex::new(());
+
 /// Most of the hint the meeting's words may take, so the user's own
 /// terms still fit.
 const MEETING_HINT_CHARS: usize = 250;
@@ -447,6 +451,7 @@ mod tests {
 
     #[test]
     fn meeting_terms_come_first_and_are_capped() {
+        let _turn = TERMS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_meeting_terms(vec!["Anna Lehmann".into(), " PayFlow ".into(), "x".repeat(300)]);
         assert_eq!(meeting_terms(), ["Anna Lehmann", "PayFlow"]);
         let g = with_meeting_terms(Arc::new(Glossary { terms: vec!["payflow".into(), "Brightwell".into()], fixes: Vec::new() }));
