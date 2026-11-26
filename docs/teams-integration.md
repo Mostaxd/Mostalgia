@@ -10,7 +10,7 @@ delegated token: there is no Mostalgia server in between.
 | # | Feature | Graph permission | Account type |
 |---|---------|------------------|--------------|
 | 1 | Sign in with Microsoft (OAuth 2.0 auth code + PKCE, loopback redirect, refresh token in the system keyring) | `User.Read`, `offline_access` | work + personal |
-| 2 | Calendar sync: upcoming Teams meetings, recordings named after the event, optional start of the recording when a meeting begins | `Calendars.Read` | work + personal |
+| 2 | Calendar sync: upcoming Teams meetings, recordings named after the event (recording still starts only when call detection sees you join) | `Calendars.Read` | work + personal |
 | 3 | Attendee names and invite terms as Whisper hints; the event's language as a language hint; attendees as speaker-name suggestions, 1:1 calls named automatically | (from 2) | work + personal |
 | 4 | Post the summary and action items to the meeting chat | `OnlineMeetings.Read`, `ChatMessage.Send` | work/school |
 | 5 | Fetch the Teams transcript (when the meeting had transcription on) and suggest speaker names from it | `OnlineMeetingTranscript.Read.All` (admin consent) | work/school |

@@ -751,11 +751,7 @@ impl MostalgiaApp {
                 .border_b_1()
                 .border_color(theme.border)
                 .child(Icon::new(IconName::Mic).small().text_color(theme.primary))
-                .child(div().flex_1().text_sm().child(if self.autostart.prompt_is_meeting {
-                    trf("Die Teams-Besprechung „{}“ beginnt – aufnehmen?", &[&app])
-                } else {
-                    trf("Anruf in {} erkannt – aufnehmen?", &[&app])
-                }))
+                .child(div().flex_1().text_sm().child(trf("Anruf in {} erkannt – aufnehmen?", &[&app])))
                 .child(
                     Button::new("call-record")
                         .small()

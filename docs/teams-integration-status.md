@@ -11,7 +11,7 @@ Branch `feature/teams-integration`, local only (not pushed, no CI run).
 | Calendar: upcoming Teams meetings | ✓ | `teams upcoming` | Settings list, "next meeting" card on New recording |
 | Recording linked to the running meeting (`teams.json` in its folder) | ✓ | on `start` | on start |
 | Recording named after the meeting, summary keeps the name | ✓ | ✓ | ✓ |
-| Prompt or auto-start when a Teams meeting begins | | | ✓ (Off / Ask / Automatic) |
+| Recording starts only when call detection sees you join (the calendar never starts one) | | | ✓ |
 | Attendee names + invite words as Whisper hints (before the glossary) | ✓ | ✓ | ✓ |
 | Invite language narrows language detection (only with "auto" and no meeting languages set) | ✓ | | ✓ |
 | One-to-one call: "Others" gets the other person's name | ✓ | ✓ | ✓ |

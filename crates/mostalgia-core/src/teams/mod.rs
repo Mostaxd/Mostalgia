@@ -35,13 +35,6 @@ pub const DEFAULT_TODO_LIST: &str = "Mostalgia";
 const ENV_CLIENT_ID: &str = "MOSTALGIA_MS_CLIENT_ID";
 const ENV_TENANT: &str = "MOSTALGIA_MS_TENANT";
 
-/// What a meeting does when it begins (calendar sync on).
-pub const AUTO_START_OFF: &str = "off";
-/// A notification with a button to start recording.
-pub const AUTO_START_ASK: &str = "ask";
-/// Start recording right away.
-pub const AUTO_START_ON: &str = "start";
-
 /// The Teams settings (part of [`crate::config::Config`]).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -54,8 +47,6 @@ pub struct TeamsConfig {
     pub calendar_sync: bool,
     /// Name a recording after the meeting it belongs to.
     pub auto_name: bool,
-    /// [`AUTO_START_OFF`], [`AUTO_START_ASK`] or [`AUTO_START_ON`].
-    pub auto_start: String,
     /// Attendee names and words from the invite as hints for Whisper,
     /// and attendees as speaker-name suggestions.
     pub attendee_hints: bool,
@@ -84,7 +75,6 @@ impl Default for TeamsConfig {
             tenant: DEFAULT_TENANT.into(),
             calendar_sync: true,
             auto_name: true,
-            auto_start: AUTO_START_ASK.into(),
             attendee_hints: true,
             auto_post_summary: false,
             post_action_items: true,

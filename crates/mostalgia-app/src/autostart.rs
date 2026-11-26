@@ -27,22 +27,7 @@ pub struct AutoStart {
     pub prompt: Option<String>,
     /// The call whose start started the current recording.
     started_for: Option<String>,
-    /// The prompt is for a Teams meeting from the calendar, not a call.
-    pub prompt_is_meeting: bool,
-    /// The current recording was started for a Teams meeting from the
-    /// calendar; the call app seen during it (its end stops the recording,
-    /// like a detected call's would).
-    meeting_recording: bool,
-    meeting_call: Option<String>,
-    /// Teams meetings beginning (from the calendar watcher).
-    meetings: Receiver<TeamsSignal>,
     stop: Arc<AtomicBool>,
-}
-
-/// What the Teams calendar watcher reports.
-enum TeamsSignal {
-    /// A Teams meeting begins now.
-    Starting(mostalgia_core::teams::Event),
 }
 
 impl Default for AutoStart {
@@ -63,12 +48,11 @@ impl AutoStart {
         let (tx, events) = crossbeam_channel::unbounded();
         let (clicked_tx, clicked) = crossbeam_channel::unbounded();
         let stop = Arc::new(AtomicBool::new(false));
-        let (meetings_tx, meetings) = crossbeam_channel::unbounded();
         // Headless renders (the screenshots example) set this.
         if std::env::var_os("MOSTALGIA_NO_CALLWATCH").is_none() {
             callwatch::spawn(tx, stop.clone());
             let stop = stop.clone();
-            std::thread::Builder::new().name("teams-calendar".into()).spawn(move || teams_watch(meetings_tx, stop)).ok();
+            std::thread::Builder::new().name("teams-calendar".into()).spawn(move || teams_watch(stop)).ok();
         }
         Self {
             events,
@@ -76,10 +60,6 @@ impl AutoStart {
             clicked_tx,
             prompt: None,
             started_for: None,
-            prompt_is_meeting: false,
-            meeting_recording: false,
-            meeting_call: None,
-            meetings,
             stop,
         }
     }
@@ -92,44 +72,11 @@ impl AutoStart {
             // The recording we started has been stopped by hand meanwhile.
             self.started_for = None;
         }
-        if !active && self.meeting_recording && self.prompt.is_none() {
-            self.meeting_recording = false;
-            self.meeting_call = None;
-        }
         for app in self.clicked.try_iter().collect::<Vec<_>>() {
             if !active && actions.is_empty() {
                 self.prompt = None;
-                // A meeting from the calendar has no call to end it.
-                if std::mem::take(&mut self.prompt_is_meeting) {
-                    self.meeting_recording = true;
-                } else {
-                    self.started_for = Some(app.clone());
-                }
+                self.started_for = Some(app.clone());
                 actions.push(Action::Start(app));
-            }
-        }
-        for signal in self.meetings.try_iter().collect::<Vec<_>>() {
-            let TeamsSignal::Starting(event) = signal;
-            let mode = Config::load().teams.auto_start;
-            if active || !actions.is_empty() || mode == mostalgia_core::teams::AUTO_START_OFF {
-                continue;
-            }
-            let title = event.recording_title();
-            if mode == mostalgia_core::teams::AUTO_START_ON {
-                notify(tr("Aufnahme gestartet"), &trf("Die Teams-Besprechung „{}“ beginnt – Mostalgia nimmt auf.", &[&title]), None);
-                // A call prompt for the same meeting is answered by this.
-                self.prompt = None;
-                self.prompt_is_meeting = false;
-                self.meeting_recording = true;
-                actions.push(Action::Start(title));
-            } else if self.prompt.is_none() {
-                self.prompt = Some(title.clone());
-                self.prompt_is_meeting = true;
-                notify(
-                    &trf("Teams-Besprechung: {}", &[&title]),
-                    tr("Sie beginnt jetzt. Soll Mostalgia aufnehmen?"),
-                    Some((title, self.clicked_tx.clone())),
-                );
             }
         }
         for event in self.events.try_iter().collect::<Vec<_>>() {
@@ -137,16 +84,7 @@ impl AutoStart {
             match event {
                 CallEvent::Started { app } => {
                     remember_app(&app);
-                    // The call of the Teams meeting we're recording.
-                    let busy = active || !actions.is_empty();
-                    if busy && self.meeting_recording && self.meeting_call.is_none() {
-                        self.meeting_call = Some(app.clone());
-                    }
-                    if config.call_autostart == "aus" || config.call_apps_ignored.contains(&app) || busy {
-                        continue;
-                    }
-                    // Already asking about the Teams meeting this call is.
-                    if self.prompt_is_meeting && self.prompt.is_some() {
+                    if config.call_autostart == "aus" || config.call_apps_ignored.contains(&app) || active {
                         continue;
                     }
                     if config.call_autostart == "automatisch" {
@@ -163,14 +101,6 @@ impl AutoStart {
                     }
                 }
                 CallEvent::Ended { app } => {
-                    if self.meeting_call.as_deref() == Some(app.as_str()) {
-                        self.meeting_call = None;
-                        self.meeting_recording = false;
-                        if config.call_stop_auto && active && !actions.contains(&Action::Stop) {
-                            notify(tr("Aufnahme beendet"), &trf("Der Anruf in {} ist vorbei.", &[&app]), None);
-                            actions.push(Action::Stop);
-                        }
-                    }
                     if self.prompt.as_deref() == Some(app.as_str()) {
                         self.prompt = None;
                     }
@@ -190,24 +120,21 @@ impl AutoStart {
     /// "Aufnahme starten" in the in-app prompt.
     pub fn accept(&mut self) -> Option<Action> {
         let app = self.prompt.take()?;
-        if std::mem::take(&mut self.prompt_is_meeting) {
-            self.meeting_recording = true;
-        } else {
-            self.started_for = Some(app.clone());
-        }
+        self.started_for = Some(app.clone());
         Some(Action::Start(app))
     }
 
     /// "Ignorieren" in the in-app prompt.
     pub fn dismiss(&mut self) {
         self.prompt = None;
-        self.prompt_is_meeting = false;
     }
 }
 
-/// Reads the Teams calendar every few minutes while signed in, reports
-/// meetings as they begin, and shows the brief before them.
-fn teams_watch(tx: crossbeam_channel::Sender<TeamsSignal>, stop: Arc<AtomicBool>) {
+/// Reads the Teams calendar every few minutes while signed in (recordings
+/// started for a detected call are linked to the meeting from it) and
+/// shows the brief before a meeting. It never starts a recording: that
+/// stays with call detection, so meetings you don't join aren't recorded.
+fn teams_watch(stop: Arc<AtomicBool>) {
     use std::collections::HashSet;
     use std::time::{Duration, Instant};
 
@@ -215,7 +142,6 @@ fn teams_watch(tx: crossbeam_channel::Sender<TeamsSignal>, stop: Arc<AtomicBool>
     use mostalgia_core::teams::{brief, ops};
 
     const REFRESH: Duration = Duration::from_secs(5 * 60);
-    let mut announced: HashSet<String> = HashSet::new();
     let mut briefed: HashSet<String> = HashSet::new();
     let mut refreshed: Option<Instant> = None;
     let mut last_error = String::new();
@@ -242,12 +168,9 @@ fn teams_watch(tx: crossbeam_channel::Sender<TeamsSignal>, stop: Arc<AtomicBool>
                 if cfg.brief_minutes > 0
                     && until > chrono::Duration::minutes(1)
                     && until <= chrono::Duration::minutes(cfg.brief_minutes as i64)
-                    && briefed.insert(key.clone())
+                    && briefed.insert(key)
                 {
                     notify_brief(&cfg, event);
-                }
-                if until <= chrono::Duration::minutes(1) && until >= chrono::Duration::minutes(-2) && announced.insert(key) {
-                    let _ = tx.send(TeamsSignal::Starting(event.clone()));
                 }
             }
         }

@@ -232,20 +232,6 @@ impl TeamsSettings {
         let theme = cx.theme().clone();
         let row = |label: &str, hint: Option<&str>, control: AnyElement| crate::settings::settings_row(label, hint, control, &theme);
         let t = self.teams.clone();
-        let mode = |id: &'static str, label: &'static str, value: &'static str, cx: &mut Context<Self>| {
-            Button::new(id)
-                .small()
-                .label(tr(label))
-                .when(t.auto_start == value, |b| b.primary())
-                .when(t.auto_start != value, |b| b.ghost())
-                .on_click(cx.listener(move |this, _, _, cx| this.set(cx, |t| t.auto_start = value.into())))
-        };
-        let modes = h_flex()
-            .gap_1()
-            .child(mode("teams-start-off", "Aus", teams::AUTO_START_OFF, cx))
-            .child(mode("teams-start-ask", "Fragen", teams::AUTO_START_ASK, cx))
-            .child(mode("teams-start-on", "Automatisch", teams::AUTO_START_ON, cx))
-            .into_any_element();
         let mut card = ui::card(cx)
             .child(div().font_semibold().child(tr("Kalender & Aufnahmen")))
             .child(row(
@@ -258,7 +244,6 @@ impl TeamsSettings {
                 Some(tr("Die Aufnahme heißt wie der Termin, auch nach der Zusammenfassung.")),
                 self.switch("teams-auto-name", t.auto_name, cx, |t, v| t.auto_name = v),
             ))
-            .child(row(tr("Wenn eine Besprechung beginnt"), Some(tr("Fragen zeigt eine Benachrichtigung mit Aufnahme-Knopf.")), modes))
             .child(row(
                 tr("Teilnehmende als Hinweise"),
                 Some(tr("Namen und Begriffe aus der Einladung helfen Whisper; im Zweiergespräch bekommt „Andere“ den Namen.")),
