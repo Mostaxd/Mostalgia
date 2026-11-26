@@ -27,7 +27,17 @@ pub struct AutoStart {
     pub prompt: Option<String>,
     /// The call whose start started the current recording.
     started_for: Option<String>,
+    /// The prompt is for a Teams meeting from the calendar, not a call.
+    pub prompt_is_meeting: bool,
+    /// Teams meetings beginning (from the calendar watcher).
+    meetings: Receiver<TeamsSignal>,
     stop: Arc<AtomicBool>,
+}
+
+/// What the Teams calendar watcher reports.
+enum TeamsSignal {
+    /// A Teams meeting begins now.
+    Starting(mostalgia_core::teams::Event),
 }
 
 impl Default for AutoStart {
@@ -48,9 +58,12 @@ impl AutoStart {
         let (tx, events) = crossbeam_channel::unbounded();
         let (clicked_tx, clicked) = crossbeam_channel::unbounded();
         let stop = Arc::new(AtomicBool::new(false));
+        let (meetings_tx, meetings) = crossbeam_channel::unbounded();
         // Headless renders (the screenshots example) set this.
         if std::env::var_os("MOSTALGIA_NO_CALLWATCH").is_none() {
             callwatch::spawn(tx, stop.clone());
+            let stop = stop.clone();
+            std::thread::Builder::new().name("teams-calendar".into()).spawn(move || teams_watch(meetings_tx, stop)).ok();
         }
         Self {
             events,
@@ -58,6 +71,8 @@ impl AutoStart {
             clicked_tx,
             prompt: None,
             started_for: None,
+            prompt_is_meeting: false,
+            meetings,
             stop,
         }
     }
@@ -73,8 +88,31 @@ impl AutoStart {
         for app in self.clicked.try_iter().collect::<Vec<_>>() {
             if !active && actions.is_empty() {
                 self.prompt = None;
-                self.started_for = Some(app.clone());
+                // A meeting from the calendar has no call to end it.
+                if !std::mem::take(&mut self.prompt_is_meeting) {
+                    self.started_for = Some(app.clone());
+                }
                 actions.push(Action::Start(app));
+            }
+        }
+        for signal in self.meetings.try_iter().collect::<Vec<_>>() {
+            let TeamsSignal::Starting(event) = signal;
+            let mode = Config::load().teams.auto_start;
+            if active || !actions.is_empty() || mode == mostalgia_core::teams::AUTO_START_OFF {
+                continue;
+            }
+            let title = event.recording_title();
+            if mode == mostalgia_core::teams::AUTO_START_ON {
+                notify(tr("Aufnahme gestartet"), &trf("Die Teams-Besprechung „{}“ beginnt – Mostalgia nimmt auf.", &[&title]), None);
+                actions.push(Action::Start(title));
+            } else if self.prompt.is_none() {
+                self.prompt = Some(title.clone());
+                self.prompt_is_meeting = true;
+                notify(
+                    &trf("Teams-Besprechung: {}", &[&title]),
+                    tr("Sie beginnt jetzt. Soll Mostalgia aufnehmen?"),
+                    Some((title, self.clicked_tx.clone())),
+                );
             }
         }
         for event in self.events.try_iter().collect::<Vec<_>>() {
@@ -83,6 +121,10 @@ impl AutoStart {
                 CallEvent::Started { app } => {
                     remember_app(&app);
                     if config.call_autostart == "aus" || config.call_apps_ignored.contains(&app) || active {
+                        continue;
+                    }
+                    // Already asking about the Teams meeting this call is.
+                    if self.prompt_is_meeting && self.prompt.is_some() {
                         continue;
                     }
                     if config.call_autostart == "automatisch" {
@@ -118,13 +160,92 @@ impl AutoStart {
     /// "Aufnahme starten" in the in-app prompt.
     pub fn accept(&mut self) -> Option<Action> {
         let app = self.prompt.take()?;
-        self.started_for = Some(app.clone());
+        if !std::mem::take(&mut self.prompt_is_meeting) {
+            self.started_for = Some(app.clone());
+        }
         Some(Action::Start(app))
     }
 
     /// "Ignorieren" in the in-app prompt.
     pub fn dismiss(&mut self) {
         self.prompt = None;
+        self.prompt_is_meeting = false;
+    }
+}
+
+/// Reads the Teams calendar every few minutes while signed in, reports
+/// meetings as they begin, and shows the brief before them.
+fn teams_watch(tx: crossbeam_channel::Sender<TeamsSignal>, stop: Arc<AtomicBool>) {
+    use std::collections::HashSet;
+    use std::time::{Duration, Instant};
+
+    use chrono::Utc;
+    use mostalgia_core::teams::{brief, ops};
+
+    const REFRESH: Duration = Duration::from_secs(5 * 60);
+    let mut announced: HashSet<String> = HashSet::new();
+    let mut briefed: HashSet<String> = HashSet::new();
+    let mut refreshed: Option<Instant> = None;
+    let mut last_error = String::new();
+    while !stop.load(Ordering::Relaxed) {
+        let cfg = Config::load().teams;
+        if ops::calendar_ready(&cfg) {
+            if refreshed.is_none_or(|t| t.elapsed() > REFRESH) {
+                refreshed = Some(Instant::now());
+                match ops::refresh_events(&cfg, 12) {
+                    Ok(_) => last_error.clear(),
+                    Err(e) => {
+                        let e = format!("{e:#}");
+                        if e != last_error {
+                            eprintln!("[mostalgia] teams calendar: {e}");
+                            last_error = e;
+                        }
+                    }
+                }
+            }
+            let now = Utc::now();
+            for event in ops::cached_events().unwrap_or_default().iter().filter(|e| e.is_teams()) {
+                let key = format!("{}@{}", event.id, event.start);
+                let until = event.start - now;
+                if cfg.brief_minutes > 0
+                    && until > chrono::Duration::minutes(1)
+                    && until <= chrono::Duration::minutes(cfg.brief_minutes as i64)
+                    && briefed.insert(key.clone())
+                {
+                    notify_brief(&cfg, event);
+                }
+                if until <= chrono::Duration::minutes(1) && until >= chrono::Duration::minutes(-2) && announced.insert(key) {
+                    let _ = tx.send(TeamsSignal::Starting(event.clone()));
+                }
+            }
+        }
+        for _ in 0..30 {
+            if stop.load(Ordering::Relaxed) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    }
+
+    fn notify_brief(cfg: &mostalgia_core::teams::TeamsConfig, event: &mostalgia_core::teams::Event) {
+        let minutes = (event.start - Utc::now()).num_minutes().max(1);
+        let mut lines: Vec<String> = Vec::new();
+        let people = event.people_names(&cfg.account_email);
+        if !people.is_empty() {
+            lines.push(trf("Mit {}", &[&people.join(", ")]));
+        }
+        if let Ok(store) = mostalgia_core::store::Store::open(&mostalgia_core::paths::database())
+            && let Ok(b) = brief::build(&store, event, &cfg.account_email)
+        {
+            let open = b.open_actions();
+            if !open.is_empty() {
+                lines.push(trf("Noch offen vom letzten Mal: {}", &[&open.iter().map(|a| a.task.as_str()).collect::<Vec<_>>().join("; ")]));
+            }
+        }
+        if let Some(agenda) = event.body.lines().find(|l| !l.trim().is_empty()) {
+            lines.push(agenda.trim().chars().take(120).collect());
+        }
+        notify(&trf("In {} Min: {}", &[&minutes, &event.recording_title()]), &lines.join("\n"), None);
     }
 }
 

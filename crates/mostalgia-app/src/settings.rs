@@ -106,6 +106,7 @@ pub struct SettingsView {
     library_error: Option<String>,
     /// Terms and fix rules for transcription.
     glossary: Glossary,
+    teams: Entity<crate::teams_settings::TeamsSettings>,
     glossary_term: Entity<InputState>,
     glossary_from: Entity<InputState>,
     glossary_to: Entity<InputState>,
@@ -217,11 +218,12 @@ enum Category {
     Darstellung,
     Begleiterin,
     Speicher,
+    Teams,
     System,
 }
 
 impl Category {
-    const ALL: [Category; 8] = [
+    const ALL: [Category; 9] = [
         Category::Aufnahme,
         Category::Sprecher,
         Category::Ki,
@@ -229,6 +231,7 @@ impl Category {
         Category::Darstellung,
         Category::Begleiterin,
         Category::Speicher,
+        Category::Teams,
         Category::System,
     ];
 
@@ -241,6 +244,7 @@ impl Category {
             Category::Darstellung => "darstellung",
             Category::Begleiterin => "begleiterin",
             Category::Speicher => "speicher",
+            Category::Teams => "teams",
             Category::System => "system",
         }
     }
@@ -254,6 +258,7 @@ impl Category {
             Category::Darstellung => "Darstellung",
             Category::Begleiterin => "Begleiterin",
             Category::Speicher => "Speicher & Export",
+            Category::Teams => "Microsoft Teams",
             Category::System => "Tastenkürzel & System",
         })
     }
@@ -267,6 +272,7 @@ impl Category {
             Category::Darstellung => "Design, Schrift und Animationen",
             Category::Begleiterin => "Wer mitschreibt, wo sie steht und wie sie Notizen macht",
             Category::Speicher => "Wo Aufnahmen liegen und wie exportiert wird",
+            Category::Teams => "Anmeldung, Kalender und Ergebnisse an Teams",
             Category::System => "Tastenkürzel, Tray-Symbol und Systeminfo",
         })
     }
@@ -280,6 +286,7 @@ impl Category {
             Category::Darstellung => IconName::Palette,
             Category::Begleiterin => IconName::FaceSlightlySmiling,
             Category::Speicher => IconName::FolderOpen,
+            Category::Teams => IconName::Calendar,
             Category::System => IconName::Keyboard,
         }
     }
@@ -428,6 +435,7 @@ impl SettingsView {
                 this.add_glossary_fix(window, cx);
             }
         });
+        let teams = cx.new(|cx| crate::teams_settings::TeamsSettings::new(window, cx));
         let config = Config::load();
         let category = Category::parse(&config.settings_category);
         let mut this = Self {
@@ -470,6 +478,7 @@ impl SettingsView {
             library_preview: None,
             library_error: None,
             glossary: Glossary::load(),
+            teams,
             glossary_term,
             glossary_from,
             glossary_to,
@@ -500,12 +509,12 @@ impl SettingsView {
     }
 
     /// Opens a category by id ("aufnahme", "sprecher", "ki", "ki-funktionen",
-    /// "darstellung", "begleiterin", "speicher", "system").
+    /// "darstellung", "begleiterin", "speicher", "teams", "system").
     pub fn show_category(&mut self, id: &str, cx: &mut Context<Self>) {
         self.set_category(Category::parse(id), cx);
     }
 
-    pub const CATEGORY_IDS: [&'static str; 8] = ["aufnahme", "sprecher", "ki", "ki-funktionen", "darstellung", "begleiterin", "speicher", "system"];
+    pub const CATEGORY_IDS: [&'static str; 9] = ["aufnahme", "sprecher", "ki", "ki-funktionen", "darstellung", "begleiterin", "speicher", "teams", "system"];
 
     fn set_category(&mut self, category: Category, cx: &mut Context<Self>) {
         self.category = category;
@@ -516,6 +525,7 @@ impl SettingsView {
         self.config.companion_hidden = disk.companion_hidden;
         // Answered in the cleanup dialog meanwhile.
         self.config.audio_cleanup_confirmed = disk.audio_cleanup_confirmed;
+        self.config.teams = disk.teams;
         if let Err(e) = self.config.save() {
             eprintln!("[mostalgia] saving settings: {e:#}");
         }
@@ -561,6 +571,8 @@ impl SettingsView {
         self.config.companion_hidden = disk.companion_hidden;
         // Picked in the recording screen too.
         self.config.recent_languages = disk.recent_languages;
+        // The Teams card saves its own part.
+        self.config.teams = disk.teams;
         if let Err(e) = self.config.save() {
             eprintln!("[mostalgia] saving settings: {e:#}");
         }
@@ -3403,6 +3415,14 @@ impl Render for SettingsView {
             wide: true,
             element: self.render_glossary(cx).into_any_element(),
         });
+        // ── Microsoft Teams ──
+        cards.push(Card {
+            category: Category::Teams,
+            title: "Microsoft Teams",
+            keywords: "teams microsoft office 365 outlook kalender calendar anmelden sign in login konto account entra azure client id mandant tenant besprechung meeting chat posten post to do aufgaben tasks transkript transcript briefing brief teilnehmende attendees",
+            wide: true,
+            element: self.teams.clone().into_any_element(),
+        });
         // ── Darstellung ──
         let ui_lang = self.config.ui_language.clone();
         let lang_button = |id: &'static str, label: &'static str, value: &'static str, cx: &mut Context<Self>| {
@@ -4123,7 +4143,7 @@ impl SettingsView {
     }
 }
 
-fn settings_row(label: &str, hint: Option<&str>, control: AnyElement, theme: &gpui_kit::component::Theme) -> Div {
+pub(crate) fn settings_row(label: &str, hint: Option<&str>, control: AnyElement, theme: &gpui_kit::component::Theme) -> Div {
     h_flex()
         .w_full()
         .flex_wrap()

@@ -86,6 +86,34 @@ pub fn after_summary(cfg: &TeamsConfig, store: &Store, meeting_id: i64) -> Resul
     Ok(true)
 }
 
+/// The languages Whisper may pick from for a recording of `event`, when
+/// the invite helps: with language detection on and no meeting languages
+/// set, the invite's language plus the UI language and English (so a
+/// German call with an English invite still works). `None`: leave the
+/// settings as they are.
+pub fn meeting_languages(event: &Event, config: &crate::config::Config) -> Option<Vec<String>> {
+    if config.language != "auto" || !config.meeting_languages.is_empty() || !config.teams.attendee_hints {
+        return None;
+    }
+    let hint = event.language_hint()?;
+    let mut langs = vec![hint.to_string()];
+    for l in [config.ui_language.as_str(), "en"] {
+        if (l.len() == 2) && !langs.iter().any(|x| x == l) {
+            langs.push(l.to_string());
+        }
+    }
+    Some(langs)
+}
+
+/// The event a recording starting now belongs to, from the remembered
+/// calendar (no network).
+pub fn current_event(cfg: &TeamsConfig) -> Option<Event> {
+    if !calendar_ready(cfg) {
+        return None;
+    }
+    calendar::event_for_recording(&cached_events()?, Utc::now()).cloned()
+}
+
 /// What [`after_save`] changed.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Applied {
@@ -375,6 +403,18 @@ mod tests {
         TeamsLink::new(one_to_one(), "me@x.de", "Mosta").save(&dir).unwrap();
         let applied = after_save(&cfg(), &lib.store, id).unwrap();
         assert_eq!(applied.named, None);
+    }
+
+    #[test]
+    fn invite_language_narrows_detection() {
+        let mut config = crate::config::Config { language: "auto".into(), ui_language: "de".into(), ..Default::default() };
+        let event = Event { subject: "Weekly".into(), body: "Hi all, this is the agenda for our meeting. Please add your topics.".into(), ..Event::default() };
+        assert_eq!(meeting_languages(&event, &config).unwrap(), ["en", "de"]);
+        config.meeting_languages = vec!["de".into(), "ar".into()];
+        assert_eq!(meeting_languages(&event, &config), None, "the user's own choice wins");
+        config.meeting_languages.clear();
+        config.language = "de".into();
+        assert_eq!(meeting_languages(&event, &config), None);
     }
 
     #[test]

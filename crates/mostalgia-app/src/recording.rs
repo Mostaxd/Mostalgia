@@ -605,7 +605,16 @@ impl RecordingView {
         if let Err(e) = engine.set_language(&self.config.language) {
             return self.fail_start(e, cx);
         }
-        engine.set_meeting_languages(&self.config.meeting_languages);
+        // The Teams meeting being recorded, if the calendar knows it.
+        let teams_cfg = Config::load().teams;
+        let meeting = mostalgia_core::teams::ops::current_event(&teams_cfg);
+        let languages = meeting
+            .as_ref()
+            .and_then(|e| mostalgia_core::teams::ops::meeting_languages(e, &self.config))
+            .unwrap_or_else(|| self.config.meeting_languages.clone());
+        engine.set_meeting_languages(&languages);
+        let terms = meeting.as_ref().filter(|_| teams_cfg.attendee_hints).map(|e| e.hint_terms(&teams_cfg.account_email));
+        mostalgia_core::glossary::set_meeting_terms(terms.unwrap_or_default());
         self.engine_label = Some((engine.label().into(), engine.is_cloud()));
         let cfg = RecordConfig {
             vad_model: self.config.vad_model_path(),
@@ -622,6 +631,15 @@ impl RecordingView {
         let (tx, rx) = crossbeam_channel::unbounded();
         match Recorder::start(cfg, engine, tx) {
             Ok(recorder) => {
+                // Link it to its Teams meeting (names it when it's saved).
+                if mostalgia_core::teams::ops::calendar_ready(&teams_cfg) {
+                    let dir = recorder.dir().to_path_buf();
+                    std::thread::spawn(move || {
+                        if let Err(e) = mostalgia_core::teams::ops::link_new_recording(&teams_cfg, &dir, chrono::Utc::now()) {
+                            eprintln!("[mostalgia] teams: {e:#}");
+                        }
+                    });
+                }
                 self.follow = true;
                 let sources = self.sources();
                 self.phase = Phase::Recording(Box::new(Live::new(Some(recorder), rx, self.config.live_engine.clone(), sources)));
