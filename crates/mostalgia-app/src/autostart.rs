@@ -29,6 +29,11 @@ pub struct AutoStart {
     started_for: Option<String>,
     /// The prompt is for a Teams meeting from the calendar, not a call.
     pub prompt_is_meeting: bool,
+    /// The current recording was started for a Teams meeting from the
+    /// calendar; the call app seen during it (its end stops the recording,
+    /// like a detected call's would).
+    meeting_recording: bool,
+    meeting_call: Option<String>,
     /// Teams meetings beginning (from the calendar watcher).
     meetings: Receiver<TeamsSignal>,
     stop: Arc<AtomicBool>,
@@ -72,6 +77,8 @@ impl AutoStart {
             prompt: None,
             started_for: None,
             prompt_is_meeting: false,
+            meeting_recording: false,
+            meeting_call: None,
             meetings,
             stop,
         }
@@ -85,11 +92,17 @@ impl AutoStart {
             // The recording we started has been stopped by hand meanwhile.
             self.started_for = None;
         }
+        if !active && self.meeting_recording && self.prompt.is_none() {
+            self.meeting_recording = false;
+            self.meeting_call = None;
+        }
         for app in self.clicked.try_iter().collect::<Vec<_>>() {
             if !active && actions.is_empty() {
                 self.prompt = None;
                 // A meeting from the calendar has no call to end it.
-                if !std::mem::take(&mut self.prompt_is_meeting) {
+                if std::mem::take(&mut self.prompt_is_meeting) {
+                    self.meeting_recording = true;
+                } else {
                     self.started_for = Some(app.clone());
                 }
                 actions.push(Action::Start(app));
@@ -104,6 +117,10 @@ impl AutoStart {
             let title = event.recording_title();
             if mode == mostalgia_core::teams::AUTO_START_ON {
                 notify(tr("Aufnahme gestartet"), &trf("Die Teams-Besprechung „{}“ beginnt – Mostalgia nimmt auf.", &[&title]), None);
+                // A call prompt for the same meeting is answered by this.
+                self.prompt = None;
+                self.prompt_is_meeting = false;
+                self.meeting_recording = true;
                 actions.push(Action::Start(title));
             } else if self.prompt.is_none() {
                 self.prompt = Some(title.clone());
@@ -120,7 +137,12 @@ impl AutoStart {
             match event {
                 CallEvent::Started { app } => {
                     remember_app(&app);
-                    if config.call_autostart == "aus" || config.call_apps_ignored.contains(&app) || active {
+                    // The call of the Teams meeting we're recording.
+                    let busy = active || !actions.is_empty();
+                    if busy && self.meeting_recording && self.meeting_call.is_none() {
+                        self.meeting_call = Some(app.clone());
+                    }
+                    if config.call_autostart == "aus" || config.call_apps_ignored.contains(&app) || busy {
                         continue;
                     }
                     // Already asking about the Teams meeting this call is.
@@ -141,6 +163,14 @@ impl AutoStart {
                     }
                 }
                 CallEvent::Ended { app } => {
+                    if self.meeting_call.as_deref() == Some(app.as_str()) {
+                        self.meeting_call = None;
+                        self.meeting_recording = false;
+                        if config.call_stop_auto && active && !actions.contains(&Action::Stop) {
+                            notify(tr("Aufnahme beendet"), &trf("Der Anruf in {} ist vorbei.", &[&app]), None);
+                            actions.push(Action::Stop);
+                        }
+                    }
                     if self.prompt.as_deref() == Some(app.as_str()) {
                         self.prompt = None;
                     }
@@ -160,7 +190,9 @@ impl AutoStart {
     /// "Aufnahme starten" in the in-app prompt.
     pub fn accept(&mut self) -> Option<Action> {
         let app = self.prompt.take()?;
-        if !std::mem::take(&mut self.prompt_is_meeting) {
+        if std::mem::take(&mut self.prompt_is_meeting) {
+            self.meeting_recording = true;
+        } else {
             self.started_for = Some(app.clone());
         }
         Some(Action::Start(app))
