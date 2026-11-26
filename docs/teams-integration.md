@@ -85,3 +85,20 @@ and `MOSTALGIA_MS_TENANT` win over the settings.
 - Both have switches (Settings → Microsoft Teams, `teams setup --chat`,
   `--series`). Turning on the chat after signing in needs a new sign-in for
   the `Chat.Read` permission.
+
+## Trying it without a Microsoft account
+
+`scripts/fake-microsoft.py` is a small stand-in for the Microsoft sign-in
+and the Graph calls Mostalgia makes (a weekly series, a meeting chat, a
+Teams transcript, To Do). Start it and point Mostalgia at it; only
+loopback addresses are accepted, so no token can go anywhere else:
+
+```sh
+python3 scripts/fake-microsoft.py 8766 /tmp/fake-ms.log &
+export MOSTALGIA_MS_TEST_SERVER=http://127.0.0.1:8766
+mostalgia teams setup --client-id 11111111-2222-3333-4444-555555555555
+mostalgia teams login     # open the printed address; it signs in at once
+mostalgia teams upcoming
+```
+
+The log file lists every request Mostalgia sent.

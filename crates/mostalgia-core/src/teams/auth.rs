@@ -62,7 +62,8 @@ pub fn random_token(bytes: usize) -> Result<String> {
 }
 
 fn authority(cfg: &TeamsConfig) -> String {
-    format!("https://login.microsoftonline.com/{}/oauth2/v2.0", cfg.tenant())
+    let root = super::test_server().unwrap_or_else(|| "https://login.microsoftonline.com".into());
+    format!("{root}/{}/oauth2/v2.0", cfg.tenant())
 }
 
 fn require_client_id(cfg: &TeamsConfig) -> Result<String> {

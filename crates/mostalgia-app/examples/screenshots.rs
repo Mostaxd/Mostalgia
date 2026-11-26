@@ -118,6 +118,43 @@ fn main() {
             println!("{}", path.display());
         };
 
+        // TEAMS=<id>: a meeting linked to a Teams series — reads its chat
+        // (MOSTALGIA_MS_TEST_SERVER for a local stand-in), then opens the
+        // last meeting of the series from it.
+        if let Ok(id) = std::env::var("TEAMS") {
+            let id: i64 = id.trim().parse().expect("TEAMS=<meeting id>");
+            cx.update_window(handle, |_, window, cx| view.update(cx, |app, cx| app.open_meeting(id, window, cx))).unwrap();
+            shot("22-teams-meeting", &mut cx);
+            cx.update_window(handle, |_, window, cx| {
+                if let Some(m) = view.read(cx).meeting_view() {
+                    m.update(cx, |m, cx| m.teams_do(&mostalgia_app::meeting::TeamsDo(5), window, cx));
+                }
+            })
+            .unwrap();
+            for _ in 0..30 {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                cx.run_until_parked();
+            }
+            shot("22b-teams-chat-read", &mut cx);
+            let series: Vec<(i64, String)> = cx.update(|cx| {
+                view.read(cx).meeting_view().map(|m| m.read(cx).teams_series().iter().map(|s| (s.meeting_id, s.title.clone())).collect()).unwrap_or_default()
+            });
+            println!("series of #{id}: {series:?}");
+            if let Some((prev, _)) = series.first() {
+                cx.update_window(handle, |_, _, cx| {
+                    if let Some(m) = view.read(cx).meeting_view() {
+                        m.update(cx, |m, cx| m.open_series(*prev, cx));
+                    }
+                })
+                .unwrap();
+                cx.run_until_parked();
+                let open = cx.update(|cx| view.read(cx).meeting_view().map(|m| m.read(cx).id));
+                println!("after open_series: showing #{open:?}");
+                shot("22c-teams-series-previous", &mut cx);
+            }
+            continue;
+        }
+
         // TEXTIMPORT=<ids>: only "meeting from text" — the dialog, empty and
         // filled with a Teams-style transcript, then the given imported
         // meetings (summary, transcript, notes).

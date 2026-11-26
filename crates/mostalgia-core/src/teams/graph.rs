@@ -138,11 +138,12 @@ pub struct Graph {
 
 impl Graph {
     pub fn new(http: Box<dyn Http>, token: TokenFn) -> Self {
-        Self { http, token, root: GRAPH_ROOT.into() }
+        let root = super::test_server().map_or_else(|| GRAPH_ROOT.to_string(), |s| format!("{s}/v1.0"));
+        Self { http, token, root }
     }
 
     fn url(&self, path: &str) -> String {
-        if path.starts_with("https://") { path.to_string() } else { format!("{}{path}", self.root) }
+        if path.starts_with("https://") || path.starts_with("http://") { path.to_string() } else { format!("{}{path}", self.root) }
     }
 
     fn call(&self, method: Method, path: &str, body: Option<Value>, extra: &[(&str, &str)]) -> Result<Response> {

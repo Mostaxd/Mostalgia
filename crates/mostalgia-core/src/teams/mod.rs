@@ -35,6 +35,24 @@ pub const DEFAULT_TODO_LIST: &str = "Mostalgia";
 /// touching the settings).
 const ENV_CLIENT_ID: &str = "MOSTALGIA_MS_CLIENT_ID";
 const ENV_TENANT: &str = "MOSTALGIA_MS_TENANT";
+/// A stand-in for Microsoft on this computer, for trying the whole flow
+/// without an account: sign-in goes to `<it>/<tenant>/oauth2/v2.0`, Graph
+/// to `<it>/v1.0`. Only loopback addresses count, so it can't send a
+/// token anywhere else.
+const ENV_TEST_SERVER: &str = "MOSTALGIA_MS_TEST_SERVER";
+
+/// The local test server from [`ENV_TEST_SERVER`], if set to a loopback URL.
+pub(crate) fn test_server() -> Option<String> {
+    loopback_url(&std::env::var(ENV_TEST_SERVER).ok()?)
+}
+
+fn loopback_url(v: &str) -> Option<String> {
+    let u = url::Url::parse(v.trim()).ok()?;
+    let local = matches!(u.host(), Some(url::Host::Domain("localhost")))
+        || matches!(u.host(), Some(url::Host::Ipv4(ip)) if ip.is_loopback())
+        || matches!(u.host(), Some(url::Host::Ipv6(ip)) if ip.is_loopback());
+    (u.scheme() == "http" && local).then(|| v.trim().trim_end_matches('/').to_string())
+}
 
 /// The Teams settings (part of [`crate::config::Config`]).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -208,6 +226,16 @@ mod tests {
         assert_eq!(c.tenant, DEFAULT_TENANT);
         assert_eq!(c.todo_list(), DEFAULT_TODO_LIST);
         assert!(c.calendar_sync);
+    }
+
+    #[test]
+    fn test_server_is_loopback_only() {
+        assert_eq!(loopback_url("http://127.0.0.1:9/").as_deref(), Some("http://127.0.0.1:9"));
+        assert_eq!(loopback_url("http://localhost:9").as_deref(), Some("http://localhost:9"));
+        assert_eq!(loopback_url("http://[::1]:9").as_deref(), Some("http://[::1]:9"));
+        assert_eq!(loopback_url("https://evil.example"), None);
+        assert_eq!(loopback_url("http://127.0.0.1.evil.example"), None);
+        assert_eq!(loopback_url("http://10.0.0.1:9"), None);
     }
 
     #[test]

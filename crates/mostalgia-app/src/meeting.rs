@@ -322,7 +322,7 @@ impl MeetingView {
 
     /// Runs a Teams action (see [`TeamsDo`]) in the background and shows
     /// how it went.
-    fn teams_do(&mut self, action: &TeamsDo, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn teams_do(&mut self, action: &TeamsDo, window: &mut Window, cx: &mut Context<Self>) {
         use mostalgia_core::teams::{self, link::TeamsLink, ops};
         let Some(m) = &self.meeting else { return };
         if self.teams_busy {
@@ -399,6 +399,16 @@ impl MeetingView {
             .ok();
         })
         .detach();
+    }
+
+    /// Opens another meeting of the same Teams series.
+    pub fn open_series(&mut self, id: i64, cx: &mut Context<Self>) {
+        cx.emit(MeetingEvent::Open(id));
+    }
+
+    /// The other meetings of its Teams series, as the Teams menu lists them.
+    pub fn teams_series(&self) -> &[mostalgia_core::teams::ops::SeriesMeeting] {
+        &self.teams_series
     }
 
     /// Puts only the transcript or only the notes on the clipboard.
@@ -2939,7 +2949,7 @@ impl Render for MeetingView {
             .on_action(cx.listener(Self::export))
             .on_action(cx.listener(Self::save_to_documents))
             .on_action(cx.listener(Self::teams_do))
-            .on_action(cx.listener(|_, action: &OpenSeriesMeeting, _, cx| cx.emit(MeetingEvent::Open(action.0))))
+            .on_action(cx.listener(|this, action: &OpenSeriesMeeting, _, cx| this.open_series(action.0, cx)))
             .on_action(cx.listener(|this, action: &CopyRecap, window, cx| {
                 let length = if action.0 >= 2 { recap::Length::Full } else { recap::Length::Short };
                 let style = if action.0 % 2 == 1 { recap::Style::Markdown } else { recap::Style::Plain };
@@ -3178,7 +3188,7 @@ fn teams_menu(
     let chat_lines = link.map_or(0, |l| l.chat.len());
     let chat_read = link.is_some_and(|l| l.chat_read_at.is_some());
     // The meeting right before and right after this one in its series.
-    let before = series.iter().filter(|s| s.started_at < m.started_at).next_back().map(|s| (s.meeting_id, s.title.clone(), s.started_at));
+    let before = series.iter().rfind(|s| s.started_at < m.started_at).map(|s| (s.meeting_id, s.title.clone(), s.started_at));
     let after = series.iter().find(|s| s.started_at > m.started_at).map(|s| (s.meeting_id, s.title.clone(), s.started_at));
     let in_series = series.len();
     Button::new("teams")

@@ -307,7 +307,7 @@ pub fn guess_language(text: &str) -> Option<&'static str> {
         .collect();
     let mut scores: Vec<(&'static str, usize)> =
         STOP_WORDS.iter().map(|(code, list)| (*code, words.iter().filter(|w| list.contains(&w.as_str())).count())).collect();
-    scores.sort_by(|a, b| b.1.cmp(&a.1));
+    scores.sort_by_key(|s| std::cmp::Reverse(s.1));
     let (best, n) = scores[0];
     let second = scores[1].1;
     (n >= 3 && n >= second * 2).then_some(best)

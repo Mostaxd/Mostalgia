@@ -304,7 +304,7 @@ pub fn apply_names(store: &Store, meeting: &Meeting, suggestions: &[vtt::Suggest
 pub fn recent_meetings(graph: &Graph, days: i64) -> Result<Vec<Event>> {
     let now = Utc::now();
     let mut events: Vec<Event> = graph.events(now - chrono::Duration::days(days), now)?.into_iter().filter(|e| e.is_teams() && e.end <= now).collect();
-    events.sort_by(|a, b| b.start.cmp(&a.start));
+    events.sort_by_key(|e| std::cmp::Reverse(e.start));
     Ok(events)
 }
 
@@ -429,7 +429,7 @@ pub fn series(store: &Store, meeting: &Meeting) -> Result<Vec<SeriesMeeting>> {
 
 /// The last meeting of the series before this one that has a summary.
 pub fn previous_in_series(store: &Store, meeting: &Meeting) -> Result<Option<SeriesMeeting>> {
-    Ok(series(store, meeting)?.into_iter().filter(|m| m.started_at < meeting.started_at && m.summary.is_some()).next_back())
+    Ok(series(store, meeting)?.into_iter().rfind(|m| m.started_at < meeting.started_at && m.summary.is_some()))
 }
 
 /// Meetings looked at for a series.
