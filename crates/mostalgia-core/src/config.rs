@@ -223,6 +223,8 @@ pub struct Config {
     /// Model for live translation ("" = that connection's live-notes or
     /// default model).
     pub translation_model: String,
+    /// Microsoft Teams / Microsoft 365 (see `teams`).
+    pub teams: crate::teams::TeamsConfig,
 }
 
 /// When Mori looks for live notes during a recording.
@@ -410,6 +412,7 @@ impl Default for Config {
             translation_language: String::new(),
             translation_provider: String::new(),
             translation_model: String::new(),
+            teams: crate::teams::TeamsConfig::default(),
         }
     }
 }

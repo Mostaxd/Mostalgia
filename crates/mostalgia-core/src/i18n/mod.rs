@@ -17,6 +17,7 @@ mod docs;
 mod meeting;
 mod recording;
 mod settings;
+mod teams;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lang {
@@ -53,7 +54,7 @@ pub fn lang() -> Lang {
 fn english() -> &'static HashMap<&'static str, &'static str> {
     static TABLE: OnceLock<HashMap<&'static str, &'static str>> = OnceLock::new();
     TABLE.get_or_init(|| {
-        [app::EN, cli::EN, companion::EN, core::EN, docs::EN, meeting::EN, recording::EN, settings::EN]
+        [app::EN, cli::EN, companion::EN, core::EN, docs::EN, meeting::EN, recording::EN, settings::EN, teams::EN]
             .into_iter()
             .flatten()
             .copied()

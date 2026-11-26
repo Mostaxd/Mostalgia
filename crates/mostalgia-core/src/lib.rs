@@ -44,6 +44,7 @@ pub mod recovery;
 pub mod self_update;
 pub mod store;
 pub mod summary;
+pub mod teams;
 pub mod text_import;
 pub mod transcribe;
 pub mod translate;

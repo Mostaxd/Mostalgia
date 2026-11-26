@@ -181,9 +181,59 @@ fn clean(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Words for the meeting being recorded (its attendees, words from the
+/// invite), put before the glossary's own terms; see [`set_meeting_terms`].
+static MEETING_TERMS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Most of the hint the meeting's words may take, so the user's own
+/// terms still fit.
+const MEETING_HINT_CHARS: usize = 250;
+
+/// Sets the words of the meeting being recorded (empty: none). They go
+/// to the engine with [`current`] until they're set again.
+pub fn set_meeting_terms(terms: Vec<String>) {
+    let mut kept = Vec::new();
+    let mut len = 0;
+    for t in terms.into_iter().map(|t| clean(&t)).filter(|t| !t.is_empty()) {
+        if len + t.len() + 2 > MEETING_HINT_CHARS {
+            break;
+        }
+        len += t.len() + 2;
+        kept.push(t);
+    }
+    *MEETING_TERMS.lock().unwrap_or_else(|e| e.into_inner()) = kept;
+}
+
+/// The meeting's words as set (see [`set_meeting_terms`]).
+pub fn meeting_terms() -> Vec<String> {
+    MEETING_TERMS.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// `g` with the meeting's words in front of its terms.
+fn with_meeting_terms(g: Arc<Glossary>) -> Arc<Glossary> {
+    let extra = meeting_terms();
+    if extra.is_empty() {
+        return g;
+    }
+    let mut merged = (*g).clone();
+    let mut terms = extra;
+    for t in std::mem::take(&mut merged.terms) {
+        if !terms.iter().any(|x| x.eq_ignore_ascii_case(&t)) {
+            terms.push(t);
+        }
+    }
+    merged.terms = terms;
+    Arc::new(merged)
+}
+
 /// The glossary as saved, cheap to call per utterance: read again only
 /// when the file changed (the app's settings or another process saved it).
+/// The meeting's words (see [`set_meeting_terms`]) come first.
 pub fn current() -> Arc<Glossary> {
+    with_meeting_terms(saved())
+}
+
+fn saved() -> Arc<Glossary> {
     static CACHE: Mutex<Option<(Option<SystemTime>, Arc<Glossary>)>> = Mutex::new(None);
     let modified = std::fs::metadata(Glossary::path()).and_then(|m| m.modified()).ok();
     let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
@@ -394,6 +444,16 @@ const COMMON_ACRONYMS: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn meeting_terms_come_first_and_are_capped() {
+        set_meeting_terms(vec!["Anna Lehmann".into(), " PayFlow ".into(), "x".repeat(300)]);
+        assert_eq!(meeting_terms(), ["Anna Lehmann", "PayFlow"]);
+        let g = with_meeting_terms(Arc::new(Glossary { terms: vec!["payflow".into(), "Brightwell".into()], fixes: Vec::new() }));
+        assert_eq!(g.terms, ["Anna Lehmann", "PayFlow", "Brightwell"]);
+        set_meeting_terms(Vec::new());
+        assert!(meeting_terms().is_empty());
+    }
 
     fn glossary(fixes: &[(&str, &str)]) -> Glossary {
         let mut g = Glossary::default();
