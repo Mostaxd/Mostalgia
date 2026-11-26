@@ -88,6 +88,12 @@ pub const EN: &[(&str, &str)] = &[
     ("Fasse meine Besprechungen von heute zusammen.", "Summarize my meetings from today."),
     ("Frage zu deinen Besprechungen …", "Ask about your meetings …"),
     ("Durchsuche Besprechungen …", "Searching meetings …"),
+    ("Besprechung „{}“", "Meeting “{}”"),
+    ("Frage zu dieser Besprechung …", "Ask about this meeting …"),
+    ("Was wurde entschieden?", "What was decided?"),
+    ("Welche Aufgaben gibt es und wer ist verantwortlich?", "What are the action items and who owns them?"),
+    ("Welche Fragen sind offen geblieben?", "Which questions are still open?"),
+    ("Die Antworten kommen nur aus dieser Besprechung: ihrer Zusammenfassung und ihrem Transkript. An das Sprachmodell gehen nur Text und Zusammenfassung, nie Audio. Jede Aussage verweist auf die Stelle in der Aufnahme.", "Answers come only from this meeting: its summary and transcript. Only text goes to the language model, never audio. Every statement links to its spot in the recording."),
     ("Neue Unterhaltung", "New conversation"),
     (
         "Kein {}-API-Schlüssel — in Einstellungen → KI & Zusammenfassung hinterlegen.",

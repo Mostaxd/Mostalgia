@@ -413,6 +413,18 @@ impl MostalgiaApp {
         cx.notify();
     }
 
+    /// Opens "Fragen" about one meeting (its "Fragen" button); the scope
+    /// picker keeps offering it.
+    pub fn ask_about_meeting(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_ask(window, cx);
+        if let Some(a) = &self.ask_view {
+            a.update(cx, |a, cx| {
+                a.offer(vec![mostalgia_core::docs::Within::Meeting(id)], cx);
+                a.set_within(Some(mostalgia_core::docs::Within::Meeting(id)), cx);
+            });
+        }
+    }
+
     /// Opens the "Dokumente" screen, keeping its state.
     /// The decision log; `build` starts filling it from earlier meetings.
     pub fn open_decisions(&mut self, build: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -1101,8 +1113,9 @@ impl MostalgiaApp {
         }
         let engine = self.engine.clone();
         let view = cx.new(|cx| MeetingView::new(id, cx).with_engine(engine));
-        let sub = cx.subscribe_in(&view, window, |this, _, event: &MeetingEvent, _, cx| match event {
+        let sub = cx.subscribe_in(&view, window, |this, _, event: &MeetingEvent, window, cx| match event {
             MeetingEvent::Changed => this.reload(cx),
+            MeetingEvent::Ask(id) => this.ask_about_meeting(*id, window, cx),
             MeetingEvent::Deleted => {
                 this.screen = Screen::Recording;
                 this.reload(cx);

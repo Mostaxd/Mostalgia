@@ -361,6 +361,33 @@ mod tests {
     }
 
     #[test]
+    fn part_ids_round_trip() {
+        // The copy menu and the export menu send parts by id.
+        for p in [Parts::ALL, Parts::NOTES, Parts::SUMMARY, Parts::SUMMARY_NOTES, Parts::TRANSCRIPT] {
+            assert_eq!(Parts::parse(p.id()), p);
+        }
+        assert_eq!(Parts::parse("nonsense"), Parts::ALL);
+    }
+
+    #[test]
+    fn copies_each_part_as_text_and_markdown() {
+        let m = meeting();
+        for (parts, has, lacks) in [
+            (Parts::SUMMARY, "Launch date", "Ship in March"),
+            (Parts::NOTES, "Ship in March", "Launch date"),
+            (Parts::TRANSCRIPT, "Let's ship in March.", "Launch date"),
+            (Parts::SUMMARY_NOTES, "Ship in March", "Let's ship in March."),
+        ] {
+            for text in [markdown_parts(&m, parts), text_parts(&m, parts)] {
+                assert!(text.contains(has) && !text.contains(lacks), "{parts:?}: {text}");
+            }
+        }
+        let all = text_parts(&m, Parts::ALL);
+        assert!(all.contains("Launch date") && all.contains("Ship in March") && all.contains("Let's ship in March."));
+        assert!(!all.contains("**") && !all.contains("## "));
+    }
+
+    #[test]
     fn exports_only_the_parts_asked_for() {
         let m = meeting();
         let all = markdown(&m);

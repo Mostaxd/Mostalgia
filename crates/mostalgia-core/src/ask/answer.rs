@@ -64,8 +64,22 @@ fn scope() -> Option<Within> {
     SCOPE.with(|s| s.get())
 }
 
+/// The meeting the current question is about, when it is about one.
+fn scope_meeting() -> Option<i64> {
+    match scope() {
+        Some(Within::Meeting(id)) => Some(id),
+        _ => None,
+    }
+}
+
+/// Whether the current question is about some documents only.
+fn scope_documents() -> bool {
+    scope().is_some() && scope_meeting().is_none()
+}
+
 fn system_prompt() -> String {
     let base = match scope() {
+        Some(Within::Meeting(id)) => meeting_system_prompt(id),
         Some(within) => scoped_system_prompt(within),
         None => base_system_prompt(),
     };
@@ -110,6 +124,7 @@ fn scoped_system_prompt(within: Within) -> String {
             Within::Collection(id) => d.collection_id == Some(id),
             Within::Used => d.used,
             Within::Drive => true,
+            Within::Meeting(_) => false,
         })
         .collect();
     let list = docs.iter().map(|d| format!("- document_id {}: \"{}\" ({})", d.id, d.title, d.kind.id())).collect::<Vec<_>>().join("\n");
@@ -135,12 +150,45 @@ plainly and don't guess.",
     )
 }
 
+/// The system prompt when the question is about one meeting: its summary
+/// up front, its transcript through the tools.
+fn meeting_system_prompt(id: i64) -> String {
+    let m = Store::open(&paths::database()).ok().and_then(|s| s.get(id).ok().flatten());
+    let Some(m) = m else { return base_system_prompt() };
+    let summary = match &m.summary {
+        Some(s) => format!("\n\nIts summary (cite it with [[m:{id}@0]]):\n{}", s.markdown.trim()),
+        None => String::new(),
+    };
+    format!(
+        "You answer questions about one of the user's recorded meetings: meeting_id {id}, \"{title}\", \
+{date}, {minutes} minutes. Today is {today}.{summary}\n\n\
+Use the tools to find the answer in this meeting: read_transcript to read its transcript (all of it, \
+or a time range around a hit), search_meetings to search it (only this meeting is searched; try \
+several search terms and paraphrases, in the meeting's language). Don't write text before tool \
+calls.\n\n\
+Answer only from the summary and the tool results, concretely, in the language of the question. \
+Cite sources sparingly with the marker [[m:{id}@<seconds>]] (seconds = start of the line or \
+passage; 0 for the summary): at most one marker per sentence or bullet, placed at its end before \
+the final punctuation. Use no other citation or time format (no [00:01:23], no lists of times). \
+If the meeting doesn't contain the answer, say so plainly and don't guess. Speakers are \
+\"Me\" (the user), \"Others\", \"Speaker N\" or have names.",
+        title = m.title,
+        date = m.started_at.format("%A, %Y-%m-%d %H:%M"),
+        minutes = (m.duration_secs / 60.0).round(),
+        today = Local::now().format("%A, %d.%m.%Y"),
+    )
+}
+
 /// The tools for the current question: only the document ones when it is
-/// about some documents.
+/// about some documents, only the transcript ones when it is about one
+/// meeting.
 fn tools_claude() -> Value {
     let all = all_tools_claude();
     if scope().is_none() {
         return all;
+    }
+    if scope_meeting().is_some() {
+        return Value::Array(all.as_array().into_iter().flatten().filter(|t| t["name"] == "search_meetings" || t["name"] == "read_transcript").cloned().collect());
     }
     let read = json!({
         "name": "read_document",
@@ -225,7 +273,7 @@ fn run_tool(name: &str, input: &Value) -> (String, String) {
                 let filter = Filter {
                     from: date(&input["from_date"]),
                     to: date(&input["to_date"]),
-                    meeting: None,
+                    meeting: scope_meeting(),
                 };
                 let t = std::time::Instant::now();
                 let hits = search::search(&store, q, &filter, 15)?;
@@ -296,7 +344,11 @@ fn run_tool(name: &str, input: &Value) -> (String, String) {
                 Ok((serde_json::to_string(&out)?, tr("Besprechungen auflisten").to_string()))
             }
             "read_transcript" => {
-                let id = input["meeting_id"].as_i64().context("meeting_id missing")?;
+                // About one meeting, only that one is read.
+                let id = match scope_meeting() {
+                    Some(id) => id,
+                    None => input["meeting_id"].as_i64().context("meeting_id missing")?,
+                };
                 let from = input["from_secs"].as_f64().unwrap_or(0.0);
                 let to = input["to_secs"].as_f64().unwrap_or(f64::MAX);
                 let m = store.get(id)?.context(tr("Besprechung nicht gefunden"))?;
@@ -567,7 +619,7 @@ fn ask_openai(question: &str, history: &[(String, String)], req: &SummaryRequest
 /// first and hand the hits to the model with the question.
 fn retrieve_then_answer(question: &str, history: &[(String, String)], req: &SummaryRequest, events: &Sender<AskEvent>) -> Result<String> {
     let _ = events.send(AskEvent::Status(trf("{} kann keine Werkzeuge nutzen – suche vorab", &[&req.model])));
-    let scoped = scope().is_some();
+    let scoped = scope_documents();
     let hits = if scoped {
         "[]".to_string()
     } else {
@@ -575,7 +627,7 @@ fn retrieve_then_answer(question: &str, history: &[(String, String)], req: &Summ
         let _ = events.send(AskEvent::Status(status));
         hits
     };
-    let doc_hits = if scoped || crate::docs::any() {
+    let doc_hits = if scoped || (scope_meeting().is_none() && crate::docs::any()) {
         let (hits, status) = run_tool("search_documents", &json!({ "query": question }));
         let _ = events.send(AskEvent::Status(status));
         format!("\n\nSearch results from the documents (JSON):\n{hits}")
@@ -685,6 +737,27 @@ pub fn parse_answer(answer: &str) -> Vec<Piece> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tool_names() -> Vec<String> {
+        tools_claude().as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect()
+    }
+
+    #[test]
+    fn tools_follow_the_scope() {
+        SCOPE.with(|s| s.set(None));
+        assert_eq!(tool_names(), ["search_meetings", "search_documents", "list_meetings", "read_transcript"]);
+        assert!(!scope_documents() && scope_meeting().is_none());
+        // About one meeting: only its transcript and search, no documents.
+        SCOPE.with(|s| s.set(Some(Within::Meeting(7))));
+        assert_eq!(tool_names(), ["search_meetings", "read_transcript"]);
+        assert_eq!(tools_openai().len(), 2);
+        assert!(!scope_documents() && scope_meeting() == Some(7));
+        // About documents: only the document tools.
+        SCOPE.with(|s| s.set(Some(Within::Collection(3))));
+        assert_eq!(tool_names(), ["search_documents", "read_document"]);
+        assert!(scope_documents() && scope_meeting().is_none());
+        SCOPE.with(|s| s.set(None));
+    }
 
     #[test]
     fn parses_markers() {

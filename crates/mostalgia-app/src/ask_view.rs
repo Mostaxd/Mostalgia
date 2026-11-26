@@ -127,6 +127,11 @@ impl AskView {
         cx.notify();
     }
 
+    /// Whether questions are about some documents only (not meetings).
+    fn about_documents(&self) -> bool {
+        self.within.is_some_and(|w| !matches!(w, Within::Meeting(_)))
+    }
+
     fn busy(&self) -> bool {
         self.rx.is_some()
     }
@@ -145,7 +150,7 @@ impl AskView {
         self.turns.push(Turn {
             question: question.clone(),
             answer: String::new(),
-            status: Some(if self.within.is_some() { tr("Durchsuche Dokumente …") } else { tr("Durchsuche Besprechungen …") }.into()),
+            status: Some(if self.about_documents() { tr("Durchsuche Dokumente …") } else { tr("Durchsuche Besprechungen …") }.into()),
             error: None,
             done: false,
         });
@@ -154,7 +159,7 @@ impl AskView {
         let within = self.within;
         std::thread::spawn(move || {
             // Make sure recent meetings are searchable (cheap if nothing changed).
-            if within.is_none() {
+            if matches!(within, None | Some(Within::Meeting(_))) {
                 let _ = ask::index_pending();
             }
             ask::ask_within(&question, &history, within, &tx);
@@ -242,6 +247,7 @@ fn scope_label(within: Option<Within>, collections: &[docs::Collection]) -> Stri
             trf("Sammlung „{}“", &[&name])
         }
         Some(Within::Document(id)) => trf("Dokument „{}“", &[&document_label(id).0]),
+        Some(Within::Meeting(id)) => trf("Besprechung „{}“", &[&meeting_label(id).0]),
         _ => tr("Alle Besprechungen und Dokumente").to_string(),
     }
 }
@@ -250,9 +256,16 @@ fn scope_icon(within: Option<Within>) -> IconName {
     match within {
         Some(Within::Collection(_)) => IconName::Folder,
         Some(Within::Document(_)) => IconName::FileText,
+        Some(Within::Meeting(_)) => IconName::AudioLines,
         _ => IconName::Library,
     }
 }
+
+const MEETING_SUGGESTIONS: [&str; 3] = [
+    "Was wurde entschieden?",
+    "Welche Aufgaben gibt es und wer ist verantwortlich?",
+    "Welche Fragen sind offen geblieben?",
+];
 
 const DOC_SUGGESTIONS: [&str; 3] = [
     "Fasse die wichtigsten Punkte zusammen.",
@@ -597,12 +610,20 @@ impl Render for AskView {
             let placeholder = match self.within {
                 Some(Within::Collection(_)) => tr("Frage zu dieser Sammlung …"),
                 Some(Within::Document(_)) => tr("Frage zu diesem Dokument …"),
+                Some(Within::Meeting(_)) => tr("Frage zu dieser Besprechung …"),
                 _ => tr("Frage zu deinen Besprechungen …"),
             };
             self.input.update(cx, |s, cx| s.set_placeholder(placeholder, window, cx));
         }
         let scoped = self.within.is_some();
-        let suggestions: Vec<&str> = if scoped { DOC_SUGGESTIONS.to_vec() } else { SUGGESTIONS.to_vec() };
+        let one_meeting = matches!(self.within, Some(Within::Meeting(_)));
+        let suggestions: Vec<&str> = if one_meeting {
+            MEETING_SUGGESTIONS.to_vec()
+        } else if scoped {
+            DOC_SUGGESTIONS.to_vec()
+        } else {
+            SUGGESTIONS.to_vec()
+        };
         let theme = cx.theme().clone();
         let config = Config::load();
         // Search embeddings from a cloud model (named in the intro).
@@ -636,6 +657,7 @@ impl Render for AskView {
                             .text_sm()
                             .text_color(theme.muted_foreground)
                             .child(match (scoped, &cloud_embeddings) {
+                                _ if one_meeting => tr("Die Antworten kommen nur aus dieser Besprechung: ihrer Zusammenfassung und ihrem Transkript. An das Sprachmodell gehen nur Text und Zusammenfassung, nie Audio. Jede Aussage verweist auf die Stelle in der Aufnahme.").to_string(),
                                 (true, None) => tr("Die Suche läuft lokal nur über diese Dokumente – auch wenn sie für Antworten ausgeschaltet sind. An das Sprachmodell gehen nur die gefundenen Abschnitte. Jede Aussage verweist auf die Stelle im Dokument.").to_string(),
                                 (false, None) => tr("Die Suche läuft lokal über alle Transkripte und Zusammenfassungen. An das Sprachmodell gehen nur die gefundenen Abschnitte, nie Audio. Jede Aussage verweist auf die Stelle in der Aufnahme.").to_string(),
                                 (true, Some(name)) => trf("Die Suche läuft nur über diese Dokumente – auch wenn sie für Antworten ausgeschaltet sind – mit Embeddings von {} (Cloud). An das Sprachmodell gehen nur die gefundenen Abschnitte. Jede Aussage verweist auf die Stelle im Dokument.", &[name]),

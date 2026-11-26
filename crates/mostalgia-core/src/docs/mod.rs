@@ -466,6 +466,8 @@ pub enum Within {
     /// asked about explicitly.
     Document(i64),
     Collection(i64),
+    /// One meeting and no documents: "Fragen" about a single meeting.
+    Meeting(i64),
 }
 
 impl Within {
@@ -476,6 +478,7 @@ impl Within {
             Within::Drive => "1".to_string(),
             Within::Document(id) => format!("d.id = {id}"),
             Within::Collection(id) => format!("d.collection_id = {id}"),
+            Within::Meeting(_) => "0".to_string(),
         }
     }
 }
