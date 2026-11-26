@@ -318,6 +318,16 @@ impl TeamsSettings {
                 self.switch("teams-todo-mine", t.todo_only_mine, cx, |t, v| t.todo_only_mine = v),
             ))
             .child(row(
+                tr("Besprechungschat einbeziehen"),
+                Some(tr("Was während des Calls im Chat geschrieben wurde (Links, Entscheidungen) fließt in die Zusammenfassung und in Fragen ein. Nur Geschäfts- oder Schulkonten; nach dem Einschalten neu anmelden.")),
+                self.switch("teams-chat-context", t.chat_context, cx, |t, v| t.chat_context = v),
+            ))
+            .child(row(
+                tr("Serientermine vergleichen"),
+                Some(tr("Bei wiederkehrenden Besprechungen sagt die Zusammenfassung, was sich seit dem letzten Mal geändert hat.")),
+                self.switch("teams-series", t.series_compare, cx, |t, v| t.series_compare = v),
+            ))
+            .child(row(
                 tr("Teams-Transkripte abrufen"),
                 Some(tr("Gleicht Sprechernamen mit dem Transkript von Teams ab. Braucht die Zustimmung eines Admins; danach neu anmelden.")),
                 self.switch("teams-transcripts", t.transcripts, cx, |t, v| t.transcripts = v),

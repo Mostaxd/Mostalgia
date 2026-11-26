@@ -440,6 +440,7 @@ impl Config {
             language: self.summary_language_code(),
             effort,
             template: crate::summary::Template::parse(&self.summary_template),
+            context: None,
         })
     }
 
@@ -456,7 +457,7 @@ impl Config {
             .with_context(|| crate::i18n::trf("KI-Verbindung \"{}\" gibt es nicht mehr — in den Einstellungen wählen", &[&self.ask_provider]))?;
         let model = if self.ask_model.is_empty() { self.summary_model.clone() } else { self.ask_model.clone() };
         let effort = effort_for(&connection, &model, &self.ask_effort);
-        Ok(crate::summary::SummaryRequest { connection, model, language: self.summary_language_code(), effort, template: Default::default() })
+        Ok(crate::summary::SummaryRequest { connection, model, language: self.summary_language_code(), effort, template: Default::default(), context: None })
     }
 
     /// When Mori looks for live notes. Older configs: a number of seconds in
@@ -573,7 +574,7 @@ impl Config {
                 }
             };
             anyhow::ensure!(!model.is_empty(), "{}", crate::i18n::trf("{}: kein Modell für Live-Notizen gewählt", &[&connection.name]));
-            crate::summary::SummaryRequest { connection, model, language: self.summary_language_code(), effort: None, template: Default::default() }
+            crate::summary::SummaryRequest { connection, model, language: self.summary_language_code(), effort: None, template: Default::default(), context: None }
         };
         req.effort = None;
         Ok(req)
@@ -601,7 +602,7 @@ impl Config {
             }
         };
         anyhow::ensure!(!model.is_empty(), "{}", crate::i18n::trf("{}: kein Modell für Live-Übersetzung gewählt", &[&connection.name]));
-        Ok(crate::summary::SummaryRequest { connection, model, language: None, effort: None, template: Default::default() })
+        Ok(crate::summary::SummaryRequest { connection, model, language: None, effort: None, template: Default::default(), context: None })
     }
 
     /// The language live translation writes in: the chosen one, else the

@@ -22,9 +22,11 @@ Branch `feature/teams-integration`, local only (not pushed, no CI run).
 | Import a meeting nobody recorded from its Teams transcript | ✓ | `teams import` | — |
 | Pre-meeting brief: agenda, people, last meetings with them, still-open action items | ✓ | `teams brief` | notification N min before + Brief button |
 | Link a meeting recorded earlier to its calendar event | ✓ | `teams link` | Teams menu |
+| Meeting chat (links, decisions typed during the call) into the summary and Ask | ✓ | `teams chat`, on `summarize` | before each summary, Teams menu, setting |
+| Recurring series: linked meetings, "Since last time" section in the summary | ✓ | `teams series`, on `summarize` | Teams menu (last/next time), setting |
 
 All Graph traffic goes through an `Http` trait; tests use canned Graph
-answers (no real account needed). 50 Teams tests in `mostalgia-core`.
+answers (no real account needed). 57 Teams tests in `mostalgia-core`.
 
 ## What Mosta needs to do
 
@@ -34,7 +36,9 @@ answers (no real account needed). 50 Teams tests in `mostalgia-core`.
    check the name, the "Others" name in a 1:1, and the Teams menu.
 3. Personal Microsoft accounts: calendar, brief and To Do work; chat
    posting and transcripts need a work/school account.
-4. Teams transcripts need admin consent for
+4. The meeting chat needs `Chat.Read` in the registration (no admin
+   consent needed in most tenants).
+5. Teams transcripts need admin consent for
    `OnlineMeetingTranscript.Read.All`; turn the switch on, sign in again.
 
 ## Not tested for real

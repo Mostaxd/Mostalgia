@@ -41,6 +41,12 @@ pub enum TeamsAction {
         /// Only send my own action items to To Do (on/off)
         #[arg(long)]
         todo_only_mine: Option<Toggle>,
+        /// Read the meeting chat into the summary and Ask (on/off)
+        #[arg(long)]
+        chat: Option<Toggle>,
+        /// Recurring meetings: say what changed since last time (on/off)
+        #[arg(long)]
+        series: Option<Toggle>,
     },
     /// Sign in with Microsoft in the browser
     Login,
@@ -77,6 +83,10 @@ pub enum TeamsAction {
         #[arg(long, default_value_t = 7)]
         days: i64,
     },
+    /// Read what was typed in the meeting chat during the call
+    Chat { id: i64 },
+    /// The other recordings of a meeting's recurring series
+    Series { id: i64 },
     /// Fetch the Teams transcript and suggest names for unnamed speakers
     Transcript {
         id: i64,
@@ -120,12 +130,14 @@ pub fn run(action: Option<TeamsAction>) -> Result<()> {
             println!("{:<16} {}", tr("Automatisch benennen"), on_off(t.auto_name));
             println!("{:<16} {}", tr("Zusammenfassung posten"), on_off(t.auto_post_summary));
             println!("{:<16} {}", tr("Teams-Transkripte"), on_off(t.transcripts));
+            println!("{:<16} {}", tr("Besprechungschat"), on_off(t.chat_context));
+            println!("{:<16} {}", tr("Serien vergleichen"), on_off(t.series_compare));
             println!("{:<16} {}", tr("To-Do-Liste"), t.todo_list());
             if t.client_id().is_none() {
                 println!("\n{}", tr("App-Registrierung: siehe docs/teams-integration.md, dann `mostalgia teams setup --client-id …`"));
             }
         }
-        TeamsAction::Setup { client_id, tenant, calendar, auto_name, auto_post, transcripts, todo_list, todo_only_mine } => {
+        TeamsAction::Setup { client_id, tenant, calendar, auto_name, auto_post, transcripts, todo_list, todo_only_mine, chat, series } => {
             let t = &mut config.teams;
             if let Some(id) = client_id {
                 anyhow::ensure!(teams::is_guid(id.trim()), "{}", tr("Die Client-ID ist eine GUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)"));
@@ -154,6 +166,15 @@ pub fn run(action: Option<TeamsAction>) -> Result<()> {
             }
             if let Some(v) = todo_only_mine {
                 t.todo_only_mine = v.on();
+            }
+            if let Some(v) = chat {
+                if v.on() && !t.chat_context {
+                    eprintln!("[mostalgia] {}", tr("Neue Berechtigung: bitte `mostalgia teams login` noch einmal ausführen"));
+                }
+                t.chat_context = v.on();
+            }
+            if let Some(v) = series {
+                t.series_compare = v.on();
             }
             config.save()?;
             return run(Some(TeamsAction::Status));
@@ -250,6 +271,35 @@ pub fn run(action: Option<TeamsAction>) -> Result<()> {
                 eprintln!("[mostalgia] search index: {e:#}");
             }
             println!("{}", trf("Als Besprechung #{} hinzugefügt – `mostalgia summarize {}` schreibt die Zusammenfassung", &[&id, &id]));
+        }
+        TeamsAction::Chat { id } => {
+            let store = Store::open(&paths::database())?;
+            let m = meeting(&store, id)?;
+            let n = ops::read_chat(&teams::client(&config.teams)?, &m)?;
+            drop(store);
+            if let Err(e) = mostalgia_core::ask::index_meeting(id) {
+                eprintln!("[mostalgia] search index: {e:#}");
+            }
+            let start = m.started_at.with_timezone(&Utc);
+            for line in ops::require_link(&m)?.chat {
+                println!("{}", teams::chat::transcript_line(&line, start));
+            }
+            println!("{}", trf("{} Nachrichten aus dem Besprechungschat gelesen", &[&n]));
+        }
+        TeamsAction::Series { id } => {
+            let store = Store::open(&paths::database())?;
+            let m = meeting(&store, id)?;
+            let series = ops::series(&store, &m)?;
+            if series.is_empty() {
+                println!("{}", tr("Keine anderen Aufnahmen dieser Serie"));
+            }
+            for s in &series {
+                let mark = if s.summary.is_some() { " " } else { "·" };
+                println!("{:>5} {mark} {}  {}", format!("#{}", s.meeting_id), mostalgia_core::i18n::date_time(&s.started_at), s.title);
+            }
+            if let Some(prev) = ops::previous_in_series(&store, &m)? {
+                println!("\n{}", trf("Die Zusammenfassung vergleicht mit #{} ({})", &[&prev.meeting_id, &mostalgia_core::i18n::date(&prev.started_at)]));
+            }
         }
         TeamsAction::Transcript { id, apply } => {
             let store = Store::open(&paths::database())?;

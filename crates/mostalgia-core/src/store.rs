@@ -790,6 +790,14 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// A meeting's summary text alone (without loading its transcript).
+    pub fn summary_markdown(&self, meeting_id: i64) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT markdown FROM summaries WHERE meeting_id = ?1", [meeting_id], |r| r.get::<_, String>(0))
+            .optional()?)
+    }
+
     pub fn save_summary(
         &self,
         meeting_id: i64,

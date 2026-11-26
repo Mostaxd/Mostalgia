@@ -16,6 +16,8 @@ delegated token: there is no Mostalgia server in between.
 | 5 | Fetch the Teams transcript (when the meeting had transcription on) and suggest speaker names from it | `OnlineMeetingTranscript.Read.All` (admin consent) | work/school |
 | 6 | Pre-meeting brief: agenda from the invite, past meetings with the same people and their open action items | (from 2) | work + personal |
 | 7 | Action items to Microsoft To Do (a "Mostalgia" list) | `Tasks.ReadWrite` | work + personal |
+| 8 | Meeting chat: what was typed during the call (links, files, decisions) goes into the summary and Ask | `Chat.Read` | work/school |
+| 9 | Recurring meetings: meetings of the same series are linked; the summary ends with "Since last time" (what changed against the previous summary) | (from 2) | work + personal |
 
 Teams transcripts (5) need a tenant admin to consent to
 `OnlineMeetingTranscript.Read.All`, so they have their own switch and the
@@ -38,7 +40,7 @@ registration has no client secret.
 5. **Authentication** → *Advanced settings* → **Allow public client flows: Yes**.
 6. **API permissions → Add a permission → Microsoft Graph → Delegated**:
    `User.Read`, `offline_access`, `Calendars.Read`, `OnlineMeetings.Read`,
-   `ChatMessage.Send`, `Tasks.ReadWrite`, and (optional, admin consent)
+   `ChatMessage.Send`, `Chat.Read`, `Tasks.ReadWrite`, and (optional, admin consent)
    `OnlineMeetingTranscript.Read.All`. For a work tenant, an admin can press
    **Grant admin consent** so users aren't asked.
 7. In Mostalgia: **Settings → Microsoft Teams**, paste the client ID, leave
@@ -55,9 +57,31 @@ and `MOSTALGIA_MS_TENANT` win over the settings.
   store), `graph` (Graph calls behind an `Http` trait, mocked in tests),
   `calendar` (events, matching a recording to the meeting it belongs to),
   `link` (the event a meeting belongs to, saved as `teams.json` in the
-  meeting's folder, so the library schema is unchanged), `vtt` (Teams
+  meeting's folder, so the library schema is unchanged; it also keeps the
+  meeting chat), `chat` (chat messages as text, the window around the
+  recording), `vtt` (Teams
   transcripts and speaker suggestions), `actions` (action items from the
   summary, Markdown to Teams HTML), `brief` (pre-meeting brief).
 - Nothing is sent to Microsoft unless you press a button (or turn on the
   automatic post). The calendar is read every few minutes while you're signed in
   and calendar sync is on.
+
+## Meeting chat and recurring series
+
+- Before a summary is written for a Teams meeting, Mostalgia reads the
+  meeting chat from 15 minutes before the meeting (or recording) to 30
+  minutes after it ended, leaving out system messages, deleted messages and
+  its own posted summary. Only the messages in that window are kept (a
+  recurring meeting shares one chat across all its occurrences). They go to
+  the summary model in a `<meeting_chat>` block, timed like the transcript,
+  and into the Ask index as `chat` passages. Teams menu → **Read the meeting
+  chat** does it by hand; `mostalgia teams chat <id>` too.
+- Meetings belong to the same series when Graph gives them the same
+  `seriesMasterId`, or (a series set up again, or a meeting linked before
+  this existed) the same subject without numbers and the same organizer.
+  The summary gets the last earlier summary of the series and is asked for
+  a closing "Since last time" section. The Teams menu links to the last and
+  next recording of the series; `mostalgia teams series <id>` lists them.
+- Both have switches (Settings → Microsoft Teams, `teams setup --chat`,
+  `--series`). Turning on the chat after signing in needs a new sign-in for
+  the `Chat.Read` permission.

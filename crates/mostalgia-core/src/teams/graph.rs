@@ -6,6 +6,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde_json::{Value, json};
 
 use super::calendar::{self, Event};
+use super::chat::{self, ChatLine};
 use crate::i18n::{tr, trf};
 
 pub const GRAPH_ROOT: &str = "https://graph.microsoft.com/v1.0";
@@ -198,7 +199,7 @@ impl Graph {
             .append_pair("endDateTime", &fmt(to))
             .append_pair(
                 "$select",
-                "id,subject,start,end,attendees,organizer,isOnlineMeeting,onlineMeetingProvider,onlineMeeting,bodyPreview,body,webLink,isCancelled,location",
+                "id,subject,start,end,attendees,organizer,isOnlineMeeting,onlineMeetingProvider,onlineMeeting,bodyPreview,body,webLink,isCancelled,location,seriesMasterId,type",
             )
             .append_pair("$orderby", "start/dateTime")
             .append_pair("$top", "50");
@@ -232,6 +233,37 @@ impl Graph {
         };
         let meeting = self.online_meeting(join)?.with_context(|| tr("Teams kennt diese Besprechung nicht (nur Geschäfts- oder Schulkonten)"))?;
         meeting.chat_id.with_context(|| tr("Die Besprechung hat keinen Chat"))
+    }
+
+    /// The chat's messages written between `from` and `to`, oldest first
+    /// (newest pages first from Graph, so a long-running meeting chat of a
+    /// recurring series is only read back as far as needed).
+    pub fn chat_messages(&self, chat_id: &str, from: DateTime<Utc>, to: DateTime<Utc>) -> Result<Vec<ChatLine>> {
+        let mut u = url::Url::parse(&format!("{}/chats/{}/messages", self.root, encode_path(chat_id)))?;
+        u.query_pairs_mut()
+            .append_pair("$top", "50")
+            .append_pair("$orderby", "createdDateTime desc")
+            .append_pair("$filter", &format!("createdDateTime lt {}", to.format("%Y-%m-%dT%H:%M:%SZ")));
+        let mut out = Vec::new();
+        let mut next = Some(u.to_string());
+        for _ in 0..MAX_PAGES {
+            let Some(p) = next.take() else { break };
+            let page = self.get(&p, &[])?;
+            let items = page["value"].as_array().cloned().unwrap_or_default();
+            let mut older = false;
+            for v in &items {
+                let created = v["createdDateTime"].as_str().and_then(|t| DateTime::parse_from_rfc3339(t).ok()).map(|t| t.with_timezone(&Utc));
+                if created.is_some_and(|t| t < from) {
+                    older = true;
+                }
+                out.extend(chat::parse_message(v));
+            }
+            if older {
+                break;
+            }
+            next = page["@odata.nextLink"].as_str().map(str::to_string);
+        }
+        Ok(chat::window(out, from, to, &[]))
     }
 
     /// Posts HTML to a chat; returns the message id.

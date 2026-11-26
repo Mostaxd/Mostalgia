@@ -69,6 +69,9 @@ pub struct Event {
     pub web_link: Option<String>,
     pub location: String,
     pub cancelled: bool,
+    /// The recurring series this occurrence belongs to (Graph's
+    /// `seriesMasterId`; the master's own id for the master).
+    pub series_id: Option<String>,
 }
 
 /// An event from a Graph `event` resource (times in UTC, see
@@ -103,6 +106,11 @@ pub fn parse_event(v: &Value) -> Option<Event> {
         web_link: v["webLink"].as_str().map(str::to_string),
         location: v["location"]["displayName"].as_str().unwrap_or_default().into(),
         cancelled: v["isCancelled"].as_bool().unwrap_or(false),
+        series_id: v["seriesMasterId"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .or_else(|| (v["type"].as_str() == Some("seriesMaster")).then(|| v["id"].as_str().unwrap_or_default().to_string()).filter(|s| !s.is_empty())),
     })
 }
 
@@ -232,6 +240,31 @@ pub fn distinctive_words(text: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// A subject without numbers, dates and punctuation, lowercased: "Weekly
+/// #12 (26.11.)" and "Weekly #13" both give "weekly".
+pub fn series_key(subject: &str) -> String {
+    subject.chars().filter(|c| c.is_alphabetic() || c.is_whitespace()).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+/// Two meetings of the same recurring series: the same Graph series, or
+/// the same subject and organizer (a series that was set up again gets a
+/// new id; a meeting linked from an older calendar read has none).
+pub fn same_series(a: &Event, b: &Event) -> bool {
+    let both_ids = matches!((&a.series_id, &b.series_id), (Some(_), Some(_)));
+    if both_ids && a.series_id == b.series_id {
+        return true;
+    }
+    let key = series_key(&a.subject);
+    if key.is_empty() || key != series_key(&b.subject) {
+        return false;
+    }
+    match (&a.organizer, &b.organizer) {
+        (Some(x), Some(y)) if !x.email.is_empty() && !y.email.is_empty() => x.email.eq_ignore_ascii_case(&y.email),
+        // Two different series with the same name: only with the same organizer.
+        _ => !both_ids,
+    }
 }
 
 /// The event a recording that started at `t` belongs to: a running (or
@@ -381,5 +414,29 @@ mod tests {
     #[test]
     fn distinctive_words_skip_plain_words() {
         assert_eq!(distinctive_words("Weekly sync about the iOS app, JIRA-123 and v2 (OKR)"), ["iOS", "JIRA-123", "v2", "OKR"]);
+    }
+    #[test]
+    fn series_from_graph_and_by_subject() {
+        let occ = serde_json::json!({ "id": "o1", "type": "occurrence", "seriesMasterId": "M", "subject": "Weekly #3",
+            "start": { "dateTime": "2026-11-26T09:00:00.0000000" } });
+        assert_eq!(parse_event(&occ).unwrap().series_id.as_deref(), Some("M"));
+        let master = serde_json::json!({ "id": "M", "type": "seriesMaster", "start": { "dateTime": "2026-11-26T09:00:00" } });
+        assert_eq!(parse_event(&master).unwrap().series_id.as_deref(), Some("M"));
+        let single = serde_json::json!({ "id": "x", "type": "singleInstance", "start": { "dateTime": "2026-11-26T09:00:00" } });
+        assert_eq!(parse_event(&single).unwrap().series_id, None);
+
+        let org = |mail: &str| Some(Attendee { email: mail.into(), ..Attendee::default() });
+        let a = Event { subject: "Weekly #3".into(), organizer: org("anna@x.de"), series_id: Some("M".into()), ..Event::default() };
+        let b = Event { subject: "Retro".into(), series_id: Some("M".into()), ..Event::default() };
+        assert!(same_series(&a, &b), "same Graph series, even renamed");
+        let c = Event { subject: "weekly #4".into(), organizer: org("ANNA@x.de"), ..Event::default() };
+        assert!(same_series(&a, &c), "no id: same subject and organizer");
+        let d = Event { organizer: org("ben@x.de"), ..c.clone() };
+        assert!(!same_series(&a, &d), "someone else's weekly");
+        assert!(!same_series(&Event::default(), &Event::default()), "no subject is no series");
+        let e = Event { series_id: Some("N".into()), ..c.clone() };
+        assert!(same_series(&a, &e), "set up again by the same organizer");
+        let f = Event { organizer: None, ..e };
+        assert!(!same_series(&Event { organizer: None, ..a.clone() }, &f), "two series, same name, organizer unknown");
     }
 }

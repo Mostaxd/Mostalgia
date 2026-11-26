@@ -36,11 +36,6 @@ pub struct Brief {
     pub past: Vec<PastMeeting>,
 }
 
-/// Same meeting series: same subject, ignoring case and numbers ("Weekly #12").
-fn series_key(subject: &str) -> String {
-    subject.chars().filter(|c| c.is_alphabetic() || c.is_whitespace()).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
-}
-
 /// The first paragraph of a summary that isn't a heading.
 pub fn gist(markdown: &str) -> Option<String> {
     let mut para: Vec<&str> = Vec::new();
@@ -67,7 +62,6 @@ pub fn gist(markdown: &str) -> Option<String> {
 pub fn build(store: &Store, event: &Event, me_email: &str) -> Result<Brief> {
     let people = event.people(me_email);
     let emails: Vec<String> = people.iter().map(|p| p.email.to_lowercase()).filter(|e| !e.is_empty()).collect();
-    let key = series_key(&event.subject);
     let mut past = Vec::new();
     for (id, title, started_at, dir) in store.folders(SCAN)? {
         if past.len() >= SHOWN {
@@ -80,7 +74,7 @@ pub fn build(store: &Store, event: &Event, me_email: &str) -> Result<Brief> {
         let theirs = link.event.people(&link.me_email);
         let shared: Vec<String> =
             theirs.iter().filter(|p| !p.email.is_empty() && emails.contains(&p.email.to_lowercase())).map(|p| p.label()).collect();
-        let same_series = !key.is_empty() && series_key(&link.event.subject) == key;
+        let same_series = super::calendar::same_series(event, &link.event);
         // Small meetings: one shared person counts; bigger ones need half.
         let enough = !shared.is_empty() && shared.len() * 2 >= emails.len().min(theirs.len()).max(1);
         if !(same_series || enough) {
@@ -164,7 +158,7 @@ mod tests {
 
     #[test]
     fn series_ignores_numbers() {
-        assert_eq!(series_key("Weekly #12"), series_key("weekly #13"));
+        assert_eq!(super::super::calendar::series_key("Weekly #12"), super::super::calendar::series_key("weekly #13"));
     }
 
     #[test]

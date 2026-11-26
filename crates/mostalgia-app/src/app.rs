@@ -1116,6 +1116,7 @@ impl MostalgiaApp {
         let sub = cx.subscribe_in(&view, window, |this, _, event: &MeetingEvent, window, cx| match event {
             MeetingEvent::Changed => this.reload(cx),
             MeetingEvent::Ask(id) => this.ask_about_meeting(*id, window, cx),
+            MeetingEvent::Open(id) => this.open_meeting(*id, window, cx),
             MeetingEvent::Deleted => {
                 this.screen = Screen::Recording;
                 this.reload(cx);

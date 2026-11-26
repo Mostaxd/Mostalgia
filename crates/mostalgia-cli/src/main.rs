@@ -97,6 +97,7 @@ impl SummaryChoice {
                     language: config.summary_language_code(),
                     effort: None,
                     template: summary::Template::parse(&config.summary_template),
+                    context: None,
                 }
             }
             None => config.summary_request()?,
@@ -912,6 +913,8 @@ fn summarize(store: &Store, id: i64, req: &summary::SummaryRequest, required: bo
             ],
         )
     );
+    // A Teams meeting: its chat, and what changed since the last one of its series.
+    let req = &mostalgia_core::teams::ops::summary_request(&mostalgia_core::config::Config::load().teams, store, &meeting, req);
     let t = std::time::Instant::now();
     let s = summary::summarize_with_progress(req, &meeting, &mut |done, total| {
         if done + 1 < total {

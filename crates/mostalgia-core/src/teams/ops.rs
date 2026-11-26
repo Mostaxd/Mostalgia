@@ -186,8 +186,9 @@ pub fn post_summary(cfg: &TeamsConfig, graph: &Graph, meeting: &Meeting) -> Resu
         None => graph.meeting_chat(&link.event)?,
     };
     let html = actions::chat_message(&meeting.title, &summary.markdown, cfg.post_action_items);
-    graph.post_chat_message(&chat, &html)?;
+    let message = graph.post_chat_message(&chat, &html)?;
     link.chat_id = Some(chat);
+    link.posted_message_id = Some(message).filter(|m| !m.is_empty());
     link.posted_at = Some(Utc::now());
     link.save(&meeting.dir)?;
     Ok(())
@@ -336,6 +337,147 @@ pub fn name_suggestions(meeting: &Meeting) -> Vec<String> {
     TeamsLink::load(&meeting.dir).map(|l| l.people_names()).unwrap_or_default()
 }
 
+/// Reads what was typed in the meeting chat around the recording (from a
+/// little before it started to a while after it ended) into the meeting's
+/// link. Returns how many messages there are.
+pub fn read_chat(graph: &Graph, meeting: &Meeting) -> Result<usize> {
+    let mut link = require_link(meeting)?;
+    if !link.event.is_teams() {
+        bail!("{}", tr("Der Termin ist keine Teams-Besprechung"));
+    }
+    let chat_id = match &link.chat_id {
+        Some(c) => c.clone(),
+        None => graph.meeting_chat(&link.event)?,
+    };
+    let (from, to) = chat_window(&link, meeting);
+    let skip: Vec<String> = link.posted_message_id.iter().cloned().collect();
+    let lines = super::chat::window(graph.chat_messages(&chat_id, from, to)?, from, to, &skip);
+    link.chat_id = Some(chat_id);
+    link.chat = lines;
+    link.chat_read_at = Some(Utc::now());
+    link.save(&meeting.dir)?;
+    Ok(link.chat.len())
+}
+
+/// From a little before the meeting (or the recording, if earlier) to a
+/// while after its end (or the recording's).
+fn chat_window(link: &TeamsLink, meeting: &Meeting) -> (DateTime<Utc>, DateTime<Utc>) {
+    let rec_start = meeting.started_at.with_timezone(&Utc);
+    let rec_end = rec_start + chrono::Duration::milliseconds((meeting.duration_secs.max(0.0) * 1000.0) as i64);
+    (link.event.start.min(rec_start) - super::chat::BEFORE, link.event.end.max(rec_end) + super::chat::AFTER)
+}
+
+/// Before a summary is written: reads the meeting chat when that's on and
+/// it wasn't read since the chat window closed. Never fails the summary;
+/// problems are only logged.
+pub fn before_summary(cfg: &TeamsConfig, meeting: &Meeting) {
+    if !cfg.chat_context || !cfg.signed_in() {
+        return;
+    }
+    let Some(link) = TeamsLink::load(&meeting.dir) else { return };
+    if !link.event.is_teams() || link.chat_read_at.is_some_and(|t| t > chat_window(&link, meeting).1) {
+        return;
+    }
+    let read = super::client(cfg).and_then(|g| read_chat(&g, meeting));
+    if let Err(e) = read {
+        eprintln!("[mostalgia] teams chat: {e:#}");
+    }
+}
+
+/// `req` with the Teams context for `meeting` (reads the meeting chat
+/// first, see [`before_summary`]). Unchanged for meetings without a link.
+pub fn summary_request(cfg: &TeamsConfig, store: &Store, meeting: &Meeting, req: &crate::summary::SummaryRequest) -> crate::summary::SummaryRequest {
+    let mut req = req.clone();
+    if TeamsLink::load(&meeting.dir).is_some() {
+        before_summary(cfg, meeting);
+        req.context = summary_context(cfg, store, meeting);
+    }
+    req
+}
+
+/// Another meeting of the same recurring series in the library.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SeriesMeeting {
+    pub meeting_id: i64,
+    pub title: String,
+    pub started_at: chrono::DateTime<chrono::Local>,
+    pub summary: Option<String>,
+}
+
+/// The library's other meetings of `meeting`'s series, oldest first.
+pub fn series(store: &Store, meeting: &Meeting) -> Result<Vec<SeriesMeeting>> {
+    let Some(link) = TeamsLink::load(&meeting.dir) else { return Ok(Vec::new()) };
+    let mut out = Vec::new();
+    for (id, title, started_at, dir) in store.folders(SERIES_SCAN)? {
+        if id == meeting.id {
+            continue;
+        }
+        let Some(other) = TeamsLink::load(&dir) else { continue };
+        if !calendar::same_series(&link.event, &other.event) {
+            continue;
+        }
+        // Two recordings of the same occurrence aren't "last time".
+        if other.event.id == link.event.id && other.event.start == link.event.start {
+            continue;
+        }
+        let summary = store.summary_markdown(id)?;
+        out.push(SeriesMeeting { meeting_id: id, title, started_at, summary });
+    }
+    out.sort_by_key(|m| m.started_at);
+    Ok(out)
+}
+
+/// The last meeting of the series before this one that has a summary.
+pub fn previous_in_series(store: &Store, meeting: &Meeting) -> Result<Option<SeriesMeeting>> {
+    Ok(series(store, meeting)?.into_iter().filter(|m| m.started_at < meeting.started_at && m.summary.is_some()).next_back())
+}
+
+/// Meetings looked at for a series.
+const SERIES_SCAN: usize = 500;
+/// The previous summary is cut after this many characters.
+const PREVIOUS_CHARS: usize = 8_000;
+
+/// What the summary gets besides the transcript: the meeting chat, and for
+/// a recurring meeting the last summary of the series with the request to
+/// say what changed. `None` when there's nothing.
+pub fn summary_context(cfg: &TeamsConfig, store: &Store, meeting: &Meeting) -> Option<String> {
+    let link = TeamsLink::load(&meeting.dir)?;
+    let mut out = Vec::new();
+    if cfg.chat_context && !link.chat.is_empty() {
+        let start = meeting.started_at.with_timezone(&Utc);
+        let lines: Vec<String> = link.chat.iter().map(|l| super::chat::transcript_line(l, start)).collect();
+        out.push(format!(
+            "These messages were typed in the meeting chat (times as in the transcript; 00:00:00 means before the recording started). \
+Use them like the transcript: put the links, files and decisions from the chat where they belong in the summary, keep link addresses as Markdown links, \
+and don't list the chat separately.\n\n<meeting_chat>\n{}\n</meeting_chat>",
+            lines.join("\n")
+        ));
+    }
+    if cfg.series_compare {
+        match previous_in_series(store, meeting) {
+            Ok(Some(prev)) => {
+                let mut text = prev.summary.unwrap_or_default();
+                if text.chars().count() > PREVIOUS_CHARS {
+                    text = text.chars().take(PREVIOUS_CHARS).collect::<String>() + "\n…";
+                }
+                out.push(format!(
+                    "This meeting is part of a recurring series. Below is the summary of the previous meeting (\"{}\", {}). \
+After the other sections, add a last section headed \"Since last time\" (in the summary's language) that says briefly what changed: \
+decisions that are new or differ, action items from last time that were done, are still open or weren't mentioned, and new topics. \
+Use plain bullets there, not checkboxes, and don't repeat the previous summary. If nothing meaningful changed, say so in one line.\n\n\
+<previous_summary>\n{}\n</previous_summary>",
+                    prev.title,
+                    prev.started_at.format("%Y-%m-%d"),
+                    text.trim()
+                ));
+            }
+            Ok(None) => {}
+            Err(e) => eprintln!("[mostalgia] teams series: {e:#}"),
+        }
+    }
+    (!out.is_empty()).then(|| out.join("\n\n"))
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::{Local, TimeZone};
@@ -370,6 +512,20 @@ mod tests {
                 .store
                 .insert_meeting(&NewMeeting { title: "Besprechung 26.11.2026, 10:02", started_at: started, duration_secs: 60.0, language: "de", dir: &dir }, segments)
                 .unwrap();
+            (id, dir)
+        }
+
+        fn meeting_at(&mut self, name: &str, started: chrono::DateTime<Local>, summary: Option<&str>, event: Event) -> (i64, std::path::PathBuf) {
+            let dir = self.root.join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            let id = self
+                .store
+                .insert_meeting(&NewMeeting { title: name, started_at: started, duration_secs: 1800.0, language: "de", dir: &dir }, &[seg(Source::Mic, 0.0, "Hallo")])
+                .unwrap();
+            if let Some(md) = summary {
+                self.store.save_summary(id, "claude", "m", None, md).unwrap();
+            }
+            TeamsLink::new(event, "me@x.de", "Mosta").save(&dir).unwrap();
             (id, dir)
         }
     }
@@ -553,5 +709,78 @@ mod tests {
 
         let off = TeamsConfig { transcripts: false, ..cfg() };
         assert!(check_transcript(&off, &http.graph(), &m).is_err());
+    }
+
+    #[test]
+    fn the_meeting_chat_goes_into_the_summary_and_search() {
+        let mut lib = Lib::new("chat");
+        let (id, dir) = lib.meeting(&[seg(Source::Mic, 0.0, "Hallo")]);
+        let event = one_to_one();
+        let mut link = TeamsLink::new(event.clone(), "me@x.de", "Mosta");
+        link.posted_message_id = Some("ours".into());
+        link.save(&dir).unwrap();
+        // The recording starts 2 minutes into the meeting.
+        let t = |m: i64| (event.start + chrono::Duration::minutes(m)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let http = MockHttp::default();
+        http.on(Method::Get, "/me/onlineMeetings?", 200, r#"{"value":[{"id":"OM1","chatInfo":{"threadId":"19:chat"}}]}"#);
+        let page = format!(
+            r#"{{"value":[
+              {{"id":"ours","messageType":"message","createdDateTime":"{}","from":{{"application":{{"displayName":"Mostalgia"}}}},"body":{{"contentType":"html","content":"<h2>Summary</h2>"}}}},
+              {{"id":"2","messageType":"message","createdDateTime":"{}","from":{{"user":{{"displayName":"Anna Lehmann"}}}},"body":{{"contentType":"html","content":"<p>Deck: <a href=\"https://x/deck\">Q4</a></p>"}}}},
+              {{"id":"3","messageType":"systemEventMessage","createdDateTime":"{}","body":{{"contentType":"html","content":"<systemEventMessage/>"}}}},
+              {{"id":"4","messageType":"message","createdDateTime":"{}","from":{{"user":{{"displayName":"Anna Lehmann"}}}},"body":{{"contentType":"text","content":"last week"}}}}
+            ],"@odata.nextLink":"https://graph.microsoft.com/v1.0/never"}}"#,
+            t(40),
+            t(6),
+            t(5),
+            t(-7 * 24 * 60)
+        );
+        http.on(Method::Get, "/messages?", 200, &page);
+        let m = lib.store.get(id).unwrap().unwrap();
+        assert_eq!(read_chat(&http.graph(), &m).unwrap(), 1);
+        assert!(!http.requests().iter().any(|r| r.url.contains("/never")), "stops at messages older than the meeting");
+        let link = TeamsLink::load(&dir).unwrap();
+        assert_eq!(link.chat[0].text, "Deck: Q4 <https://x/deck>");
+        let context = summary_context(&cfg(), &lib.store, &m).unwrap();
+        assert!(context.contains("<meeting_chat>\n[00:04:00] Anna Lehmann: Deck: Q4 <https://x/deck>\n</meeting_chat>"), "{context}");
+        assert!(!context.contains("Since last time"));
+        let passages = crate::ask::index::build_passages(&m);
+        assert!(passages.iter().any(|p| p.kind == "chat" && p.text.contains("https://x/deck") && p.start_secs == 240.0));
+        let off = TeamsConfig { chat_context: false, ..cfg() };
+        assert_eq!(summary_context(&off, &lib.store, &m), None);
+    }
+
+    #[test]
+    fn a_series_meeting_hears_about_last_time() {
+        let mut lib = Lib::new("series");
+        let at = |d: u32| Local.with_ymd_and_hms(2026, 11, d, 10, 0, 0).unwrap();
+        let weekly = |d: u32| Event {
+            id: format!("occ{d}"),
+            subject: format!("Weekly #{d}"),
+            start: at(d).with_timezone(&Utc),
+            end: at(d).with_timezone(&Utc) + chrono::Duration::minutes(30),
+            series_id: Some("S".into()),
+            join_url: Some("https://teams.microsoft.com/l/meetup-join/w".into()),
+            ..Event::default()
+        };
+        lib.meeting_at("w12", at(12), Some("# W\n\nOld stuff."), weekly(12));
+        let (prev, _) = lib.meeting_at("w19", at(19), Some("# W\n\nBudget open.\n\n## Action items\n- [ ] Ask legal — **Owner:** Anna\n"), weekly(19));
+        lib.meeting_at("other", at(20), Some("# Other"), Event { subject: "Weekly #20".into(), series_id: Some("T".into()), ..weekly(20) });
+        let (now, _) = lib.meeting_at("w26", at(26), None, weekly(26));
+        let m = lib.store.get(now).unwrap().unwrap();
+        let s = series(&lib.store, &m).unwrap();
+        assert_eq!(s.iter().map(|x| x.title.as_str()).collect::<Vec<_>>(), ["w12", "w19"], "the other series has another id");
+        assert_eq!(previous_in_series(&lib.store, &m).unwrap().unwrap().meeting_id, prev);
+        let context = summary_context(&cfg(), &lib.store, &m).unwrap();
+        assert!(context.contains("Since last time") && context.contains("Ask legal") && !context.contains("Old stuff"), "{context}");
+        // The earlier one has nothing before it with a summary.
+        let first = lib.store.get(lib.store.folders(10).unwrap().iter().find(|f| f.1 == "w12").unwrap().0).unwrap().unwrap();
+        assert_eq!(summary_context(&cfg(), &lib.store, &first), None);
+        assert_eq!(summary_context(&TeamsConfig { series_compare: false, ..cfg() }, &lib.store, &m), None);
+        // The request carries it.
+        let req = crate::config::Config::default().summary_request();
+        if let Ok(req) = req {
+            assert!(summary_request(&cfg(), &lib.store, &m, &req).context.is_some());
+        }
     }
 }

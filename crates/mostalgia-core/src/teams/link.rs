@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::calendar::Event;
+use super::chat::ChatLine;
 
 pub const FILE_NAME: &str = "teams.json";
 
@@ -29,6 +30,12 @@ pub struct TeamsLink {
     pub todo_sent: Vec<String>,
     /// Speaker names taken over from the Teams transcript.
     pub names_from_transcript: Vec<(String, String)>,
+    /// The id of the summary message Mostalgia posted (left out of the chat).
+    pub posted_message_id: Option<String>,
+    /// What was typed in the meeting chat during the call.
+    pub chat: Vec<ChatLine>,
+    /// When the chat was last read.
+    pub chat_read_at: Option<DateTime<Utc>>,
 }
 
 impl TeamsLink {

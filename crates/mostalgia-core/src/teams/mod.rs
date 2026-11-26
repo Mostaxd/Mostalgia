@@ -12,6 +12,7 @@ pub mod actions;
 pub mod auth;
 pub mod brief;
 pub mod calendar;
+pub mod chat;
 pub mod graph;
 pub mod link;
 pub mod ops;
@@ -62,6 +63,11 @@ pub struct TeamsConfig {
     pub transcripts: bool,
     /// Minutes before a meeting its brief is ready (0 = no brief).
     pub brief_minutes: u32,
+    /// Read the meeting chat (links, decisions typed during the call) into
+    /// the summary and Ask.
+    pub chat_context: bool,
+    /// Recurring meetings: the summary says what changed since the last one.
+    pub series_compare: bool,
     /// Display name and address of the signed-in account (from `/me`),
     /// shown in the settings without asking Microsoft each time.
     pub account_name: String,
@@ -82,6 +88,8 @@ impl Default for TeamsConfig {
             todo_only_mine: false,
             transcripts: false,
             brief_minutes: 10,
+            chat_context: true,
+            series_compare: true,
             account_name: String::new(),
             account_email: String::new(),
         }
@@ -121,6 +129,9 @@ impl TeamsConfig {
             "ChatMessage.Send",
             "Tasks.ReadWrite",
         ];
+        if self.chat_context {
+            s.push("Chat.Read");
+        }
         if self.transcripts {
             s.push("OnlineMeetingTranscript.Read.All");
         }
@@ -186,6 +197,9 @@ mod tests {
         c.transcripts = true;
         assert!(c.scopes().contains(&"OnlineMeetingTranscript.Read.All"));
         assert!(c.scopes().contains(&"offline_access"));
+        assert!(c.scopes().contains(&"Chat.Read"));
+        c.chat_context = false;
+        assert!(!c.scopes().contains(&"Chat.Read"));
     }
 
     #[test]
