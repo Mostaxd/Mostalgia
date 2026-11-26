@@ -51,6 +51,8 @@ impl AutoStart {
         // Headless renders (the screenshots example) set this.
         if std::env::var_os("MOSTALGIA_NO_CALLWATCH").is_none() {
             callwatch::spawn(tx, stop.clone());
+            let stop = stop.clone();
+            std::thread::Builder::new().name("teams-calendar".into()).spawn(move || teams_watch(stop)).ok();
         }
         Self {
             events,
@@ -125,6 +127,80 @@ impl AutoStart {
     /// "Ignorieren" in the in-app prompt.
     pub fn dismiss(&mut self) {
         self.prompt = None;
+    }
+}
+
+/// Reads the Teams calendar every few minutes while signed in (recordings
+/// started for a detected call are linked to the meeting from it) and
+/// shows the brief before a meeting. It never starts a recording: that
+/// stays with call detection, so meetings you don't join aren't recorded.
+fn teams_watch(stop: Arc<AtomicBool>) {
+    use std::collections::HashSet;
+    use std::time::{Duration, Instant};
+
+    use chrono::Utc;
+    use mostalgia_core::teams::{brief, ops};
+
+    const REFRESH: Duration = Duration::from_secs(5 * 60);
+    let mut briefed: HashSet<String> = HashSet::new();
+    let mut refreshed: Option<Instant> = None;
+    let mut last_error = String::new();
+    while !stop.load(Ordering::Relaxed) {
+        let cfg = Config::load().teams;
+        if ops::calendar_ready(&cfg) {
+            if refreshed.is_none_or(|t| t.elapsed() > REFRESH) {
+                refreshed = Some(Instant::now());
+                match ops::refresh_events(&cfg, 12) {
+                    Ok(_) => last_error.clear(),
+                    Err(e) => {
+                        let e = format!("{e:#}");
+                        if e != last_error {
+                            eprintln!("[mostalgia] teams calendar: {e}");
+                            last_error = e;
+                        }
+                    }
+                }
+            }
+            let now = Utc::now();
+            for event in ops::cached_events().unwrap_or_default().iter().filter(|e| e.is_teams()) {
+                let key = format!("{}@{}", event.id, event.start);
+                let until = event.start - now;
+                if cfg.brief_minutes > 0
+                    && until > chrono::Duration::minutes(1)
+                    && until <= chrono::Duration::minutes(cfg.brief_minutes as i64)
+                    && briefed.insert(key)
+                {
+                    notify_brief(&cfg, event);
+                }
+            }
+        }
+        for _ in 0..30 {
+            if stop.load(Ordering::Relaxed) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    }
+
+    fn notify_brief(cfg: &mostalgia_core::teams::TeamsConfig, event: &mostalgia_core::teams::Event) {
+        let minutes = (event.start - Utc::now()).num_minutes().max(1);
+        let mut lines: Vec<String> = Vec::new();
+        let people = event.people_names(&cfg.account_email);
+        if !people.is_empty() {
+            lines.push(trf("Mit {}", &[&people.join(", ")]));
+        }
+        if let Ok(store) = mostalgia_core::store::Store::open(&mostalgia_core::paths::database())
+            && let Ok(b) = brief::build(&store, event, &cfg.account_email)
+        {
+            let open = b.open_actions();
+            if !open.is_empty() {
+                lines.push(trf("Noch offen vom letzten Mal: {}", &[&open.iter().map(|a| a.task.as_str()).collect::<Vec<_>>().join("; ")]));
+            }
+        }
+        if let Some(agenda) = event.body.lines().find(|l| !l.trim().is_empty()) {
+            lines.push(agenda.trim().chars().take(120).collect());
+        }
+        notify(&trf("In {} Min: {}", &[&minutes, &event.recording_title()]), &lines.join("\n"), None);
     }
 }
 

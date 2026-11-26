@@ -5288,7 +5288,7 @@ dependencies = [
 
 [[package]]
 name = "mostalgia"
-version = "0.3.7"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5302,7 +5302,7 @@ dependencies = [
 
 [[package]]
 name = "mostalgia-app"
-version = "0.3.7"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "block2 0.6.2",
@@ -5335,9 +5335,10 @@ dependencies = [
 
 [[package]]
 name = "mostalgia-core"
-version = "0.3.7"
+version = "0.4.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "block2 0.6.2",
  "bzip2",
  "candle-core",
@@ -5349,6 +5350,7 @@ dependencies = [
  "dirs 7.0.0",
  "dispatch2",
  "docx-rs",
+ "getrandom 0.3.4",
  "hound",
  "keyring",
  "libc",
@@ -5375,6 +5377,7 @@ dependencies = [
  "symphonia",
  "tar",
  "tokenizers 0.23.2",
+ "url",
  "whisper-rs",
  "whisper-rs-sys",
  "windows 0.62.2",

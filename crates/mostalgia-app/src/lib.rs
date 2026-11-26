@@ -17,6 +17,7 @@ pub mod meeting;
 pub mod processing;
 pub mod recording;
 pub mod settings;
+pub mod teams_settings;
 pub mod text_import;
 pub mod themes;
 pub mod ui;

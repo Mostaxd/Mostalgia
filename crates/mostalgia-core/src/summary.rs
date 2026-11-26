@@ -274,6 +274,9 @@ pub struct SummaryRequest {
     /// Thinking level; ignored where the model has no effort control.
     pub effort: Option<String>,
     pub template: Template,
+    /// More to go with the transcript (e.g. the meeting chat, the last
+    /// meeting of a series), with its own instructions.
+    pub context: Option<String>,
 }
 
 /// A generated summary: the Markdown and the title from its first heading.
@@ -451,6 +454,10 @@ Write the summary from these notes, covering the whole recording; they are all y
             header(meeting),
             parts.len()
         )
+    };
+    let user = match req.context.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+        Some(context) => format!("{user}\n\n{context}"),
+        None => user,
     };
     let done = crate::llm::complete(&req.connection, &req.model, req.effort.as_deref(), req.template.system_prompt(), &user)?;
     let markdown = done.text.trim().to_string();

@@ -13,6 +13,8 @@ use mostalgia_core::store::Store;
 use mostalgia_core::transcribe::Engine;
 use mostalgia_core::{Source, audio, finalize, paths, summary};
 
+mod teams;
+
 #[derive(Parser)]
 #[command(name = "mostalgia", version, about = "Local meeting recorder with live Whisper transcription")]
 struct Cli {
@@ -95,6 +97,7 @@ impl SummaryChoice {
                     language: config.summary_language_code(),
                     effort: None,
                     template: summary::Template::parse(&config.summary_template),
+                    context: None,
                 }
             }
             None => config.summary_request()?,
@@ -390,6 +393,12 @@ enum Command {
         #[arg(long)]
         list: bool,
     },
+    /// Microsoft Teams: sign in, upcoming meetings, briefs, post summaries,
+    /// action items to To Do, Teams transcripts
+    Teams {
+        #[command(subcommand)]
+        action: Option<teams::TeamsAction>,
+    },
     /// Transcribe a 16 kHz mono WAV file
     Transcribe {
         /// WAV file to transcribe
@@ -644,6 +653,7 @@ fn main() -> Result<()> {
         Command::Devices => list_devices(),
         Command::DownloadModels { list } => download_models(list),
         Command::Transcribe { file, models } => transcribe_file(&file, &models),
+        Command::Teams { action } => teams::run(action),
     }
 }
 
@@ -697,6 +707,18 @@ fn start(models: &ModelArgs, sum: &SummaryArgs, cfg: RecordConfig, speakers: boo
     };
     let (tx, rx) = crossbeam_channel::unbounded();
     let recorder = Recorder::start(cfg, engine, tx)?;
+    // The Teams meeting this belongs to (names the recording, hints Whisper).
+    {
+        let teams_cfg = mostalgia_core::config::Config::load().teams;
+        let dir = recorder.dir().to_path_buf();
+        if mostalgia_core::teams::ops::calendar_ready(&teams_cfg) {
+            std::thread::spawn(move || match mostalgia_core::teams::ops::link_new_recording(&teams_cfg, &dir, chrono::Utc::now()) {
+                Ok(Some(link)) => eprintln!("[mostalgia] {}", trf("Teams-Besprechung: {}", &[&link.event.recording_title()])),
+                Ok(None) => {}
+                Err(e) => eprintln!("[mostalgia] teams: {e:#}"),
+            });
+        }
+    }
 
     // First Ctrl+C stops recording; a second one aborts the final pass.
     let stop = recorder.stop_handle();
@@ -891,6 +913,8 @@ fn summarize(store: &Store, id: i64, req: &summary::SummaryRequest, required: bo
             ],
         )
     );
+    // A Teams meeting: its chat, and what changed since the last one of its series.
+    let req = &mostalgia_core::teams::ops::summary_request(&mostalgia_core::config::Config::load().teams, store, &meeting, req);
     let t = std::time::Instant::now();
     let s = summary::summarize_with_progress(req, &meeting, &mut |done, total| {
         if done + 1 < total {
@@ -899,10 +923,17 @@ fn summarize(store: &Store, id: i64, req: &summary::SummaryRequest, required: bo
     })?;
     eprintln!("[mostalgia] {}", trf("Zusammenfassung dauerte {} s", &[&format!("{:.1}", t.elapsed().as_secs_f64())]));
     store.save_summary_with(id, &s.provider, &s.model, s.effort.as_deref(), &s.markdown, s.template)?;
+    // A Teams meeting keeps its name from the calendar.
+    let keep_title = keep_title || mostalgia_core::teams::ops::keeps_title(&mostalgia_core::config::Config::load().teams, &meeting);
     if let Some(title) = s.title.as_ref().filter(|_| !keep_title) {
         store.set_title(id, title)?;
     }
     println!("\n{}", s.markdown);
+    match mostalgia_core::teams::ops::after_summary(&mostalgia_core::config::Config::load().teams, store, id) {
+        Ok(true) => eprintln!("[mostalgia] {}", tr("Zusammenfassung im Besprechungschat gepostet")),
+        Ok(false) => {}
+        Err(e) => eprintln!("[mostalgia] teams: {e:#}"),
+    }
     Ok(())
 }
 

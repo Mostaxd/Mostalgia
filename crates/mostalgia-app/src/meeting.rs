@@ -55,6 +55,19 @@ pub struct CopyRecap(pub u8);
 #[action(namespace = mostalgia, no_json)]
 pub struct CopyAs(pub String, pub String);
 
+/// Microsoft Teams for the open meeting: 0 post the summary to the
+/// meeting chat, 1 action items to To Do, 2 speaker names from the Teams
+/// transcript, 3 link to the calendar event at its start, 4 unlink,
+/// 5 read the meeting chat.
+#[derive(Clone, PartialEq, Debug, Deserialize, JsonSchema, Action)]
+#[action(namespace = mostalgia, no_json)]
+pub struct TeamsDo(pub u8);
+
+/// Opens another meeting of the same Teams series.
+#[derive(Clone, PartialEq, Debug, Deserialize, JsonSchema, Action)]
+#[action(namespace = mostalgia, no_json)]
+pub struct OpenSeriesMeeting(pub i64);
+
 pub enum MeetingEvent {
     /// Title, summary or transcript changed; the library should refresh.
     Changed,
@@ -65,6 +78,8 @@ pub enum MeetingEvent {
     DocumentsChanged,
     /// Asks the app to open "Fragen" about this meeting.
     Ask(i64),
+    /// Asks the app to open another meeting (e.g. the last one of a series).
+    Open(i64),
 }
 
 impl EventEmitter<MeetingEvent> for MeetingView {}
@@ -179,6 +194,16 @@ pub struct MeetingView {
     pending_notes: Option<(String, companion::NoteStyle)>,
     /// Saving the summary into the documents drive.
     saving_to_documents: bool,
+    /// The Teams meeting it belongs to (its `teams.json`).
+    teams_link: Option<mostalgia_core::teams::link::TeamsLink>,
+    /// Signed in to Microsoft (the Teams menu shows).
+    teams_on: bool,
+    /// Teams transcripts are turned on in the settings.
+    teams_transcripts: bool,
+    /// A Teams action is running.
+    teams_busy: bool,
+    /// The other meetings of its Teams series, oldest first.
+    teams_series: Vec<mostalgia_core::teams::ops::SeriesMeeting>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -222,6 +247,11 @@ impl MeetingView {
             keep_title: false,
             pending_notes: None,
             saving_to_documents: false,
+            teams_link: None,
+            teams_on: false,
+            teams_transcripts: false,
+            teams_series: Vec::new(),
+            teams_busy: false,
             _subscriptions: Vec::new(),
         };
         this.reload(cx);
@@ -290,6 +320,97 @@ impl MeetingView {
         }
     }
 
+    /// Runs a Teams action (see [`TeamsDo`]) in the background and shows
+    /// how it went.
+    pub fn teams_do(&mut self, action: &TeamsDo, window: &mut Window, cx: &mut Context<Self>) {
+        use mostalgia_core::teams::{self, link::TeamsLink, ops};
+        let Some(m) = &self.meeting else { return };
+        if self.teams_busy {
+            return;
+        }
+        if action.0 == 4 {
+            if let Err(e) = TeamsLink::remove(&m.dir) {
+                self.error = Some(format!("{e:#}").into());
+            }
+            self.reload(cx);
+            return;
+        }
+        let (id, kind) = (m.id, action.0);
+        self.teams_busy = true;
+        cx.notify();
+        let task = cx.background_spawn(async move {
+            let cfg = Config::load().teams;
+            let store = Store::open(&paths::database())?;
+            let m = store.get(id)?.ok_or_else(|| anyhow::anyhow!(tr("Besprechung nicht gefunden")))?;
+            let graph = teams::client(&cfg)?;
+            let message = match kind {
+                0 => {
+                    ops::post_summary(&cfg, &graph, &m)?;
+                    tr("Zusammenfassung im Besprechungschat gepostet").to_string()
+                }
+                5 => {
+                    let n = ops::read_chat(&graph, &m)?;
+                    drop(store);
+                    // Chat messages are found by Ask too.
+                    if let Err(e) = mostalgia_core::ask::index_meeting(id) {
+                        eprintln!("[mostalgia] search index: {e:#}");
+                    }
+                    if n == 0 { tr("Im Besprechungschat wurde nichts geschrieben").to_string() } else { trf("{} Nachrichten aus dem Besprechungschat gelesen", &[&n]) }
+                }
+                1 => {
+                    let r = ops::send_to_todo(&cfg, &graph, &m)?;
+                    if r.sent.is_empty() {
+                        tr("Keine neuen Aufgaben für To Do").to_string()
+                    } else {
+                        trf("{} Aufgaben an To Do geschickt ({} übersprungen)", &[&r.sent.len(), &r.skipped])
+                    }
+                }
+                2 => {
+                    let check = ops::check_transcript(&cfg, &graph, &m)?;
+                    if check.suggestions.is_empty() {
+                        trf("Keine eindeutigen Namen für die Sprecher (Teams hat gehört: {})", &[&check.speakers.join(", ")])
+                    } else {
+                        ops::apply_names(&store, &m, &check.suggestions)?;
+                        let names: Vec<String> = check.suggestions.iter().map(|s| format!("{} → {}", i18n::speaker(&s.label), s.name)).collect();
+                        trf("Namen aus Teams übernommen: {}", &[&names.join(", ")])
+                    }
+                }
+                _ => {
+                    let link = ops::link_saved(&cfg, &graph, &m)?;
+                    ops::after_save(&cfg, &store, id)?;
+                    trf("Verknüpft mit „{}“", &[&link.event.recording_title()])
+                }
+            };
+            anyhow::Ok(message)
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            this.update_in(cx, |this, window, cx| {
+                use gpui_kit::component::WindowExt as _;
+                use gpui_kit::component::notification::Notification;
+                this.teams_busy = false;
+                match result {
+                    Ok(message) => window.push_notification(Notification::success(message), cx),
+                    Err(e) => this.error = Some(format!("{e:#}").into()),
+                }
+                this.reload(cx);
+                cx.emit(MeetingEvent::Changed);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Opens another meeting of the same Teams series.
+    pub fn open_series(&mut self, id: i64, cx: &mut Context<Self>) {
+        cx.emit(MeetingEvent::Open(id));
+    }
+
+    /// The other meetings of its Teams series, as the Teams menu lists them.
+    pub fn teams_series(&self) -> &[mostalgia_core::teams::ops::SeriesMeeting] {
+        &self.teams_series
+    }
+
     /// Puts only the transcript or only the notes on the clipboard.
     fn copy_part(&mut self, transcript: bool, window: &mut Window, cx: &mut Context<Self>) {
         use gpui_kit::component::WindowExt as _;
@@ -343,6 +464,14 @@ impl MeetingView {
         let loaded = Store::open(&paths::database()).and_then(|s| Ok((s.get(self.id)?, s.notes_focus(self.id)?, s.note_versions(self.id)?)));
         match loaded {
             Ok((m, focus, versions)) => {
+                self.teams_link = m.as_ref().and_then(|m| mostalgia_core::teams::link::TeamsLink::load(&m.dir));
+                let teams = Config::load().teams;
+                self.teams_on = teams.signed_in();
+                self.teams_transcripts = teams.transcripts;
+                self.teams_series = match (&m, &self.teams_link) {
+                    (Some(m), Some(_)) => Store::open(&paths::database()).and_then(|s| mostalgia_core::teams::ops::series(&s, m)).unwrap_or_default(),
+                    _ => Vec::new(),
+                };
                 self.meeting = m;
                 self.notes_focus = focus;
                 self.note_versions = versions;
@@ -652,7 +781,7 @@ impl MeetingView {
             return;
         }
         let effort = mostalgia_core::config::effort_for(&connection, &model, &config.summary_effort);
-        let req = summary::SummaryRequest { connection, model, language: config.summary_language_code(), effort, template: dialog.template };
+        let req = summary::SummaryRequest { connection, model, language: config.summary_language_code(), effort, template: dialog.template, context: None };
         self.summarize_with(req, cx);
     }
 
@@ -692,6 +821,8 @@ impl MeetingView {
         fn summarize_meeting(id: i64, req: &summary::SummaryRequest, keep_title: bool, title: &str) -> anyhow::Result<()> {
             let store = Store::open(&paths::database())?;
             let meeting = store.get(id)?.ok_or_else(|| anyhow::anyhow!(tr("Besprechung nicht gefunden")))?;
+            // A Teams meeting: its chat, and what changed since the last one of its series.
+            let req = &mostalgia_core::teams::ops::summary_request(&Config::load().teams, &store, &meeting, req);
             // A long meeting is read in parts first; show how far that is.
             let s = summary::summarize_with_progress(req, &meeting, &mut |done, total| {
                 let stage = if done + 1 < total {
@@ -703,8 +834,14 @@ impl MeetingView {
                 processing::set(processing::Key::Summary(id), job);
             })?;
             store.save_summary_with(id, &s.provider, &s.model, s.effort.as_deref(), &s.markdown, s.template)?;
+            // A Teams meeting keeps its name from the calendar.
+            let keep_title = keep_title || mostalgia_core::teams::ops::keeps_title(&Config::load().teams, &meeting);
             if let Some(title) = s.title.as_ref().filter(|_| !keep_title) {
                 store.set_title(id, title)?;
+            }
+            // Posted to the Teams meeting chat, if that's on.
+            if let Err(e) = mostalgia_core::teams::ops::after_summary(&Config::load().teams, &store, id) {
+                eprintln!("[mostalgia] teams: {e:#}");
             }
             // Its decisions go into the log, if that's on.
             if Config::load().decision_log
@@ -1749,6 +1886,9 @@ impl MeetingView {
                             .on_click(cx.listener(|this, _, _, cx| cx.emit(MeetingEvent::Ask(this.id)))),
                     )
                     .child(copy_menu(m, Button::new("copy").small().ghost().icon(IconName::Copy).label(tr("Kopieren"))))
+                    .when(self.teams_on || self.teams_link.is_some(), |el| {
+                        el.child(teams_menu(m, self.teams_link.as_ref(), &self.teams_series, self.teams_busy, self.teams_transcripts))
+                    })
                     .child(export_menu(m, Button::new("export").small().ghost().icon(IconName::Download).label(tr("Exportieren"))))
                     .child(documents_menu(m, self.saving_to_documents, Button::new("save-to-documents").small().ghost().icon(IconName::Library).label(tr("In Dokumente"))))
                     .when(self.player.is_some(), |el| {
@@ -2526,7 +2666,13 @@ impl MeetingView {
             );
         }
 
-        let choices = self.meeting_speakers();
+        let mut choices = self.meeting_speakers();
+        // The Teams meeting's attendees, as names to pick.
+        for name in self.teams_link.as_ref().map(|l| l.people_names()).unwrap_or_default() {
+            if !choices.contains(&name) {
+                choices.push(name);
+            }
+        }
         let view = cx.entity().downgrade();
         let mut marks = m.bookmarks.iter().peekable();
         for (ix, seg) in m.segments.iter().enumerate() {
@@ -2802,6 +2948,8 @@ impl Render for MeetingView {
             .key_context("Meeting")
             .on_action(cx.listener(Self::export))
             .on_action(cx.listener(Self::save_to_documents))
+            .on_action(cx.listener(Self::teams_do))
+            .on_action(cx.listener(|this, action: &OpenSeriesMeeting, _, cx| this.open_series(action.0, cx)))
             .on_action(cx.listener(|this, action: &CopyRecap, window, cx| {
                 let length = if action.0 >= 2 { recap::Length::Full } else { recap::Length::Short };
                 let style = if action.0 % 2 == 1 { recap::Style::Markdown } else { recap::Style::Plain };
@@ -3024,6 +3172,65 @@ fn export_parts_menu(parts: mostalgia_core::export::Parts, button: Button) -> im
         }
         menu
     })
+}
+
+/// The "Teams" button: what can be sent to or taken from the Teams
+/// meeting this recording belongs to.
+fn teams_menu(
+    m: &Meeting,
+    link: Option<&mostalgia_core::teams::link::TeamsLink>,
+    series: &[mostalgia_core::teams::ops::SeriesMeeting],
+    busy: bool,
+    transcripts: bool,
+) -> impl IntoElement {
+    let has_summary = m.summary.is_some();
+    let linked = link.map(|l| (l.event.recording_title(), l.event.is_teams(), l.posted_at.is_some()));
+    let chat_lines = link.map_or(0, |l| l.chat.len());
+    let chat_read = link.is_some_and(|l| l.chat_read_at.is_some());
+    // The meeting right before and right after this one in its series.
+    let before = series.iter().rfind(|s| s.started_at < m.started_at).map(|s| (s.meeting_id, s.title.clone(), s.started_at));
+    let after = series.iter().find(|s| s.started_at > m.started_at).map(|s| (s.meeting_id, s.title.clone(), s.started_at));
+    let in_series = series.len();
+    Button::new("teams")
+        .small()
+        .ghost()
+        .icon(IconName::Calendar)
+        .label(tr("Teams"))
+        .loading(busy)
+        .disabled(busy)
+        .tooltip(match &linked {
+            Some((title, _, _)) => trf("Gehört zur Besprechung „{}“", &[title]),
+            None => tr("Zu keiner Teams-Besprechung verknüpft").to_string(),
+        })
+        .dropdown_menu(move |menu, _, _| {
+            let Some((title, is_teams, posted)) = linked.clone() else {
+                return menu.menu(tr("Mit dem Kalendertermin verknüpfen"), Box::new(TeamsDo(3)));
+            };
+            let mut menu = menu.label(title);
+            if is_teams && has_summary {
+                menu = menu.menu(if posted { tr("Noch einmal im Besprechungschat posten") } else { tr("Im Besprechungschat posten") }, Box::new(TeamsDo(0)));
+            }
+            if has_summary {
+                menu = menu.menu(tr("Aufgaben an Microsoft To Do"), Box::new(TeamsDo(1)));
+            }
+            if is_teams && transcripts {
+                menu = menu.menu(tr("Sprechernamen aus dem Teams-Transkript"), Box::new(TeamsDo(2)));
+            }
+            if is_teams {
+                let label = if chat_read { trf("Besprechungschat neu lesen ({} Nachrichten)", &[&chat_lines]) } else { tr("Besprechungschat lesen").to_string() };
+                menu = menu.menu(label, Box::new(TeamsDo(5)));
+            }
+            if in_series > 0 {
+                menu = menu.separator().label(trf("Serie: {} weitere Aufnahmen", &[&in_series]));
+                if let Some((id, title, at)) = &before {
+                    menu = menu.menu(trf("← Letztes Mal: {} ({})", &[title, &i18n::date(at)]), Box::new(OpenSeriesMeeting(*id)));
+                }
+                if let Some((id, title, at)) = &after {
+                    menu = menu.menu(trf("Nächstes Mal: {} ({}) →", &[title, &i18n::date(at)]), Box::new(OpenSeriesMeeting(*id)));
+                }
+            }
+            menu.separator().menu(tr("Verknüpfung lösen"), Box::new(TeamsDo(4)))
+        })
 }
 
 /// `button` with the collections the summary and notes can be saved into

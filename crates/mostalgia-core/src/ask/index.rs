@@ -120,8 +120,25 @@ pub fn build_passages(m: &Meeting) -> Vec<NewPassage> {
             text: format!("{head}\nMori's note at {} – {kind}: {}", format_ts(n.at_secs), n.text),
         });
     }
+    // The Teams meeting chat, a few messages per passage.
+    if let Some(link) = crate::teams::link::TeamsLink::load(&m.dir) {
+        let start = m.started_at.with_timezone(&chrono::Utc);
+        for chunk in link.chat.chunks(CHAT_LINES) {
+            let secs = |l: &crate::teams::chat::ChatLine| (l.at - start).num_seconds().max(0) as f64;
+            let lines: Vec<String> = chunk.iter().map(|l| crate::teams::chat::transcript_line(l, start)).collect();
+            out.push(NewPassage {
+                kind: "chat",
+                start_secs: secs(&chunk[0]),
+                end_secs: secs(&chunk[chunk.len() - 1]),
+                text: format!("{head}\nMeeting chat\n{}", lines.join("\n")),
+            });
+        }
+    }
     out
 }
+
+/// Chat messages per search passage.
+const CHAT_LINES: usize = 8;
 
 /// (Re)indexes one meeting. Returns the number of passages written.
 pub fn index_meeting(store: &mut Store, meeting_id: i64) -> Result<usize> {

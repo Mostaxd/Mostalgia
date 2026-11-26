@@ -737,6 +737,16 @@ impl Store {
         }))
     }
 
+    /// Every meeting's id, title, start and folder, newest first (without
+    /// transcripts), e.g. to look for files kept next to the audio.
+    pub fn folders(&self, limit: usize) -> Result<Vec<(i64, String, DateTime<Local>, PathBuf)>> {
+        let mut stmt = self.conn.prepare("SELECT id, title, started_at, dir FROM meetings ORDER BY started_at DESC LIMIT ?1")?;
+        let rows = stmt.query_map([limit as i64], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, local(r.get(2)?), PathBuf::from(r.get::<_, String>(3)?)))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// A meeting's title and start, without loading its transcript.
     pub fn title(&self, id: i64) -> Result<Option<(String, DateTime<Local>)>> {
         Ok(self
@@ -778,6 +788,14 @@ impl Store {
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// A meeting's summary text alone (without loading its transcript).
+    pub fn summary_markdown(&self, meeting_id: i64) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT markdown FROM summaries WHERE meeting_id = ?1", [meeting_id], |r| r.get::<_, String>(0))
+            .optional()?)
     }
 
     pub fn save_summary(
