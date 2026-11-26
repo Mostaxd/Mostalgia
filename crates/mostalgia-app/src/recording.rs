@@ -224,6 +224,9 @@ pub struct RecordingView {
     /// People in the call, counting you, for the next recording (a
     /// `diarize::PEOPLE_CHOICES` value; 0 = automatic). Reset after each.
     people: u8,
+    /// The brief of the next Teams meeting (its event id and start, and
+    /// the Markdown or why it failed), while it's open.
+    brief: Option<(String, Option<Result<String, String>>)>,
 }
 
 impl RecordingView {
@@ -242,7 +245,109 @@ impl RecordingView {
             call_mode: false,
             sources_override: None,
             people: 0,
+            brief: None,
         }
+    }
+
+    /// Opens or closes the brief of `event` (built in the background).
+    fn toggle_brief(&mut self, event: mostalgia_core::teams::Event, cx: &mut Context<Self>) {
+        let key = format!("{}@{}", event.id, event.start);
+        if self.brief.as_ref().is_some_and(|(k, _)| *k == key) {
+            self.brief = None;
+            cx.notify();
+            return;
+        }
+        self.brief = Some((key.clone(), None));
+        cx.notify();
+        let me = Config::load().teams.account_email;
+        let task = cx.background_spawn(async move {
+            let store = Store::open(&paths::database()).map_err(|e| format!("{e:#}"))?;
+            mostalgia_core::teams::brief::build(&store, &event, &me).map(|b| b.markdown()).map_err(|e| format!("{e:#}"))
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            this.update(cx, |this, cx| {
+                if let Some((k, slot)) = &mut this.brief
+                    && *k == key
+                {
+                    *slot = Some(result);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// "Next Teams meeting" on the setup screen, from the calendar the
+    /// app reads in the background: when, who, and its brief.
+    fn render_next_meeting(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use chrono::{Local, Utc};
+        // Signing in happens in the settings: read it fresh.
+        let teams = &Config::load().teams;
+        if !mostalgia_core::teams::ops::calendar_ready(teams) {
+            return None;
+        }
+        let events = mostalgia_core::teams::ops::cached_events()?;
+        let now = Utc::now();
+        let event = mostalgia_core::teams::calendar::next_teams_meeting(&events, now).filter(|e| e.start - now < chrono::Duration::hours(12))?.clone();
+        let theme = cx.theme();
+        let start = event.start.with_timezone(&Local);
+        let end = event.end.with_timezone(&Local);
+        let when = if event.start <= now {
+            tr("Läuft gerade").to_string()
+        } else {
+            trf("Um {}", &[&start.format("%H:%M")])
+        };
+        let people = event.people_names(&teams.account_email);
+        let key = format!("{}@{}", event.id, event.start);
+        let open = self.brief.as_ref().filter(|(k, _)| *k == key).map(|(_, b)| b.clone());
+        let ev = event.clone();
+        Some(
+            v_flex()
+                .p_3()
+                .gap_2()
+                .rounded(theme.radius)
+                .border(ui::border_width(cx))
+                .border_color(theme.border)
+                .child(
+                    h_flex()
+                        .gap_3()
+                        .child(Icon::new(IconName::Calendar).text_color(theme.primary))
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .child(div().font_medium().truncate().child(event.recording_title()))
+                                .child(div().text_xs().text_color(theme.muted_foreground).truncate().child(format!(
+                                    "{when} · {}–{}{}",
+                                    start.format("%H:%M"),
+                                    end.format("%H:%M"),
+                                    if people.is_empty() { String::new() } else { format!(" · {}", people.join(", ")) }
+                                ))),
+                        )
+                        .child(
+                            Button::new("teams-brief")
+                                .small()
+                                .ghost()
+                                .label(if open.is_some() { tr("Schließen") } else { tr("Briefing") })
+                                .on_click(cx.listener(move |this, _, _, cx| this.toggle_brief(ev.clone(), cx))),
+                        ),
+                )
+                .when_some(open, |el, brief| {
+                    let body: AnyElement = match brief {
+                        None => div().text_sm().text_color(theme.muted_foreground).child(tr("Stelle das Briefing zusammen …")).into_any_element(),
+                        Some(Err(e)) => div().text_sm().text_color(theme.danger).child(e).into_any_element(),
+                        Some(Ok(md)) => div()
+                            .max_h(px(260.))
+                            .overflow_y_scrollbar()
+                            .child(gpui_kit::component::text::TextView::markdown("teams-brief-text", md).selectable(true))
+                            .into_any_element(),
+                    };
+                    el.child(body)
+                })
+                .into_any_element(),
+        )
     }
 
     /// People in the call for the next recording (0 = automatic).
@@ -1304,6 +1409,7 @@ impl RecordingView {
 
     fn render_setup(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let language_menu = self.setup_language_menu(cx);
+        let next_meeting = self.render_next_meeting(cx);
         let theme = cx.theme();
         let source_row = |id: &'static str, icon: IconName, title: &'static str, detail: String, on: bool, cx: &mut Context<Self>| {
             let theme = cx.theme();
@@ -1387,6 +1493,7 @@ impl RecordingView {
                     )
                     .when(self.config.diarize && self.sources()[1], |el| el.child(self.render_people(cx)))
                     .child(self.render_engines(cx))
+                    .children(next_meeting)
                     .children(self.recovered.iter().map(|line| {
                         h_flex()
                             .p_3()
