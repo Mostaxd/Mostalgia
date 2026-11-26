@@ -327,6 +327,12 @@ impl MeetingView {
         window.push_notification(Notification::success(done), cx);
     }
 
+    /// Screenshots: a "Kopieren" entry picked (parts id, "txt" or "md").
+    #[doc(hidden)]
+    pub fn demo_copy_as(&mut self, parts: &str, ext: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.copy_as(&CopyAs(parts.into(), ext.into()), window, cx);
+    }
+
     /// Screenshots: "Copy recap" clicked.
     #[doc(hidden)]
     pub fn demo_copy_recap(&mut self, window: &mut Window, cx: &mut Context<Self>) {

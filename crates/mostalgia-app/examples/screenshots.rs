@@ -561,6 +561,30 @@ fn main() {
                     std::fs::write(out.join("recap.txt"), text).unwrap();
                 }
             }
+            // COPY=1: every "Copy" entry, its clipboard text saved next to
+            // the shots; then "Ask" about this meeting.
+            if std::env::var_os("COPY").is_some() {
+                for parts in ["summary", "notes", "summary-notes", "transcript", "all"] {
+                    for ext in ["txt", "md"] {
+                        cx.update_window(handle, |_, window, cx| {
+                            if let Some(m) = view.read(cx).meeting_view() {
+                                m.update(cx, |m, cx| m.demo_copy_as(parts, ext, window, cx));
+                            }
+                        })
+                        .unwrap();
+                        cx.run_until_parked();
+                        if let Some(text) = cx.update(|cx| cx.read_from_clipboard()).and_then(|c| c.text()) {
+                            std::fs::write(out.join(format!("copy-{parts}-{theme}.{ext}")), text).unwrap();
+                        }
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                shot("3c-copied", &mut cx);
+                cx.update_window(handle, |_, window, cx| view.update(cx, |app, cx| app.ask_about_meeting(id, window, cx))).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                shot("9b-ask-meeting", &mut cx);
+                cx.update_window(handle, |_, window, cx| view.update(cx, |app, cx| app.open_meeting(id, window, cx))).unwrap();
+            }
             // "Regenerate notes": the panel, its progress, the result.
             for (stage, name) in [(0, "5c-notes-regenerate"), (1, "5d-notes-regenerating"), (2, "5e-notes-regenerated")] {
                 cx.update_window(handle, |_, window, cx| {

@@ -738,6 +738,27 @@ pub fn parse_answer(answer: &str) -> Vec<Piece> {
 mod tests {
     use super::*;
 
+    fn tool_names() -> Vec<String> {
+        tools_claude().as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap().to_string()).collect()
+    }
+
+    #[test]
+    fn tools_follow_the_scope() {
+        SCOPE.with(|s| s.set(None));
+        assert_eq!(tool_names(), ["search_meetings", "search_documents", "list_meetings", "read_transcript"]);
+        assert!(!scope_documents() && scope_meeting().is_none());
+        // About one meeting: only its transcript and search, no documents.
+        SCOPE.with(|s| s.set(Some(Within::Meeting(7))));
+        assert_eq!(tool_names(), ["search_meetings", "read_transcript"]);
+        assert_eq!(tools_openai().len(), 2);
+        assert!(!scope_documents() && scope_meeting() == Some(7));
+        // About documents: only the document tools.
+        SCOPE.with(|s| s.set(Some(Within::Collection(3))));
+        assert_eq!(tool_names(), ["search_documents", "read_document"]);
+        assert!(scope_documents() && scope_meeting().is_none());
+        SCOPE.with(|s| s.set(None));
+    }
+
     #[test]
     fn parses_markers() {
         let p = parse_answer("Budget eingefroren [[m:1@27]]. Ende [[m:x]]");
