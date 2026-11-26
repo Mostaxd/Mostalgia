@@ -130,4 +130,5 @@ pub const EN: &[(&str, &str)] = &[
     ("Aufgaben an Microsoft To Do", "Action items to Microsoft To Do"),
     ("Sprechernamen aus dem Teams-Transkript", "Speaker names from the Teams transcript"),
     ("Verknüpfung lösen", "Unlink"),
+    ("Als Besprechung #{} hinzugefügt – `mostalgia summarize {}` schreibt die Zusammenfassung", "Added as meeting #{} – `mostalgia summarize {}` writes the summary"),
 ];

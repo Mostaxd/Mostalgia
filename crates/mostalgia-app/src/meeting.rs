@@ -190,6 +190,8 @@ pub struct MeetingView {
     teams_link: Option<mostalgia_core::teams::link::TeamsLink>,
     /// Signed in to Microsoft (the Teams menu shows).
     teams_on: bool,
+    /// Teams transcripts are turned on in the settings.
+    teams_transcripts: bool,
     /// A Teams action is running.
     teams_busy: bool,
     _subscriptions: Vec<Subscription>,
@@ -237,6 +239,7 @@ impl MeetingView {
             saving_to_documents: false,
             teams_link: None,
             teams_on: false,
+            teams_transcripts: false,
             teams_busy: false,
             _subscriptions: Vec::new(),
         };
@@ -432,7 +435,9 @@ impl MeetingView {
         match loaded {
             Ok((m, focus, versions)) => {
                 self.teams_link = m.as_ref().and_then(|m| mostalgia_core::teams::link::TeamsLink::load(&m.dir));
-                self.teams_on = Config::load().teams.signed_in();
+                let teams = Config::load().teams;
+                self.teams_on = teams.signed_in();
+                self.teams_transcripts = teams.transcripts;
                 self.meeting = m;
                 self.notes_focus = focus;
                 self.note_versions = versions;
@@ -1846,7 +1851,7 @@ impl MeetingView {
                     )
                     .child(copy_menu(m, Button::new("copy").small().ghost().icon(IconName::Copy).label(tr("Kopieren"))))
                     .when(self.teams_on || self.teams_link.is_some(), |el| {
-                        el.child(teams_menu(m, self.teams_link.as_ref(), self.teams_busy))
+                        el.child(teams_menu(m, self.teams_link.as_ref(), self.teams_busy, self.teams_transcripts))
                     })
                     .child(export_menu(m, Button::new("export").small().ghost().icon(IconName::Download).label(tr("Exportieren"))))
                     .child(documents_menu(m, self.saving_to_documents, Button::new("save-to-documents").small().ghost().icon(IconName::Library).label(tr("In Dokumente"))))
@@ -3134,10 +3139,9 @@ fn export_parts_menu(parts: mostalgia_core::export::Parts, button: Button) -> im
 
 /// The "Teams" button: what can be sent to or taken from the Teams
 /// meeting this recording belongs to.
-fn teams_menu(m: &Meeting, link: Option<&mostalgia_core::teams::link::TeamsLink>, busy: bool) -> impl IntoElement {
+fn teams_menu(m: &Meeting, link: Option<&mostalgia_core::teams::link::TeamsLink>, busy: bool, transcripts: bool) -> impl IntoElement {
     let has_summary = m.summary.is_some();
     let linked = link.map(|l| (l.event.recording_title(), l.event.is_teams(), l.posted_at.is_some()));
-    let transcripts = Config::load().teams.transcripts;
     Button::new("teams")
         .small()
         .ghost()

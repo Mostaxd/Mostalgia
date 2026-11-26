@@ -68,6 +68,15 @@ pub enum TeamsAction {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Add a Teams meeting nobody recorded, from its Teams transcript.
+    /// Without a number, lists the last week's Teams meetings to pick from
+    Import {
+        /// The meeting's number in the list
+        pick: Option<usize>,
+        /// How many days back to look
+        #[arg(long, default_value_t = 7)]
+        days: i64,
+    },
     /// Fetch the Teams transcript and suggest names for unnamed speakers
     Transcript {
         id: i64,
@@ -220,6 +229,27 @@ pub fn run(action: Option<TeamsAction>) -> Result<()> {
             for t in r.sent {
                 println!("- {t}");
             }
+        }
+        TeamsAction::Import { pick, days } => {
+            let graph = teams::client(&config.teams)?;
+            let events = ops::recent_meetings(&graph, days)?;
+            let Some(n) = pick else {
+                if events.is_empty() {
+                    println!("{}", tr("Keine Teams-Besprechungen in diesem Zeitraum"));
+                }
+                for (i, e) in events.iter().enumerate() {
+                    println!("{:>3}  {}  {}", i + 1, mostalgia_core::i18n::date_time(&e.start.with_timezone(&Local)), e.recording_title());
+                }
+                return Ok(());
+            };
+            let event = events.get(n.wrapping_sub(1)).with_context(|| trf("Keine Besprechung #{}", &[&n]))?;
+            let mut store = Store::open(&paths::database())?;
+            let id = ops::import_transcript(&config.teams, &graph, &mut store, event)?;
+            drop(store);
+            if let Err(e) = mostalgia_core::ask::index_meeting(id) {
+                eprintln!("[mostalgia] search index: {e:#}");
+            }
+            println!("{}", trf("Als Besprechung #{} hinzugefügt – `mostalgia summarize {}` schreibt die Zusammenfassung", &[&id, &id]));
         }
         TeamsAction::Transcript { id, apply } => {
             let store = Store::open(&paths::database())?;

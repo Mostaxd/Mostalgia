@@ -298,6 +298,39 @@ pub fn apply_names(store: &Store, meeting: &Meeting, suggestions: &[vtt::Suggest
     Ok(changed)
 }
 
+/// Teams meetings of the last `days` days (newest first), e.g. to import
+/// the transcript of one nobody recorded.
+pub fn recent_meetings(graph: &Graph, days: i64) -> Result<Vec<Event>> {
+    let now = Utc::now();
+    let mut events: Vec<Event> = graph.events(now - chrono::Duration::days(days), now)?.into_iter().filter(|e| e.is_teams() && e.end <= now).collect();
+    events.sort_by(|a, b| b.start.cmp(&a.start));
+    Ok(events)
+}
+
+/// Adds a meeting nobody recorded from its Teams transcript: named after
+/// the event, linked to it, and indexed for search. Returns its id.
+pub fn import_transcript(cfg: &TeamsConfig, graph: &Graph, store: &mut Store, event: &Event) -> Result<i64> {
+    let join = event.join_url.as_deref().with_context(|| tr("Der Termin ist keine Teams-Besprechung"))?;
+    let om = graph.online_meeting(join)?.with_context(|| tr("Teams kennt diese Besprechung nicht (nur Geschäfts- oder Schulkonten)"))?;
+    let transcripts = graph.transcripts(&om.id)?;
+    let t = transcripts.last().with_context(|| tr("Für diese Besprechung gibt es kein Teams-Transkript"))?;
+    let vtt = graph.transcript_vtt(&om.id, &t.id)?;
+    let title = event.recording_title();
+    let duration = (event.duration().num_seconds() > 0).then(|| event.duration().num_seconds() as f64);
+    let imported = crate::text_import::import(
+        store,
+        &crate::text_import::Request { text: &vtt, title: Some(&title), started_at: event.start.with_timezone(&chrono::Local), duration_secs: duration, language: None },
+    )?;
+    let id = imported.meeting_id;
+    if let Some(m) = store.get(id)? {
+        let mut link = TeamsLink::new(event.clone(), &cfg.account_email, &cfg.account_name);
+        link.online_meeting_id = Some(om.id);
+        link.chat_id = om.chat_id;
+        link.save(&m.dir)?;
+    }
+    Ok(id)
+}
+
 /// Speaker-name suggestions for a meeting: its attendees, when it's linked.
 pub fn name_suggestions(meeting: &Meeting) -> Vec<String> {
     TeamsLink::load(&meeting.dir).map(|l| l.people_names()).unwrap_or_default()
@@ -415,6 +448,23 @@ mod tests {
         config.meeting_languages.clear();
         config.language = "de".into();
         assert_eq!(meeting_languages(&event, &config), None);
+    }
+
+    #[test]
+    fn imports_a_teams_transcript_nobody_recorded() {
+        let mut lib = Lib::new("import");
+        let http = MockHttp::default();
+        http.on(Method::Get, "/me/onlineMeetings?", 200, r#"{"value":[{"id":"OM1","chatInfo":{"threadId":"19:chat"}}]}"#);
+        http.on(Method::Get, "/content", 200, "WEBVTT\n\n00:00:01.000 --> 00:00:04.000\n<v Anna Lehmann>Hallo zusammen, wir fangen an.</v>\n\n00:00:05.000 --> 00:00:09.000\n<v Jerome Markus>Ich habe die Zahlen dabei.</v>\n");
+        http.on(Method::Get, "/transcripts", 200, r#"{"value":[{"id":"T1","createdDateTime":"2026-11-26T09:00:00Z"}]}"#);
+        let id = import_transcript(&cfg(), &http.graph(), &mut lib.store, &one_to_one()).unwrap();
+        let m = lib.store.get(id).unwrap().unwrap();
+        assert_eq!(m.title, "Anna / Mosta 1:1");
+        assert_eq!(m.segments.len(), 2);
+        assert_eq!(m.segments[1].speaker_label(), "Jerome Markus");
+        let link = TeamsLink::load(&m.dir).unwrap();
+        assert_eq!(link.online_meeting_id.as_deref(), Some("OM1"));
+        let _ = std::fs::remove_dir_all(&m.dir);
     }
 
     #[test]
