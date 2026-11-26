@@ -48,6 +48,13 @@ pub struct SaveToDocuments(pub i64);
 #[action(namespace = mostalgia, no_json)]
 pub struct CopyRecap(pub u8);
 
+/// Copy parts of the open meeting (`export::Parts` id: "all", "notes",
+/// "summary", "summary-notes", "transcript") as text ("txt") or Markdown
+/// ("md").
+#[derive(Clone, PartialEq, Debug, Deserialize, JsonSchema, Action)]
+#[action(namespace = mostalgia, no_json)]
+pub struct CopyAs(pub String, pub String);
+
 pub enum MeetingEvent {
     /// Title, summary or transcript changed; the library should refresh.
     Changed,
@@ -56,6 +63,8 @@ pub enum MeetingEvent {
     RequestDelete(i64),
     /// The summary went into the documents drive; its view should refresh.
     DocumentsChanged,
+    /// Asks the app to open "Fragen" about this meeting.
+    Ask(i64),
 }
 
 impl EventEmitter<MeetingEvent> for MeetingView {}
@@ -294,6 +303,26 @@ impl MeetingView {
         if text.trim().is_empty() {
             return;
         }
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        window.push_notification(Notification::success(done), cx);
+    }
+
+    /// Puts parts of the meeting on the clipboard, as text or Markdown,
+    /// laid out like the export.
+    fn copy_as(&mut self, action: &CopyAs, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui_kit::component::WindowExt as _;
+        use gpui_kit::component::notification::Notification;
+        use mostalgia_core::export::{self, Parts};
+        let Some(m) = &self.meeting else { return };
+        let parts = Parts::parse(&action.0);
+        let text = if action.1 == "md" { export::markdown_parts(m, parts) } else { export::text_parts(m, parts) };
+        let done = match parts {
+            Parts::SUMMARY => tr("Zusammenfassung kopiert"),
+            Parts::NOTES => tr("Notizen kopiert"),
+            Parts::SUMMARY_NOTES => tr("Zusammenfassung und Notizen kopiert"),
+            Parts::TRANSCRIPT => tr("Transkript kopiert"),
+            _ => tr("Alles kopiert"),
+        };
         cx.write_to_clipboard(ClipboardItem::new_string(text));
         window.push_notification(Notification::success(done), cx);
     }
@@ -1704,43 +1733,16 @@ impl MeetingView {
             .child(
                 h_flex()
                     .gap_2()
-                    .child({
-                        let has_summary = m.summary.is_some();
-                        h_flex()
-                            .child(
-                                Button::new("copy-recap")
-                                    .small()
-                                    .ghost()
-                                    .icon(IconName::Copy)
-                                    .label(tr("Recap kopieren"))
-                                    .tooltip(if has_summary {
-                                        tr("Kurze Zusammenfassung in die Zwischenablage – für Teams, Mail oder Jira")
-                                    } else {
-                                        tr("Braucht eine Zusammenfassung – klicken, um sie zu schreiben")
-                                    })
-                                    .on_click(cx.listener(|this, _, window, cx| this.copy_recap(recap::Length::Short, recap::Style::Plain, window, cx))),
-                            )
-                            .child(
-                                Button::new("copy-recap-as")
-                                    .small()
-                                    .ghost()
-                                    .icon(IconName::ChevronDown)
-                                    .disabled(!has_summary)
-                                    .tooltip(tr("Recap als …"))
-                                    .dropdown_menu(|menu, _, _| {
-                                        let mut menu = menu;
-                                        for (label, action) in [
-                                            (tr("Kurz · Text"), CopyRecap(0)),
-                                            (tr("Kurz · Markdown"), CopyRecap(1)),
-                                            (tr("Vollständig · Text"), CopyRecap(2)),
-                                            (tr("Vollständig · Markdown"), CopyRecap(3)),
-                                        ] {
-                                            menu = menu.menu(label, Box::new(action));
-                                        }
-                                        menu
-                                    }),
-                            )
-                    })
+                    .child(
+                        Button::new("ask-meeting")
+                            .small()
+                            .ghost()
+                            .icon(IconName::Sparkles)
+                            .label(tr("Fragen"))
+                            .tooltip(tr("Fragen zu dieser Besprechung"))
+                            .on_click(cx.listener(|this, _, _, cx| cx.emit(MeetingEvent::Ask(this.id)))),
+                    )
+                    .child(copy_menu(m, Button::new("copy").small().ghost().icon(IconName::Copy).label(tr("Kopieren"))))
                     .child(export_menu(m, Button::new("export").small().ghost().icon(IconName::Download).label(tr("Exportieren"))))
                     .child(documents_menu(m, self.saving_to_documents, Button::new("save-to-documents").small().ghost().icon(IconName::Library).label(tr("In Dokumente"))))
                     .when(self.player.is_some(), |el| {
@@ -2799,6 +2801,7 @@ impl Render for MeetingView {
                 let style = if action.0 % 2 == 1 { recap::Style::Markdown } else { recap::Style::Plain };
                 this.copy_recap(length, style, window, cx);
             }))
+            .on_action(cx.listener(Self::copy_as))
             .child(header)
             .children(status)
             .child(
@@ -2934,6 +2937,51 @@ fn cost_label(usd: f64) -> String {
 
 /// `button` with the export menu: everything, only the notes, only the
 /// summary, each in the formats that fit.
+/// "Kopieren": the recap (short or full, text or Markdown), then each part
+/// of the meeting there is, as text or Markdown.
+fn copy_menu(m: &Meeting, button: Button) -> impl IntoElement {
+    use mostalgia_core::export::Parts;
+    let has_summary = m.summary.is_some();
+    let has_notes = !m.notes.is_empty();
+    let mut groups = Vec::new();
+    if has_summary {
+        groups.push((tr("Zusammenfassung"), Parts::SUMMARY));
+    }
+    if has_notes {
+        groups.push((tr("Notizen"), Parts::NOTES));
+    }
+    if has_summary && has_notes {
+        groups.push((tr("Zusammenfassung und Notizen"), Parts::SUMMARY_NOTES));
+    }
+    if !m.segments.is_empty() {
+        groups.push((tr("Transkript"), Parts::TRANSCRIPT));
+    }
+    groups.push((tr("Alles"), Parts::ALL));
+    button.tooltip(tr("In die Zwischenablage – für Teams, Mail oder Jira")).dropdown_menu(move |menu, _, _| {
+        let mut menu = menu.scrollable(true).max_h(px(480.)).label(tr("Recap"));
+        if has_summary {
+            for (label, action) in [
+                (tr("Kurz · Text"), CopyRecap(0)),
+                (tr("Kurz · Markdown"), CopyRecap(1)),
+                (tr("Vollständig · Text"), CopyRecap(2)),
+                (tr("Vollständig · Markdown"), CopyRecap(3)),
+            ] {
+                menu = menu.menu(label, Box::new(action));
+            }
+        } else {
+            // Copying the recap without a summary writes one first.
+            menu = menu.menu(tr("Zusammenfassung schreiben"), Box::new(CopyRecap(0)));
+        }
+        for (label, parts) in &groups {
+            menu = menu.separator().label(*label);
+            for (format, ext) in [(tr("Text"), "txt"), (tr("Markdown"), "md")] {
+                menu = menu.menu(format, Box::new(CopyAs(parts.id().into(), ext.into())));
+            }
+        }
+        menu
+    })
+}
+
 fn export_menu(m: &Meeting, button: Button) -> impl IntoElement {
     use mostalgia_core::export::Parts;
     let mut groups = vec![(tr("Alles"), Parts::ALL)];
